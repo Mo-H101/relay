@@ -1,6 +1,8 @@
 # P2d Plan — Configuration, Applications, Diagnostics
 
-Status: **plan only — no code yet**. Awaiting approval before implementation.
+Status: **implemented** in `ce5ea2c` (P2d) as part of platform P2; this
+document is the historical implementation plan. Awaiting-approval wording
+removed.
 
 Scope per `docs/platform-p2-implementation-plan.md` §P2d and the DoD §13 item 3
 (Configuration / Applications / Diagnostics panels). This document is the

@@ -18,6 +18,10 @@ UI_ROOT = APP_ROOT / "ui"
 
 _TEXTUAL_IMPORT = re.compile(r"(?m)^\s*(?:from\s+textual|import\s+textual)\b")
 
+_CORE_OR_PROVIDER_IMPORT = re.compile(
+    r"(?m)^\s*(?:from\s+app\.(?:core|providers)|import\s+app\.(?:core|providers))\b"
+)
+
 
 def test_no_textual_imports_outside_ui():
     offenders = []
@@ -33,6 +37,19 @@ def test_ui_data_layer_stays_textual_free():
     for filename in ("data.py", "theme.py", "keymap.py"):
         text = (UI_ROOT / filename).read_text(encoding="utf-8")
         assert not _TEXTUAL_IMPORT.search(text), f"{filename} imports Textual"
+
+
+def test_screens_do_not_import_core_or_providers():
+    """
+    P2e: screens must read Relay state through the ServiceFacade
+    (``app.ui.data``) and never import ``app.core`` / ``app.providers``
+    directly.
+    """
+    offenders = []
+    for path in sorted((UI_ROOT / "screens").rglob("*.py")):
+        if _CORE_OR_PROVIDER_IMPORT.search(path.read_text(encoding="utf-8")):
+            offenders.append(str(path.relative_to(PROJECT_ROOT)))
+    assert not offenders, f"Screens import core/provider directly: {offenders}"
 
 
 def test_core_and_cli_import_without_textual_in_runtime():

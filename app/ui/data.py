@@ -19,7 +19,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.relay import relay
 from app.providers.availability import GLYPH
-from app.providers.registry import PROVIDER_REGISTRY
+from app.providers.registry import PROVIDER_MENU, PROVIDER_REGISTRY
 from app.services import config_store as config_store_module
 from app.services import setup_state
 from app.services.capabilities import is_chat_testable
@@ -106,6 +106,15 @@ _HEALTH_GLYPH = {
 
 def candidate_glyph(status: str) -> str:
     return _HEALTH_GLYPH.get(status, "-")
+
+
+def probe_glyph(status: str) -> str:
+    """
+    Availability glyph for a ScanEngine probe status
+    (available/overloaded/unavailable). Screens call this instead of
+    reading ``app.providers.availability.GLYPH`` directly.
+    """
+    return GLYPH.get(status, "?")
 
 
 # Availability-snapshot statuses (probe terms) -> health terms used by
@@ -472,6 +481,25 @@ class ServiceFacade:
         providers not backed by a registry entry.
         """
         return _DEFN_BY_NAME.get(provider_name)
+
+    def provider_menu(self) -> list:
+        """
+        The full provider setup menu in registry order, for the
+        "Re-run setup" wizard entry.
+        """
+        return PROVIDER_MENU
+
+    def unconfigured_provider_defs(self) -> list:
+        """
+        Registry definitions for providers not yet configured, for the
+        "Add provider" wizard entry. Derived from the catalog projection
+        so the screen never reads the registry directly.
+        """
+        return [
+            PROVIDER_REGISTRY[entry.id]
+            for entry in self.provider_catalog()
+            if not entry.configured
+        ]
 
     def model_priority(self, provider_name: str) -> list[str]:
         """

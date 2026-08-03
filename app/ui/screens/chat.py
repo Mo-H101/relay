@@ -13,8 +13,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Select, Static
 
-from app.providers.availability import GLYPH
-from app.ui.data import ServiceFacade, candidate_glyph
+from app.ui.data import ServiceFacade, candidate_glyph, probe_glyph
 from app.ui.theme import theme
 from app.ui.widgets.chat_view import ChatView
 
@@ -177,7 +176,7 @@ class ChatScreen(Screen):
             self._set_status(f"Unknown provider: {provider}")
             return
 
-        glyph = GLYPH.get(result.status, "?")
+        glyph = probe_glyph(result.status)
         color = {
             "available": theme.ok,
             "overloaded": theme.warn,

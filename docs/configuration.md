@@ -6,6 +6,26 @@ the current working directory, then the project root. Values are validated
 at startup; invalid values abort startup with a clear message. Hot reload
 (`POST /admin/reload`) applies only the fields marked **reloadable** below.
 
+## Terminal interface and startup
+
+The `relay` command dispatches by configuration state:
+
+| Command | Behavior |
+| --- | --- |
+| `relay` (no configuration) | Runs the interactive setup wizard. |
+| `relay` (configured) | Runs the terminal interface (TUI) with an embedded API server bound to `RELAY_HOST`/`RELAY_PORT`. |
+| `relay tui` | Forces the terminal interface. |
+| `relay serve` | Runs the API server only; no terminal interface. |
+| `relay setup` | (Re)runs the setup wizard and, on success, hands off to the terminal interface. |
+
+The TUI requires an interactive terminal. On non-interactive launch
+(stdin/stdout redirected, scheduled tasks, services) it prints guidance
+and exits cleanly instead of crashing — run `relay serve` for headless
+operation. On Windows the TUI runs inside Windows Terminal (ConPTY),
+PowerShell, VS Code, or a conhost console; environments without a console
+handle are detected and degrade to the same guidance. See
+[docs/tui-guide.md](tui-guide.md) for the full user guide.
+
 ## Server and installation state
 
 | Variable | Default | Meaning |

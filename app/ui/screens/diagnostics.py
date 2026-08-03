@@ -21,7 +21,6 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Select, Static
 
-from app.core.config import env_file
 from app.ui.data import ServiceFacade
 
 
@@ -73,10 +72,12 @@ class DiagnosticsScreen(Screen):
 
     # ------------------------------------------------------------- helpers
 
-    @staticmethod
-    def _default_export_path() -> str:
+    def _default_export_path(self) -> str:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return str(Path(env_file).parent / f"relay-diagnostics-{stamp}.json")
+        return str(
+            Path(self._facade.env_file_path()).parent
+            / f"relay-diagnostics-{stamp}.json"
+        )
 
     def _status(self) -> Static:
         return self.query_one("#diagnostics-status", Static)

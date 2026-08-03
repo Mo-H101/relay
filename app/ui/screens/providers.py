@@ -20,7 +20,6 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
-from app.providers.registry import PROVIDER_MENU, PROVIDER_REGISTRY
 from app.ui.data import ServiceFacade
 from app.ui.setup_adapter import SetupAdapter
 
@@ -138,17 +137,11 @@ class ProvidersScreen(Screen):
 
     @on(Button.Pressed, "#add-provider")
     async def _on_add_provider(self) -> None:
-        await self._run_wizard(
-            menu=[
-                PROVIDER_REGISTRY[entry.id]
-                for entry in self._facade.provider_catalog()
-                if not entry.configured
-            ]
-        )
+        await self._run_wizard(menu=self._facade.unconfigured_provider_defs())
 
     @on(Button.Pressed, "#rerun-setup")
     async def _on_rerun_setup(self) -> None:
-        await self._run_wizard(menu=PROVIDER_MENU)
+        await self._run_wizard(menu=self._facade.provider_menu())
 
     @on(Button.Pressed, "#rescan")
     async def _on_rescan(self) -> None:
@@ -165,16 +158,10 @@ class ProvidersScreen(Screen):
     # ------------------------------------------------------------- actions
 
     async def action_add_provider(self) -> None:
-        await self._run_wizard(
-            menu=[
-                PROVIDER_REGISTRY[entry.id]
-                for entry in self._facade.provider_catalog()
-                if not entry.configured
-            ]
-        )
+        await self._run_wizard(menu=self._facade.unconfigured_provider_defs())
 
     async def action_re_run_setup(self) -> None:
-        await self._run_wizard(menu=PROVIDER_MENU)
+        await self._run_wizard(menu=self._facade.provider_menu())
 
     async def action_rescan(self) -> None:
         await self._rescan()

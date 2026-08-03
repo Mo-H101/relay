@@ -1,6 +1,7 @@
 import argparse
 
 from app import __version__
+from app.core import terminal
 from app.core.config import reload_settings, settings
 from app.providers.registry import PROVIDER_REGISTRY
 from app.services.setup_state import read_setup_state
@@ -39,11 +40,18 @@ def _cmd_tui() -> None:
     """
     Launch the Relay terminal interface.
 
-    Re-reads `.env` before importing the relay facade so a freshly
-    written setup (or an external edit) is reflected in this process's
-    singletons, then runs the TUI with an embedded API server that is
-    stopped on exit.
+    Refuses to start without an interactive terminal (TTY or Windows
+    ConPTY), printing guidance instead of crashing. Otherwise re-reads
+    `.env` before importing the relay facade so a freshly written setup
+    (or an external edit) is reflected in this process's singletons, then
+    runs the TUI with an embedded API server that is stopped on exit.
     """
+    available, reason = terminal.tui_ready()
+
+    if not available:
+        terminal.print_tui_guidance(reason)
+        raise SystemExit(0)
+
     reload_settings()
 
     from app.core.server import EmbeddedServer

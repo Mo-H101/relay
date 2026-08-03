@@ -52,6 +52,7 @@ http://localhost:8000/redoc (ReDoc).
 - [Hardening audit report](docs/audit-report.md) — findings, fixes, remaining risks.
 - [v1.0.0 readiness report](docs/v1.0.0-readiness-report.md) — release checklist, verification evidence, remaining risks, required actions.
 - [UX validation guide](docs/ux-validation-guide.md) — Phase 8 manual test checklist for first-time users.
+- [Terminal interface guide](docs/tui-guide.md) — startup behavior, the seven screens, Windows requirements.
 - [Platform analysis](docs/platform-architecture-report.md) — Phase 9 current-architecture report.
 - [Platform missing components](docs/platform-missing-components-report.md) — Phase 9 gap analysis vs. the target platform.
 - [Platform implementation roadmap](docs/platform-implementation-roadmap.md) — Phase 9 phased plan (P0–P8).
@@ -165,24 +166,44 @@ through provider setup. After setup completes, running `relay` opens the
 terminal interface with an embedded API server, so any OpenAI-compatible
 client (Cline, OpenCode, Continue, …) can point at
 `http://127.0.0.1:8000/v1` while the TUI is open. Run `relay serve` for
-the pre-TUI behavior (headless server only).
+the pre-TUI behavior (headless server only), and `relay tui` to force
+the terminal interface.
+
+Startup behavior at a glance:
+
+| Command | Behavior |
+| --- | --- |
+| `relay` (first run) | Opens the interactive setup wizard |
+| `relay` (configured) | Opens the terminal interface (TUI) with an embedded API server |
+| `relay tui` | Forces the terminal interface |
+| `relay serve` | Runs the API server only (no UI) |
+| `relay setup` | (Re)runs the setup wizard; on success hands off to the TUI |
+
+The terminal interface needs an interactive terminal. When it is launched
+without one (a scheduled task, a service manager, or redirected stdout),
+Relay prints guidance and exits cleanly instead of crashing — use
+`relay serve` for headless operation. On Windows, the TUI runs in
+Windows Terminal (ConPTY), PowerShell, VS Code, or a conhost console; see
+[docs/tui-guide.md](docs/tui-guide.md) for full details.
 
 ### Terminal interface
 
 `relay` (and `relay tui`) opens the terminal UI:
 
 - `1` Dashboard — server state, provider/model availability, recent activity
-- `2` Chat — talk to your configured providers *(P2b)*
-- `3` Models — availability and priority controls *(P2c)*
-- `4` Providers — keys, scanning, and setup *(P2c)*
-- `5` Configuration — routing, failover, server settings *(P2d)*
-- `6` Applications — client activity and endpoint/auth status *(P2d)*
-- `7` Diagnostics — operations tail, health, and export *(P2d)*
+- `2` Chat — talk to your configured providers
+- `3` Models — availability and priority controls
+- `4` Providers — keys, scanning, and setup
+- `5` Configuration — routing, failover, server settings
+- `6` Applications — client activity and endpoint/auth status
+- `7` Diagnostics — operations tail, health, and export
 - `q` quit
 
-Panels marked *(P2x)* land in later P2 phases and show a placeholder for
-now. Set `RELAY_TUI_NO_EMBED=1` to run the TUI against a separately
-managed `relay serve` instead of the embedded server.
+Set `RELAY_TUI_NO_EMBED=1` to run the TUI against a separately managed
+`relay serve` instead of the embedded server. A complete walkthrough of
+the interface, the Configuration and Applications panels, diagnostics
+export, and Windows requirements lives in
+[docs/tui-guide.md](docs/tui-guide.md).
 
 > Publishing to PyPI and Windows package managers (winget/choco) is
 > planned; until then use the commands above.

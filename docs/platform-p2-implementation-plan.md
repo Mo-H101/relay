@@ -1,9 +1,10 @@
 # P2 — Main Relay Terminal Interface — Implementation Plan
 
 Date: 2026-08-03
-Status: Approved — implementation in progress.
-Phase source: `docs/platform-p2-design.md` (design spec) ·
-`docs/platform-implementation-roadmap.md` (P2) · `docs/platform-p1-completion-report.md` (pre-P2 actions).
+Status: **Complete** — P2a–P2e all landed, gates green (full suite
+**1046 passed, 5 skipped** after P2e). Phase source: `docs/platform-p2-design.md`
+(design spec) · `docs/platform-implementation-roadmap.md` (P2) ·
+`docs/platform-p1-completion-report.md` (pre-P2 actions).
 
 ---
 
