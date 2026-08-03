@@ -9,9 +9,9 @@ layer above it.
 ```
 api routers  ->  Relay facade  ->  services  ->  providers (clients)
      \            (core.relay)            \          (providers/*)
-      \              |                     \          |
-       \             | core.config (root)  \         httpx
-        \            |                      \         |
+      \             |                     \          |
+       \            | core.config (root)  \         httpx
+        \           |                      \         |
          \-- app.main (FastAPI, lifespan,   \-- schemas/models
              middleware, global auth)          (pydantic)
 ```
@@ -40,7 +40,39 @@ There are no circular imports. Importing `app.core.config` is cheap;
 importing `app.core.relay` builds the singleton `relay` (which only does
 network I/O when a provider is enabled).
 
-## Request flow
+## Async Architecture (P3)
+
+Relay provides a **dual-path** architecture for chat requests:
+
+### Sync Path (Legacy/Fallback)
+- `Relay.chat()` → `ChatService` → sync provider clients (`chat`, `chat_stream`, `chat_messages`, `chat_stream_messages`)
+- Used by the terminal interface (`relay` TUI) via `asyncio.to_thread`
+- Kept as a fallback; no sync behavior was removed
+
+### Async Path (Primary API Hot Path)
+- `Relay.achat()` → `AsyncChatService` → async provider clients (`achat`, `achat_stream`, `achat_messages`, `achat_stream_messages`)
+- Used by `/chat` and `/v1/chat/completions` FastAPI endpoints (now `async def`)
+- Non-blocking I/O via `httpx.AsyncClient` throughout the provider layer
+- Cancellation-safe: `asyncio.CancelledError` propagates cleanly through all layers
+
+### Shared Policy Layer
+Both paths share pure decision helpers in `app/services/chat_policy.py`:
+- `budget_exhausted`, `retry_wait_seconds`, `classify`, `fallback_reason`
+- `RETRYABLE` / `PROVIDER_LEVEL` failure kind constants
+- No I/O, no state, trivially testable in isolation
+
+### Provider Contract
+All provider clients (OpenAICompatibleClient, AnthropicClient, GeminiClient, OllamaClient) implement:
+- `achat(provider, model, message, **gen_kwargs) -> str`
+- `achat_stream(...) -> AsyncIterator[str]`
+- `achat_messages(provider, payload) -> dict`
+- `achat_stream_messages(provider, payload) -> AsyncIterator[dict]`
+- `alist_models(provider) -> List[str]`
+- `aprobe_model(provider, model) -> ModelProbe`
+
+Error mapping, timeout handling, metrics recording, and retry-after logic mirror the sync implementations exactly.
+
+## Request Flow
 
 `POST /chat` (or `/v1/chat/completions`):
 
@@ -49,15 +81,16 @@ network I/O when a provider is enabled).
    the HTTP call into the ops store.
 2. The router resolves a routing task (explicit `task` field, or free-text
    classification when `TASK_CLASSIFICATION_ENABLED`).
-3. `Relay.chat()`:
+3. `Relay.achat()` (async) or `Relay.chat()` (sync):
    - `provider_manager.ranked()` returns providers ordered by priority.
    - `candidate_builder.build()` produces an ordered candidate list
      `(provider, model)` using routing preference, health state, telemetry,
      and quality signals (see [routing-decisions.md](routing-decisions.md)).
    - If `DECISION_ENGINE_ENABLED`, the decision engine scores the same
      candidates and records decision statistics.
-   - `chat_service.chat_across()` walks the candidates, retrying and
-     failing over per the failure classifier, until one succeeds.
+   - `async_chat_service.achat_across()` or `chat_service.chat_across()`
+     walks the candidates, retrying and failing over per the failure
+     classifier, until one succeeds.
    - Outcomes are recorded: request logger, telemetry (when enabled),
      health feedback (when enabled).
 4. The router records metrics + ops, sets the `X-Relay-Correlation-Id`

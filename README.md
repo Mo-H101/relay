@@ -9,6 +9,12 @@ from real request outcomes to keep routing smart over time.
   `/chat` endpoint.
 - Multiple backends: NVIDIA NIM, OpenAI, and local LM Studio (OpenAI-
   compatible local servers work through the LM Studio client).
+- **Async-first API hot path** — both endpoints are `async def` with
+  non-blocking provider I/O via `httpx.AsyncClient`; sync path retained
+  as fallback.
+- **OpenAI-compatible async SSE streaming** — `data: {...}\n\n` format,
+  chunk ordering, usage passthrough, mid-stream error handling, client
+  disconnect handling, and empty-stream failover.
 - Health-aware routing, task-specific routing, adaptive EWMA reliability/
   latency signals, quality-feedback routing, and an explainable decision
   engine.
@@ -68,9 +74,9 @@ http://localhost:8000/redoc (ReDoc).
 | GET | `/health/deep` | Deep per-model health report | no |
 | GET | `/provider` | Provider Relay would select next | no |
 | GET | `/decision/explain` | Why the last ranking came out as it did | no |
-| POST | `/chat` | Native chat (task-aware) | no |
+| POST | `/chat` | Native chat (task-aware, async) | no |
 | GET | `/diagnostics` | Operational snapshot: health, telemetry, decision, persistence | no |
-| POST | `/v1/chat/completions` | OpenAI-compatible chat (streaming supported) | no |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat (async, streaming supported) | no |
 | GET | `/v1/models` | OpenAI-compatible model list | no |
 | POST | `/feedback` | Metadata-only quality rating for a (provider, model) | no |
 | POST | `/admin/reload` | Hot-reload configuration from `.env` | no |
@@ -80,6 +86,25 @@ http://localhost:8000/redoc (ReDoc).
 `*` The documentation routes are gated by the same API-key dependency as
 every other route, so they are only reachable without a key when
 `RELAY_API_KEY` is unset.
+
+### Async Streaming (P3)
+
+Both `/chat` and `/v1/chat/completions` are now `async def` and use a
+fully non-blocking provider layer:
+
+- **Non-blocking I/O** — providers use `httpx.AsyncClient`; no threadpool
+  hops for the hot path.
+- **OpenAI-compatible SSE** — `data: {...}\n\n` format with proper
+  `[DONE]` termination, chunk ordering preserved.
+- **Usage passthrough** — provider `usage` chunks are forwarded verbatim.
+- **Mid-stream errors** — provider errors mid-stream yield an error chunk
+  then `[DONE]`; connection stays clean.
+- **Client disconnect handling** — when the HTTP client disconnects, the
+  provider generator is closed cleanly (no leaked tasks).
+- **Empty-stream failover** — if a provider yields no content, Relay
+  fails over to the next candidate automatically.
+- **Cancellation safety** — `asyncio.CancelledError` propagates cleanly
+  through all layers (validated by `tests/test_async_cancellation.py`).
 
 Authentication, when `RELAY_API_KEY` is set, uses either an
 `Authorization: Bearer <key>` header or an `X-Relay-API-Key: <key>`
