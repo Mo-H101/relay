@@ -79,12 +79,80 @@ class FakeProviderManager:
     def enabled(self) -> list[FakeProvider]:
         return [p for p in self._providers if p.enabled]
 
+    def get(self, name: str) -> FakeProvider | None:
+        for provider in self._providers:
+            if provider.name == name:
+                return provider
+        return None
+
+
+class FakeClient:
+    def __init__(self, probe_result=None) -> None:
+        self._probe_result = probe_result
+
+    def probe_model(self, provider, model):
+        return self._probe_result
+
+
+class FakeRegistry:
+    def __init__(self) -> None:
+        self._clients: dict[str, FakeClient] = {}
+
+    def register(self, provider_name: str, client: FakeClient) -> None:
+        self._clients[provider_name] = client
+
+    def get(self, provider_name: str) -> FakeClient | None:
+        return self._clients.get(provider_name)
+
+
+class FakeChatService:
+    def __init__(self) -> None:
+        self.registry = FakeRegistry()
+        self.chat_across_calls: list[tuple] = []
+        self.stream_calls: list[tuple] = []
+
+    def chat_across(self, candidates, message, **kwargs) -> dict:
+        self.chat_across_calls.append((candidates, message, kwargs))
+        provider = candidates[0][0] if candidates else None
+        model = candidates[0][1] if candidates else ""
+        return {
+            "success": True,
+            "provider": provider.name if provider else "",
+            "model": model,
+            "response": f"echo: {message}",
+            "latency_ms": 12,
+            "attempts": [],
+        }
+
+    def chat_across_stream_messages(self, candidates, payload, **kwargs) -> dict:
+        self.stream_calls.append((candidates, payload, kwargs))
+        provider, model = candidates[0]
+
+        def gen():
+            yield {"choices": [{"delta": {"content": "hello"}}]}
+            yield {"choices": [{"delta": {"content": " world"}}]}
+
+        return {
+            "success": True,
+            "provider": provider.name,
+            "model": model,
+            "stream_gen": gen(),
+            "error": None,
+            "attempts": [],
+        }
+
 
 class FakeRelay:
     def __init__(self) -> None:
         self.provider_manager = FakeProviderManager()
         self.health_store = FakeHealthStore()
+        self.chat_service = FakeChatService()
         self.persistence_init_error: str | None = None
+
+    def choose_provider(self) -> FakeProvider | None:
+        for provider in self.provider_manager.enabled():
+            return provider
+        return None
 
     def health(self, deep: bool = False) -> dict:
         return {"deep": deep, "providers": []}

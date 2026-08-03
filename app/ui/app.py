@@ -17,6 +17,7 @@ from textual.binding import BindingType
 from app.core import config
 from app.core.server import EmbeddedServer
 from app.ui.data import ServiceFacade
+from app.ui.screens.chat import ChatScreen
 from app.ui.screens.dashboard import DashboardScreen
 from app.ui.screens.placeholder import PlaceholderScreen
 from app.ui.theme import theme
@@ -103,6 +104,37 @@ class RelayApp(App[None]):
     .placeholder-note {{
         color: {theme.muted};
     }}
+
+    #chat-root {{
+        padding: 0 1;
+        height: 1fr;
+    }}
+
+    #chat-controls {{
+        height: 3;
+        margin-bottom: 1;
+        align: center middle;
+    }}
+
+    #chat-controls Input {{
+        width: 2fr;
+        margin: 0 1;
+    }}
+
+    #model-picker {{
+        width: 30;
+        margin: 0 1;
+    }}
+
+    #chat-status {{
+        height: 1;
+        padding: 0 1;
+        margin-top: 1;
+    }}
+
+    .hidden {{
+        display: none;
+    }}
     """
 
     def __init__(
@@ -119,7 +151,7 @@ class RelayApp(App[None]):
 
         self._screens = {
             "dashboard": DashboardScreen(self._facade),
-            "chat": PlaceholderScreen("Chat", NOTES["chat"]),
+            "chat": ChatScreen(self._facade),
             "models": PlaceholderScreen("Models", NOTES["models"]),
             "providers": PlaceholderScreen("Providers", NOTES["providers"]),
             "configuration": PlaceholderScreen(

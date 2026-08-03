@@ -5,12 +5,13 @@ Textual-free by design: these run headlessly and exercise ServiceFacade
 against fake Relay components.
 """
 
-from app.ui.data import ServiceFacade
+from app.ui.data import ServiceFacade, ChatCandidate, candidate_glyph
 from tests.ui_fakes import (
     FakeProvider,
     FakeRelay,
     FakeHealthModel,
     FakeReport,
+    FakeClient,
     make_relay,
 )
 
@@ -134,3 +135,143 @@ def test_server_running_reflects_marker(monkeypatch):
 
     relay._embedded_server_running = True
     assert facade.server_running() is True
+
+
+# --------------------------------------------------------------- chat facade
+
+
+def test_specific_model_candidates_filters_chat_models():
+    relay = FakeRelay()
+    provider = FakeProvider("p1", api_key="k", models=["gpt-4", "embedding-1"])
+    relay.provider_manager.register(provider)
+    relay.health_store.set(
+        FakeReport(
+            "p1",
+            [
+                FakeHealthModel("gpt-4", "healthy"),
+                FakeHealthModel("embedding-1", "degraded"),
+            ],
+        )
+    )
+
+    candidates = _facade(relay).specific_model_candidates()
+
+    assert candidates == [ChatCandidate(provider="p1", model="gpt-4", status="healthy")]
+
+
+def test_candidate_missing_health_is_unknown():
+    relay = FakeRelay()
+    relay.provider_manager.register(FakeProvider("p1", api_key="k", models=["gpt-4"]))
+
+    candidates = _facade(relay).specific_model_candidates()
+
+    assert candidates[0].status == "unknown"
+
+
+def test_candidate_glyph_mapping():
+    assert candidate_glyph("healthy") == "✓"
+    assert candidate_glyph("degraded") == "⚠"
+    assert candidate_glyph("unavailable") == "✗"
+    assert candidate_glyph("unsupported") == "?"
+    assert candidate_glyph("anything-else") == "-"
+
+
+def test_random_chat_uses_choose_provider():
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+
+    result = _facade(relay).random_chat("hi")
+
+    assert result["success"] is True
+    assert result["provider"] == "p1"
+    assert result["model"] == "m1"
+    assert result["response"] == "echo: hi"
+
+
+def test_random_chat_no_provider_returns_error():
+    relay = FakeRelay()
+
+    result = _facade(relay).random_chat("hi")
+
+    assert result["success"] is False
+    assert "No provider" in result["error"]
+
+
+def test_random_chat_no_chat_models_returns_error():
+    relay = make_relay(
+        [FakeProvider("p1", api_key="k", models=["embedding-1"])]
+    )
+
+    result = _facade(relay).random_chat("hi")
+
+    assert result["success"] is False
+    assert "chat-testable" in result["error"]
+
+
+def test_specific_chat_targets_provider_and_model():
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1", "m2"])])
+
+    result = _facade(relay).specific_chat("p1", "m2", "hi")
+
+    assert result["success"] is True
+    assert result["model"] == "m2"
+    assert result["response"] == "echo: hi"
+
+
+def test_specific_chat_unknown_provider_returns_error():
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+
+    result = _facade(relay).specific_chat("ghost", "m1", "hi")
+
+    assert result["success"] is False
+    assert "Unknown provider" in result["error"]
+
+
+def test_start_stream_builds_payload_and_yields_chunks():
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = _facade(relay)
+
+    result = facade.start_stream("p1", "m1", "hi", temperature=0.5)
+
+    assert result["success"] is True
+    assert result["provider"] == "p1"
+    assert result["model"] == "m1"
+    assert [c["choices"][0]["delta"]["content"] for c in result["stream_gen"]] == [
+        "hello",
+        " world",
+    ]
+
+    candidates, payload, kwargs = relay.chat_service.stream_calls[0]
+    assert payload["model"] == "m1"
+    assert payload["stream"] is True
+    assert payload["messages"] == [{"role": "user", "content": "hi"}]
+    assert payload["temperature"] == 0.5
+
+
+def test_start_stream_unknown_provider_returns_error():
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+
+    result = _facade(relay).start_stream("ghost", "m1", "hi")
+
+    assert result["success"] is False
+    assert result["stream_gen"] is None
+    assert "Unknown provider" in result["error"]
+
+
+def test_probe_model_unknown_provider_returns_none():
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+
+    assert _facade(relay).probe_model("ghost", "m1") is None
+
+
+def test_probe_model_runs_scan_against_registered_client():
+    from app.providers.base import ModelProbe
+
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    relay.chat_service.registry.register(
+        "p1", FakeClient(probe_result=ModelProbe(healthy=True, latency_ms=12))
+    )
+
+    result = _facade(relay).probe_model("p1", "m1")
+
+    assert result.status == "available"
+    assert result.latency_ms == 12

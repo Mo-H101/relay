@@ -10,6 +10,7 @@ import pytest
 from app.services import setup_state
 from app.ui.app import RelayApp
 from app.ui.data import ServiceFacade
+from app.ui.screens.chat import ChatScreen
 from app.ui.screens.dashboard import DashboardScreen
 from app.ui.screens.placeholder import PlaceholderScreen
 from app.ui.widgets import StatTile
@@ -28,7 +29,7 @@ async def test_boots_to_dashboard_and_walks_all_tabs():
         assert isinstance(app.screen, DashboardScreen)
 
         expected = {
-            "2": PlaceholderScreen,
+            "2": ChatScreen,
             "3": PlaceholderScreen,
             "4": PlaceholderScreen,
             "5": PlaceholderScreen,

@@ -14,8 +14,11 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.relay import relay
+from app.providers.availability import GLYPH
 from app.services import setup_state
+from app.services.capabilities import is_chat_testable
 from app.services.ops_store import ops_store
+from app.setup.scan import ScanEngine
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,34 @@ class ServerStatus:
     host: str
     port: int
     url: str
+
+
+@dataclass(frozen=True)
+class ChatCandidate:
+    """
+    A chat-testable (provider, model) pair for the specific-model picker,
+    tagged with its last known availability status.
+    """
+
+    provider: str
+    model: str
+    status: str  # healthy | degraded | unavailable | unsupported | unknown
+
+
+# Health-status -> availability glyph mapping shared by the picker and the
+# inline probe. Probe statuses (available/overloaded/unavailable) come from
+# app.providers.availability.GLYPH directly.
+_HEALTH_GLYPH = {
+    "healthy": GLYPH["available"],
+    "degraded": GLYPH["overloaded"],
+    "unavailable": GLYPH["unavailable"],
+    "unsupported": "\u003f",
+    "unknown": "-",
+}
+
+
+def candidate_glyph(status: str) -> str:
+    return _HEALTH_GLYPH.get(status, "-")
 
 
 @dataclass(frozen=True)
@@ -186,6 +217,161 @@ class ServiceFacade:
 
     def ops_events(self) -> list:
         return ops_store.events()
+
+    # ---------------------------------------------------------------- chat
+
+    def specific_model_candidates(self) -> list[ChatCandidate]:
+        """
+        Chat-testable (provider, model) pairs across all providers, tagged
+        with the health store's last known status.
+        """
+        results: list[ChatCandidate] = []
+
+        for provider in self._relay.provider_manager.all():
+            report = self._relay.health_store.get(provider.name)
+            status_by_model: dict[str, str] = {}
+
+            if report is not None:
+                status_by_model = {
+                    model.name: model.status for model in report.models
+                }
+
+            for model in provider.models:
+                if not is_chat_testable(model):
+                    continue
+                results.append(
+                    ChatCandidate(
+                        provider=provider.name,
+                        model=model,
+                        status=status_by_model.get(model, "unknown"),
+                    )
+                )
+
+        return results
+
+    def _chat_candidates(self, provider, model: str | None):
+        """
+        Build the candidate list for a chat request: a specific model when
+        given, otherwise every chat-testable model of the provider.
+        """
+        if model is not None:
+            return [(provider, model)]
+
+        return [
+            (provider, candidate_model)
+            for candidate_model in provider.models
+            if is_chat_testable(candidate_model)
+        ]
+
+    def random_chat(self, message: str, **generation_kwargs: Any) -> dict:
+        """
+        Chat against the provider Relay would select first (same candidate
+        path as /chat), failing over across its chat-testable models.
+        Returns the chat_across result dict; never raises.
+        """
+        provider = self._relay.choose_provider()
+
+        if provider is None:
+            return {
+                "success": False,
+                "error": "No provider available. Configure a provider first.",
+            }
+
+        candidates = self._chat_candidates(provider, None)
+
+        if not candidates:
+            return {
+                "success": False,
+                "error": f"No chat-testable models for {provider.name}.",
+            }
+
+        return self._relay.chat_service.chat_across(
+            candidates,
+            message,
+            max_retries=settings.max_retries,
+            **generation_kwargs,
+        )
+
+    def specific_chat(
+        self,
+        provider_name: str,
+        model: str,
+        message: str,
+        **generation_kwargs: Any,
+    ) -> dict:
+        """
+        Non-streaming chat against a specific (provider, model). Returns
+        the chat_across result dict; never raises.
+        """
+        provider = self._relay.provider_manager.get(provider_name)
+
+        if provider is None:
+            return {
+                "success": False,
+                "error": f"Unknown provider '{provider_name}'.",
+            }
+
+        return self._relay.chat_service.chat_across(
+            [(provider, model)],
+            message,
+            max_retries=settings.max_retries,
+            **generation_kwargs,
+        )
+
+    def start_stream(
+        self,
+        provider_name: str,
+        model: str,
+        message: str,
+        **generation_kwargs: Any,
+    ) -> dict:
+        """
+        Start a streaming chat against a specific (provider, model).
+
+        Returns the chat_across_stream_messages result dict with a
+        ``stream_gen`` (yielding parsed chunk dicts) on success. The
+        caller consumes the generator off the UI thread.
+        """
+        provider = self._relay.provider_manager.get(provider_name)
+
+        if provider is None:
+            return {
+                "success": False,
+                "stream_gen": None,
+                "error": f"Unknown provider '{provider_name}'.",
+                "attempts": [],
+            }
+
+        payload: dict[str, Any] = {
+            "messages": [{"role": "user", "content": message}],
+            "model": model,
+            "stream": True,
+        }
+        for key in ("temperature", "top_p", "max_tokens"):
+            if key in generation_kwargs and generation_kwargs[key] is not None:
+                payload[key] = generation_kwargs[key]
+
+        return self._relay.chat_service.chat_across_stream_messages(
+            [(provider, model)],
+            payload,
+            max_retries=settings.max_retries,
+        )
+
+    def probe_model(self, provider_name: str, model: str):
+        """
+        Single-model live availability probe (inline ✓/⚠/✗ test) using
+        ScanEngine. Returns a ScanResult or None for unknown providers.
+        """
+        provider = self._relay.provider_manager.get(provider_name)
+
+        if provider is None:
+            return None
+
+        client = self._relay.chat_service.registry.get(provider_name)
+        engine = ScanEngine(concurrency=1)
+        results = engine.scan(client, provider, [model])
+
+        return results[0]
 
     # ----------------------------------------------------------- dashboard
 

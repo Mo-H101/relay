@@ -10,10 +10,10 @@ from textual.widgets import Footer, Header, Static
 
 class PlaceholderScreen(Screen):
     """
-    Interim body for Chat, Models, Providers, Configuration,
-    Applications, and Diagnostics tabs. Replaced in P2b–P2e; deliberately
-    free of any unimplemented behaviour so no partially-finished feature
-    leaks into the TUI.
+    Interim body for Models, Providers, Configuration, Applications, and
+    Diagnostics tabs. Replaced in P2c–P2e; deliberately free of any
+    unimplemented behaviour so no partially-finished feature leaks into
+    the TUI.
     """
 
     def __init__(self, title: str, note: str = "") -> None:
