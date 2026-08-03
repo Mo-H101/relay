@@ -5,7 +5,7 @@ from fastapi import APIRouter, Response, Body
 from fastapi.responses import JSONResponse, StreamingResponse
 from app.core.config import settings
 from app.core.relay import relay
-from app.services.chat_service import ChatService
+from app.services.async_chat_service import AsyncChatService
 from app.services.correlation import new_correlation_id
 from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
@@ -20,7 +20,7 @@ import time
 import json
 
 router = APIRouter()
-chat_svc = ChatService()
+async_chat_svc = AsyncChatService()
 
 _CORRELATION_HEADER = "X-Relay-Correlation-Id"
 
@@ -186,7 +186,7 @@ def _generation_kwargs(req: OpenAIChatCompletionRequest) -> dict:
 
 
 @router.post("/v1/chat/completions")
-def openai_chat_completion(
+async def openai_chat_completion(
     req: OpenAIChatCompletionRequest = Body(...),
     response: Response = None,
 ):
@@ -224,7 +224,7 @@ def openai_chat_completion(
         payload["stream"] = True
 
         # Streaming response
-        result = chat_svc.chat_across_stream_messages(
+        result = await async_chat_svc.achat_across_stream_messages(
             candidates,
             payload,
             max_retries=settings.max_retries,
@@ -262,10 +262,10 @@ def openai_chat_completion(
         success = False
         failure_type = None
 
-        def stream_generator():
+        async def stream_generator():
             nonlocal full_response, success, failure_type
             try:
-                for chunk in stream_gen:
+                async for chunk in stream_gen:
                     out = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",
@@ -318,7 +318,7 @@ def openai_chat_completion(
     start_time = time.perf_counter()
 
     try:
-        result = chat_svc.chat_across_messages(
+        result = await async_chat_svc.achat_across_messages(
             candidates,
             payload,
             max_retries=settings.max_retries,

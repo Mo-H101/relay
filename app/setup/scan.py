@@ -6,9 +6,10 @@ reports completion through a single ``on_update`` callback fired on the
 calling thread, so UI updates stay single-threaded. Results come back in
 catalog order regardless of probe completion order.
 
-P4 seam: the wizard depends only on ``ScanEngine.scan`` and ``on_update``;
-P4 swaps the executor body for asyncio + ``aprobe_model`` behind this same
-interface without touching the wizard or the reporters.
+P3 defines the async provider probe (``aprobe_model``); the wizard depends
+only on ``ScanEngine.scan`` and ``on_update``, and swapping the executor
+body for asyncio behind this same interface remains a future seam that
+won't touch the wizard or the reporters.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed

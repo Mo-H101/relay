@@ -1,5 +1,19 @@
-from typing import List, Tuple, Any, Generator
+"""
+Async mirror of the sync ``ChatService``.
+
+Implements the same candidate failover, retry, and request-timeout-budget
+algorithm over the async provider clients (``achat`` / ``achat_stream``),
+sharing the pure decision helpers in ``chat_policy`` so the two stacks
+cannot drift.
+
+Waits use ``asyncio.sleep`` so they are cancellable; ``CancelledError``
+is never swallowed (it is a ``BaseException``, so the ``except Exception``
+handlers around a single attempt let it propagate) and travels out of the
+service, letting the API layer react to client disconnects.
+"""
+import asyncio
 import time
+from typing import Any, AsyncIterator, List, Tuple
 
 from app.providers.base import Provider
 from app.providers.exceptions import ProviderError
@@ -19,16 +33,24 @@ from app.services.failure_classifier import (
 )
 
 
-class ChatService:
+def _loop_elapsed(start_wall: float) -> float:
     """
-    Sends prompts using the appropriate provider client, failing over
+    Wall-clock seconds since ``start_wall`` using the running loop's
+    monotonic clock (the async counterpart of ``time.perf_counter``).
+    """
+    return asyncio.get_running_loop().time() - start_wall
+
+
+class AsyncChatService:
+    """
+    Sends prompts using the async provider clients, failing over
     intelligently across models and providers.
     """
 
     def __init__(self) -> None:
         self.registry = ClientRegistry()
 
-    def _try_once(
+    async def _atry_once(
         self,
         provider: Provider,
         model: str,
@@ -37,7 +59,7 @@ class ChatService:
         **generation_kwargs: Any,
     ) -> Tuple[Attempt, str | None, FailureKind | None]:
         """
-        Perform a single chat attempt.
+        Perform a single async chat attempt.
 
         Returns (attempt, response, kind): response is None on failure,
         and kind is the classified FailureKind (None on success).
@@ -47,7 +69,7 @@ class ChatService:
 
         try:
             client = self.registry.get(provider.name)
-            response = client.chat(
+            response = await client.achat(
                 provider=provider,
                 model=model,
                 message=message,
@@ -86,7 +108,7 @@ class ChatService:
             None,
         )
 
-    def chat_across(
+    async def achat_across(
         self,
         candidates: List[Tuple[Provider, str]],
         message: str,
@@ -100,14 +122,14 @@ class ChatService:
         Returns a result dict with success, provider, model, response,
         latency_ms, fallback_reason, and per-attempt records. On failure,
         the result includes success=False, error, fallback_reason, and
-        attempts (no response key).
+        attempts (no response key). Mirrors ``ChatService.chat_across``.
         """
 
         attempts: List[Attempt] = []
         errors: List[str] = []
         skip_providers = set()
         max_retries = max(0, int(max_retries))
-        start_wall = time.perf_counter()
+        start_wall = asyncio.get_running_loop().time()
 
         for provider, model in candidates:
 
@@ -118,10 +140,10 @@ class ChatService:
 
             while retry_no <= max_retries:
 
-                if budget_exhausted(time.perf_counter() - start_wall):
+                if budget_exhausted(_loop_elapsed(start_wall)):
                     break
 
-                attempt, response, kind = self._try_once(
+                attempt, response, kind = await self._atry_once(
                     provider,
                     model,
                     message,
@@ -161,11 +183,11 @@ class ChatService:
                 wait = retry_wait_seconds(
                     attempt,
                     retry_no,
-                    time.perf_counter() - start_wall,
+                    _loop_elapsed(start_wall),
                 )
 
                 if wait > 0:
-                    time.sleep(wait)
+                    await asyncio.sleep(wait)
 
                 retry_no += 1
 
@@ -181,7 +203,126 @@ class ChatService:
             "attempts": [record.to_dict() for record in attempts],
         }
 
-    def _try_once_messages(
+    async def _atry_stream_once(
+        self,
+        provider: Provider,
+        model: str,
+        message: str,
+        **generation_kwargs: Any,
+    ) -> AsyncIterator[str]:
+        """
+        Attempt to start an async streaming chat with a single
+        provider/model.
+
+        Yields content delta strings.
+        Raises an exception if the stream fails to start or fails
+        mid-stream.
+        """
+        client = self.registry.get(provider.name)
+        async for chunk in client.achat_stream(
+            provider=provider,
+            model=model,
+            message=message,
+            **generation_kwargs,
+        ):
+            yield chunk
+
+    async def achat_across_stream(
+        self,
+        candidates: List[Tuple[Provider, str]],
+        message: str,
+        max_retries: int = 1,
+        **generation_kwargs: Any,
+    ) -> dict:
+        """
+        Try candidates in order to start a streaming chat.
+
+        Returns a result dict with success, provider, model, stream_gen
+        (None when no candidate started), error (when success is False),
+        and attempts: per-attempt failure records for candidates that never
+        produced a first chunk. Once a stream starts, its final outcome is
+        reported by the caller while consuming the async generator.
+
+        Streaming start failures are not retried: the candidate list is the
+        failover path. No exception is raised; the caller decides the HTTP
+        mapping.
+        """
+        attempts: List[dict] = []
+        errors: List[str] = []
+        skip_providers = set()
+
+        for provider, model in candidates:
+
+            if provider.name in skip_providers:
+                continue
+
+            start = time.perf_counter()
+
+            try:
+                stream_gen = self._atry_stream_once(
+                    provider,
+                    model,
+                    message,
+                    **generation_kwargs,
+                )
+                # Pull the first chunk to verify the stream actually started.
+                first_chunk = await stream_gen.__anext__()
+            except StopAsyncIteration:
+                attempts.append({
+                    "provider": provider.name,
+                    "model": model,
+                    "latency_ms": int((time.perf_counter() - start) * 1000),
+                    "failure_type": "empty_stream",
+                    "reason": "stream ended before producing content",
+                })
+                errors.append(f"{model} ({provider.name}): empty stream")
+                continue
+            except Exception as exc:
+                kind = classify(exc)
+                attempts.append({
+                    "provider": provider.name,
+                    "model": model,
+                    "latency_ms": int((time.perf_counter() - start) * 1000),
+                    "failure_type": kind.value,
+                    "reason": str(exc),
+                })
+                errors.append(f"{model} ({provider.name}): {exc}")
+
+                if kind in PROVIDER_LEVEL:
+                    skip_providers.add(provider.name)
+                continue
+
+            async def gen() -> AsyncIterator[str]:
+                yield first_chunk
+                async for chunk in stream_gen:
+                    yield chunk
+
+            return {
+                "success": True,
+                "provider": provider.name,
+                "model": model,
+                "stream_gen": gen(),
+                "error": None,
+                "attempts": attempts,
+            }
+
+        first_provider = candidates[0][0].name if candidates else ""
+        first_model = candidates[0][1] if candidates else ""
+
+        return {
+            "success": False,
+            "provider": first_provider,
+            "model": first_model,
+            "stream_gen": None,
+            "error": (
+                "; ".join(errors)
+                if errors
+                else "No candidate could start a stream."
+            ),
+            "attempts": attempts,
+        }
+
+    async def _atry_once_messages(
         self,
         provider: Provider,
         model: str,
@@ -189,7 +330,7 @@ class ChatService:
         attempt_no: int,
     ) -> Tuple[Attempt, dict | None, FailureKind | None]:
         """
-        Perform a single chat attempt with a full message payload.
+        Perform a single async chat attempt with a full message payload.
 
         Returns (attempt, response, kind): response is the provider's
         parsed response dict on success, None on failure, and kind is the
@@ -200,7 +341,7 @@ class ChatService:
 
         try:
             client = self.registry.get(provider.name)
-            response = client.chat_messages(
+            response = await client.achat_messages(
                 provider=provider,
                 payload=payload,
             )
@@ -237,7 +378,7 @@ class ChatService:
             None,
         )
 
-    def chat_across_messages(
+    async def achat_across_messages(
         self,
         candidates: List[Tuple[Provider, str]],
         payload: dict,
@@ -247,7 +388,7 @@ class ChatService:
         Try candidates in order with a full message payload: current
         model, retry if appropriate, next model, next provider.
 
-        Returns the same result shape as chat_across, with response set
+        Returns the same result shape as achat_across, with response set
         to the provider's parsed response dict on success.
         """
 
@@ -255,7 +396,7 @@ class ChatService:
         errors: List[str] = []
         skip_providers = set()
         max_retries = max(0, int(max_retries))
-        start_wall = time.perf_counter()
+        start_wall = asyncio.get_running_loop().time()
 
         for provider, model in candidates:
 
@@ -266,10 +407,10 @@ class ChatService:
 
             while retry_no <= max_retries:
 
-                if budget_exhausted(time.perf_counter() - start_wall):
+                if budget_exhausted(_loop_elapsed(start_wall)):
                     break
 
-                attempt, response, kind = self._try_once_messages(
+                attempt, response, kind = await self._atry_once_messages(
                     provider,
                     model,
                     payload,
@@ -308,11 +449,11 @@ class ChatService:
                 wait = retry_wait_seconds(
                     attempt,
                     retry_no,
-                    time.perf_counter() - start_wall,
+                    _loop_elapsed(start_wall),
                 )
 
                 if wait > 0:
-                    time.sleep(wait)
+                    await asyncio.sleep(wait)
 
                 retry_no += 1
 
@@ -328,142 +469,28 @@ class ChatService:
             "attempts": [record.to_dict() for record in attempts],
         }
 
-    def _try_stream_once(
-        self,
-        provider: Provider,
-        model: str,
-        message: str,
-        **generation_kwargs: Any,
-    ) -> Generator[str, None, None]:
-        """
-        Attempt to start a streaming chat with a single provider/model.
-
-        Yields content delta strings.
-        Raises an exception if the stream fails to start or fails mid-stream.
-        """
-        client = self.registry.get(provider.name)
-        # The provider's chat_stream method returns a generator
-        yield from client.chat_stream(
-            provider=provider,
-            model=model,
-            message=message,
-            **generation_kwargs,
-        )
-
-    def chat_across_stream(
-        self,
-        candidates: List[Tuple[Provider, str]],
-        message: str,
-        max_retries: int = 1,
-        **generation_kwargs: Any,
-    ) -> dict:
-        """
-        Try candidates in order to start a streaming chat.
-
-        Returns a result dict with success, provider, model, stream_gen
-        (None when no candidate started), error (when success is False),
-        and attempts: per-attempt failure records for candidates that never
-        produced a first chunk. Once a stream starts, its final outcome is
-        reported by the caller while consuming the generator.
-
-        Streaming start failures are not retried: the candidate list is the
-        failover path. No exception is raised; the caller decides the HTTP
-        mapping.
-        """
-        attempts: List[dict] = []
-        errors: List[str] = []
-        skip_providers = set()
-
-        for provider, model in candidates:
-
-            if provider.name in skip_providers:
-                continue
-
-            start = time.perf_counter()
-
-            try:
-                stream_gen = self._try_stream_once(
-                    provider,
-                    model,
-                    message,
-                    **generation_kwargs,
-                )
-                # Pull the first chunk to verify the stream actually started.
-                first_chunk = next(stream_gen)
-            except StopIteration:
-                attempts.append({
-                    "provider": provider.name,
-                    "model": model,
-                    "latency_ms": int((time.perf_counter() - start) * 1000),
-                    "failure_type": "empty_stream",
-                    "reason": "stream ended before producing content",
-                })
-                errors.append(f"{model} ({provider.name}): empty stream")
-                continue
-            except Exception as exc:
-                kind = classify(exc)
-                attempts.append({
-                    "provider": provider.name,
-                    "model": model,
-                    "latency_ms": int((time.perf_counter() - start) * 1000),
-                    "failure_type": kind.value,
-                    "reason": str(exc),
-                })
-                errors.append(f"{model} ({provider.name}): {exc}")
-
-                if kind in PROVIDER_LEVEL:
-                    skip_providers.add(provider.name)
-                continue
-
-            def gen() -> Generator[str, None, None]:
-                yield first_chunk
-                yield from stream_gen
-
-            return {
-                "success": True,
-                "provider": provider.name,
-                "model": model,
-                "stream_gen": gen(),
-                "error": None,
-                "attempts": attempts,
-            }
-
-        first_provider = candidates[0][0].name if candidates else ""
-        first_model = candidates[0][1] if candidates else ""
-
-        return {
-            "success": False,
-            "provider": first_provider,
-            "model": first_model,
-            "stream_gen": None,
-            "error": (
-                "; ".join(errors)
-                if errors
-                else "No candidate could start a stream."
-            ),
-            "attempts": attempts,
-        }
-
-    def _try_stream_once_messages(
+    async def _atry_stream_once_messages(
         self,
         provider: Provider,
         model: str,
         payload: dict,
-    ) -> Generator[dict, None, None]:
+    ) -> AsyncIterator[dict]:
         """
-        Attempt to start a streaming chat with a single provider/model
-        using a full message payload.
+        Attempt to start an async streaming chat with a single
+        provider/model using a full message payload.
 
         Yields parsed chunk dicts.
-        Raises an exception if the stream fails to start or fails mid-stream.
+        Raises an exception if the stream fails to start or fails
+        mid-stream.
         """
         client = self.registry.get(provider.name)
-        yield from client.chat_stream_messages(
+        async for chunk in client.achat_stream_messages(
             provider=provider,
             payload=payload,
-        )
+        ):
+            yield chunk
 
-    def chat_across_stream_messages(
+    async def achat_across_stream_messages(
         self,
         candidates: List[Tuple[Provider, str]],
         payload: dict,
@@ -478,7 +505,7 @@ class ChatService:
         error (when success is False), and attempts: per-attempt failure
         records for candidates that never produced a first chunk. Once a
         stream starts, its final outcome is reported by the caller while
-        consuming the generator.
+        consuming the async generator.
 
         Streaming start failures are not retried: the candidate list is
         the failover path. No exception is raised; the caller decides the
@@ -496,13 +523,14 @@ class ChatService:
             start = time.perf_counter()
 
             try:
-                stream_gen = self._try_stream_once_messages(
+                stream_gen = self._atry_stream_once_messages(
                     provider,
                     model,
                     payload,
                 )
-                first_chunk = next(stream_gen)
-            except StopIteration:
+                # Pull the first chunk to verify the stream actually started.
+                first_chunk = await stream_gen.__anext__()
+            except StopAsyncIteration:
                 attempts.append({
                     "provider": provider.name,
                     "model": model,
@@ -527,9 +555,10 @@ class ChatService:
                     skip_providers.add(provider.name)
                 continue
 
-            def gen() -> Generator[dict, None, None]:
+            async def gen() -> AsyncIterator[dict]:
                 yield first_chunk
-                yield from stream_gen
+                async for chunk in stream_gen:
+                    yield chunk
 
             return {
                 "success": True,
@@ -556,7 +585,7 @@ class ChatService:
             "attempts": attempts,
         }
 
-    def chat(
+    async def achat(
         self,
         provider: Provider,
         message: str,
@@ -564,6 +593,8 @@ class ChatService:
         """
         Send a message through a single provider, failing over to the
         next model when a model is unavailable.
+
+        Mirrors ``ChatService.chat``.
         """
 
         candidates = [
@@ -572,7 +603,7 @@ class ChatService:
             if is_chat_testable(model)
         ]
 
-        result = self.chat_across(candidates, message)
+        result = await self.achat_across(candidates, message)
 
         if not result["success"]:
             raise ProviderError(

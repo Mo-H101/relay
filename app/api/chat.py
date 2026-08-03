@@ -80,7 +80,7 @@ def _resolve_task(request: ChatRequest) -> str | None:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, response: Response):
+async def chat(request: ChatRequest, response: Response):
 
     if settings.task_classification_enabled:
         task = _resolve_task(request)
@@ -117,7 +117,7 @@ def chat(request: ChatRequest, response: Response):
 
     start = time.perf_counter()
 
-    result = relay.chat(request.message, task=task, **generation_kwargs)
+    result = await relay.achat(request.message, task=task, **generation_kwargs)
 
     latency_ms = (time.perf_counter() - start) * 1000
 

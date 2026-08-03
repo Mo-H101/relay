@@ -1,4 +1,4 @@
-from typing import List, Union, Optional, Generator
+from typing import AsyncIterator, List, Union, Optional, Generator
 import os
 import time
 import json
@@ -59,6 +59,20 @@ def _stream_error_text(response: httpx.Response) -> str:
     """
     try:
         response.read()
+    except Exception:
+        pass
+    return response.text
+
+
+async def _stream_error_text_async(response: httpx.Response) -> str:
+    """
+    Async counterpart of _stream_error_text: read a streamed error body.
+
+    A response from ``client.stream`` cannot expose ``.text`` until its
+    body has been consumed, so the body is awaited with ``aread()`` first.
+    """
+    try:
+        await response.aread()
     except Exception:
         pass
     return response.text
@@ -850,3 +864,634 @@ class OpenAICompatibleClient:
                 0,
                 str(exc),
             ) from exc
+
+    async def achat(
+        self,
+        provider: Provider,
+        model: str,
+        message: str,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        seed: Optional[int] = None,
+    ) -> str:
+        """
+        Async chat completion: returns the assistant message content.
+
+        Mirrors chat() over httpx.AsyncClient with the same payload,
+        headers, timeout, error mapping, and provider metrics.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        eff_temp = 0.2 if temperature is None else temperature
+        eff_max_tokens = 512 if max_tokens is None else max_tokens
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": message,
+                }
+            ],
+            "temperature": eff_temp,
+            "max_tokens": eff_max_tokens,
+        }
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if stop is not None:
+            payload["stop"] = stop
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if seed is not None:
+            payload["seed"] = seed
+
+        url = f"{provider.base_url}/chat/completions"
+        start = time.perf_counter()
+
+        try:
+            async with httpx.AsyncClient(
+                **proxy_request_kwargs(provider, url)
+            ) as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=settings.request_timeout,
+                )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        if response.status_code >= 400:
+            relay_metrics.record_provider(
+                provider.name, "chat", response.status_code, latency_ms
+            )
+            raise ProviderHTTPError(
+                response.status_code,
+                _safe_provider_body(
+                    provider, response.status_code, response.text
+                ),
+                retry_after=_retry_after_seconds(response),
+            )
+
+        relay_metrics.record_provider(
+            provider.name, "chat", response.status_code, latency_ms
+        )
+
+        data = response.json()
+
+        return data["choices"][0]["message"]["content"]
+
+    async def achat_stream(
+        self,
+        provider: Provider,
+        model: str,
+        message: str,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        seed: Optional[int] = None,
+    ) -> AsyncIterator[str]:
+        """
+        Async streaming chat completion.
+
+        Yields content delta strings as they arrive. Mirrors
+        chat_stream() over httpx.AsyncClient; raises ProviderTimeout or
+        ProviderHTTPError on failure.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        eff_temp = 0.2 if temperature is None else temperature
+        eff_max_tokens = 512 if max_tokens is None else max_tokens
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": message,
+                }
+            ],
+            "temperature": eff_temp,
+            "max_tokens": eff_max_tokens,
+            "stream": True,
+        }
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if stop is not None:
+            payload["stop"] = stop
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if seed is not None:
+            payload["seed"] = seed
+
+        url = f"{provider.base_url}/chat/completions"
+
+        try:
+            start = time.perf_counter()
+
+            async with httpx.AsyncClient(
+                **proxy_request_kwargs(provider, url)
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=settings.request_timeout,
+                ) as response:
+                    if response.status_code >= 400:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream",
+                            response.status_code,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            response.status_code,
+                            _safe_provider_body(
+                                provider,
+                                response.status_code,
+                                await _stream_error_text_async(response),
+                            ),
+                            retry_after=_retry_after_seconds(response),
+                        )
+
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = chunk["choices"][0]["delta"]
+                                content = delta.get("content")
+                                if content:
+                                    yield content
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
+
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream",
+                        200,
+                        (time.perf_counter() - start) * 1000,
+                    )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+    async def achat_messages(
+        self,
+        provider: Provider,
+        payload: dict,
+    ) -> dict:
+        """
+        Async full-payload chat completion.
+
+        Mirrors chat_messages() over httpx.AsyncClient: the payload is
+        forwarded verbatim and the provider's parsed response body is
+        returned unchanged. Raises ProviderTimeout or ProviderHTTPError on
+        failure, with the provider body bounded and redacted.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        url = f"{provider.base_url}/chat/completions"
+        start = time.perf_counter()
+
+        try:
+            async with httpx.AsyncClient(
+                **proxy_request_kwargs(provider, url)
+            ) as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=settings.request_timeout,
+                )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        if response.status_code >= 400:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_messages",
+                response.status_code,
+                latency_ms,
+            )
+            raise ProviderHTTPError(
+                response.status_code,
+                _safe_provider_body(
+                    provider, response.status_code, response.text
+                ),
+                retry_after=_retry_after_seconds(response),
+            )
+
+        relay_metrics.record_provider(
+            provider.name, "chat_messages", response.status_code, latency_ms
+        )
+
+        return response.json()
+
+    async def achat_stream_messages(
+        self,
+        provider: Provider,
+        payload: dict,
+    ) -> AsyncIterator[dict]:
+        """
+        Async full-payload streaming chat completion.
+
+        Mirrors chat_stream_messages() over httpx.AsyncClient. Yields
+        parsed chunk dicts (including tool_call deltas and the usage chunk
+        when the provider emits one) as they arrive. Raises
+        ProviderTimeout or ProviderHTTPError on failure; the provider body
+        is bounded and redacted. The payload is forwarded verbatim.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        url = f"{provider.base_url}/chat/completions"
+
+        try:
+            start = time.perf_counter()
+
+            async with httpx.AsyncClient(
+                **proxy_request_kwargs(provider, url)
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=settings.request_timeout,
+                ) as response:
+                    if response.status_code >= 400:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream_messages",
+                            response.status_code,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            response.status_code,
+                            _safe_provider_body(
+                                provider,
+                                response.status_code,
+                                await _stream_error_text_async(response),
+                            ),
+                            retry_after=_retry_after_seconds(response),
+                        )
+
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        if not chunk.get("choices") and "usage" not in chunk:
+                            continue
+                        yield chunk
+
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream_messages",
+                        200,
+                        (time.perf_counter() - start) * 1000,
+                    )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+    async def alist_models(self, provider: Provider) -> List[str]:
+        """
+        Async model catalog listing. Mirrors list_models() over
+        httpx.AsyncClient.
+        """
+
+        headers = {}
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        url = f"{provider.base_url}/models"
+        start = time.perf_counter()
+
+        try:
+            async with httpx.AsyncClient(
+                **proxy_request_kwargs(provider, url)
+            ) as client:
+                response = await client.get(
+                    url,
+                    headers=headers,
+                    timeout=30,
+                )
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "list_models",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} model discovery timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "list_models",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        if response.status_code >= 400:
+            relay_metrics.record_provider(
+                provider.name,
+                "list_models",
+                response.status_code,
+                latency_ms,
+            )
+            raise ProviderHTTPError(
+                response.status_code,
+                _safe_provider_body(
+                    provider, response.status_code, response.text
+                ),
+            )
+
+        relay_metrics.record_provider(
+            provider.name,
+            "list_models",
+            response.status_code,
+            latency_ms,
+        )
+
+        data = response.json()
+
+        return [
+            model["id"]
+            for model in data.get("data", [])
+        ]
+
+    async def aprobe_model(
+        self,
+        provider: Provider,
+        model: str,
+    ) -> ModelProbe:
+        """
+        Async model probe. Mirrors probe_model() over httpx.AsyncClient.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "ping",
+                }
+            ],
+            "max_tokens": 1,
+        }
+
+        url = f"{provider.base_url}/chat/completions"
+        start = time.perf_counter()
+
+        try:
+            async with httpx.AsyncClient(
+                **proxy_request_kwargs(provider, url)
+            ) as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=10,
+                )
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "probe_model",
+                (time.perf_counter() - start) * 1000,
+            )
+            return ModelProbe(
+                False,
+                int((time.perf_counter() - start) * 1000),
+                0,
+                "timeout",
+            )
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "probe_model",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            return ModelProbe(
+                False,
+                int((time.perf_counter() - start) * 1000),
+                0,
+                str(exc),
+            )
+
+        latency = int((time.perf_counter() - start) * 1000)
+
+        if response.status_code == 200:
+            relay_metrics.record_provider(
+                provider.name,
+                "probe_model",
+                response.status_code,
+                latency,
+            )
+            return ModelProbe(True, latency, 200, "")
+
+        relay_metrics.record_provider(
+            provider.name,
+            "probe_model",
+            response.status_code,
+            latency,
+        )
+
+        return ModelProbe(
+            False,
+            latency,
+            response.status_code,
+            _safe_provider_body(
+                provider, response.status_code, response.text
+            ),
+        )

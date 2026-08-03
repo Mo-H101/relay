@@ -75,6 +75,29 @@ class FakeClient:
 
         return outcome
 
+    async def achat(self, provider, model, message, timeout=None, max_tokens=None, **kwargs):
+        """Async version of chat()."""
+        self.chat_calls.append((provider.name, model))
+
+        queue = self._outcomes.get(model)
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {model}")
+
+        outcome = queue[0]
+
+        if len(queue) > 1:
+            queue.pop(0)
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        return outcome
+
+    async def achat_stream(self, provider, model, message, **kwargs):
+        """Async version of chat_stream()."""
+        raise ProviderError("streaming not configured in full-stack tests")
+
     def chat_stream(self, provider, model, message, **kwargs):
         raise ProviderError("streaming not configured in full-stack tests")
 

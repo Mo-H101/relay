@@ -10,6 +10,7 @@ from app.services.health_refresher import HealthRefresher
 from app.services.health_store import HealthStore
 from app.services.candidate_builder import CandidateBuilder
 from app.services.chat_service import ChatService
+from app.services.async_chat_service import AsyncChatService
 from app.services.decision_engine import DecisionEngine
 from app.services.routing import RoutingEngine
 from app.services.log_service import RequestLogger
@@ -82,6 +83,7 @@ class Relay:
             builder=self.candidate_builder,
         )
         self.chat_service = ChatService()
+        self.async_chat_service = AsyncChatService()
         self.request_logger = RequestLogger()
 
         self.state_store: Optional[StateStore] = None
@@ -239,6 +241,56 @@ class Relay:
             self.decision_engine.decide(providers, task=task)
 
         result = self.chat_service.chat_across(
+            candidates,
+            message,
+            max_retries=settings.max_retries,
+            **generation_kwargs,
+        )
+
+        result["correlation_id"] = cid
+
+        self.request_logger.chat(result)
+
+        if settings.telemetry_enabled:
+            self._record_telemetry(result)
+
+        if settings.health_feedback_enabled:
+            self._record_feedback(result)
+
+        return result
+
+    async def achat(
+        self,
+        message: str,
+        task: str | None = None,
+        correlation_id: str | None = None,
+        **generation_kwargs: Any,
+    ) -> dict:
+        """
+        Async version of chat(). Sends a message through the highest-priority
+        available provider, failing over intelligently across models and
+        providers.
+
+        Uses the async chat service to avoid blocking the event loop.
+        """
+
+        cid = correlation_id or new_correlation_id()
+
+        providers = self.provider_manager.ranked()
+
+        if not providers:
+            return {
+                "success": False,
+                "error": "No provider available.",
+                "correlation_id": cid,
+            }
+
+        candidates = self.candidate_builder.build(providers, task=task)
+
+        if self.decision_engine.enabled:
+            self.decision_engine.decide(providers, task=task)
+
+        result = await self.async_chat_service.achat_across(
             candidates,
             message,
             max_retries=settings.max_retries,

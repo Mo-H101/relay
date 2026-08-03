@@ -67,6 +67,135 @@ class FakeClient:
 
         return outcome
 
+    def chat_stream(self, provider, model, message, timeout=None, max_tokens=None):
+        self.chat_calls.append((provider.name, model))
+
+        queue = self._outcomes.get(model)
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {model}")
+
+        while queue:
+            outcome = queue.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if outcome:
+                yield outcome
+
+    async def achat(self, provider, model, message, timeout=None, max_tokens=None):
+        """Async version of chat()."""
+        self.chat_calls.append((provider.name, model))
+
+        queue = self._outcomes.get(model)
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {model}")
+
+        outcome = queue[0]
+
+        if len(queue) > 1:
+            queue.pop(0)
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        return outcome
+
+    async def achat_stream(self, provider, model, message, timeout=None, max_tokens=None):
+        """Async version of chat_stream()."""
+        self.chat_calls.append((provider.name, model))
+
+        queue = self._outcomes.get(model)
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {model}")
+
+        while queue:
+            outcome = queue.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if outcome:
+                yield outcome
+
+    def chat_messages(self, provider, payload):
+        self.chat_calls.append((provider.name, payload))
+
+        queue = self._outcomes.get(payload["model"])
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {payload['model']}")
+
+        outcome = queue[0]
+
+        if len(queue) > 1:
+            queue.pop(0)
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        if isinstance(outcome, dict):
+            return outcome
+
+        # Return a default response similar to test_openai_api.py
+        return {
+            "id": "chatcmpl-mock",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": payload["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": outcome},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+    def chat_stream_messages(self, provider, payload):
+        self.chat_calls.append((provider.name, payload))
+
+        queue = self._outcomes.get(payload["model"])
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {payload['model']}")
+
+        produced = False
+
+        while queue:
+            outcome = queue.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if isinstance(outcome, dict):
+                yield outcome
+                produced = True
+            elif outcome:
+                yield {
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": payload["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": outcome},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                produced = True
+
+        if produced:
+            yield {
+                "id": "chatcmpl-mock",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": payload["model"],
+                "choices": [
+                    {"index": 0, "delta": {}, "finish_reason": "stop"}
+                ],
+            }
+
     def probe_model(self, provider, model):
         self.probe_calls.append((provider.name, model))
 
@@ -76,6 +205,85 @@ class FakeClient:
             return ModelProbe(False, 0, 404, "missing probe")
 
         return probe
+
+    async def achat_messages(self, provider, payload):
+        self.chat_calls.append((provider.name, payload))
+
+        queue = self._outcomes.get(payload["model"])
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {payload['model']}")
+
+        outcome = queue[0]
+
+        if len(queue) > 1:
+            queue.pop(0)
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        if isinstance(outcome, dict):
+            return outcome
+
+        # Return a default response similar to test_openai_api.py
+        return {
+            "id": "chatcmpl-mock",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": payload["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": outcome},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+    async def achat_stream_messages(self, provider, payload):
+        self.chat_calls.append((provider.name, payload))
+
+        queue = self._outcomes.get(payload["model"])
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {payload['model']}")
+
+        produced = False
+
+        while queue:
+            outcome = queue.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if isinstance(outcome, dict):
+                yield outcome
+                produced = True
+            elif outcome:
+                yield {
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": payload["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": outcome},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                produced = True
+
+        if produced:
+            yield {
+                "id": "chatcmpl-mock",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": payload["model"],
+                "choices": [
+                    {"index": 0, "delta": {}, "finish_reason": "stop"}
+                ],
+            }
 
 
 @pytest.fixture(autouse=True)

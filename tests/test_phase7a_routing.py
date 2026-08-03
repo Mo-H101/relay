@@ -113,6 +113,38 @@ class FakeClient:
 
         return gen()
 
+    async def achat(self, provider, model, message, timeout=None, max_tokens=None, **kwargs):
+        """Async version of chat()."""
+        self.chat_calls.append((provider.name, model))
+
+        queue = self._outcomes.get(model)
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {model}")
+
+        outcome = queue[0]
+
+        if len(queue) > 1:
+            queue.pop(0)
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        return outcome
+
+    async def achat_stream(self, provider, model, message, **kwargs):
+        """Async version of chat_stream()."""
+        queue = self._streams.get(model)
+
+        if queue is None:
+            raise ProviderError(f"no stream outcome configured for {model}")
+
+        async def gen():
+            for chunk in queue:
+                yield chunk
+
+        return gen()
+
     def _default_response(self, model, content):
         return {
             "id": "chatcmpl-mock",
@@ -151,6 +183,59 @@ class FakeClient:
         return self._default_response(payload["model"], outcome)
 
     def chat_stream_messages(self, provider, payload):
+        self.chat_calls.append((provider.name, payload))
+
+        queue = self._streams.get(payload["model"])
+
+        if queue is None:
+            raise ProviderError(f"no stream outcome configured for {payload['model']}")
+
+        for chunk in queue:
+            yield {
+                "id": "chatcmpl-mock",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": payload["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": chunk},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        yield {
+            "id": "chatcmpl-mock",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": payload["model"],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+
+    async def achat_messages(self, provider, payload):
+        """Async version of chat_messages()."""
+        self.chat_calls.append((provider.name, payload))
+
+        queue = self._outcomes.get(payload["model"])
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {payload['model']}")
+
+        outcome = queue[0]
+
+        if len(queue) > 1:
+            queue.pop(0)
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        if isinstance(outcome, dict):
+            return outcome
+
+        return self._default_response(payload["model"], outcome)
+
+    async def achat_stream_messages(self, provider, payload):
+        """Async version of chat_stream_messages()."""
         self.chat_calls.append((provider.name, payload))
 
         queue = self._streams.get(payload["model"])
@@ -255,17 +340,17 @@ def client():
 
 def _capture_task(relay, monkeypatch):
     """
-    Wrap relay.chat so tests can observe the routing task the API layer
+    Wrap relay.achat so tests can observe the routing task the API layer
     actually resolved (explicit vs. classified).
     """
     captured = {}
-    original_chat = relay.chat
+    original_achat = relay.achat
 
-    def wrapped(message, task=None, **generation_kwargs):
+    async def wrapped(message, task=None, **generation_kwargs):
         captured["task"] = task
-        return original_chat(message, task=task, **generation_kwargs)
+        return await original_achat(message, task=task, **generation_kwargs)
 
-    monkeypatch.setattr(relay, "chat", wrapped)
+    monkeypatch.setattr(relay, "achat", wrapped)
     return captured
 
 
