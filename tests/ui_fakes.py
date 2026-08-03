@@ -21,6 +21,7 @@ class FakeProvider:
         requires_api_key: bool = True,
         api_key: str = "",
         models: list[str] | None = None,
+        priority_models: list[str] | None = None,
     ) -> None:
         self.name = name
         self.base_url = base_url
@@ -29,6 +30,7 @@ class FakeProvider:
         self.requires_api_key = requires_api_key
         self.api_key = api_key
         self.models = list(models or [])
+        self.priority_models = list(priority_models or [])
 
     def has_api_key(self) -> bool:
         return bool(self.api_key.strip())
@@ -176,3 +178,39 @@ def make_relay(providers: list[FakeProvider]) -> FakeRelay:
             )
         )
     return relay
+
+
+class FakeStore:
+    """
+    Recording stand-in for ``app.services.config_store``. ``get_env``
+    returns empty by default; only the write surface is recorded.
+    """
+
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, dict]] = []
+
+    def get_env(self, key: str, default: str = "") -> str:
+        return default
+
+    def set_provider_config(self, defn, **kwargs) -> None:
+        self.writes.append((defn.id, kwargs))
+
+
+class FakeReloader:
+    """
+    Recording stand-in for ``app.services.reload.reload_config``.
+    """
+
+    def __init__(self, report: dict | None = None) -> None:
+        self.report = report or {
+            "reloaded": True,
+            "dry_run": False,
+            "applied": ["nvidia_model_priority"],
+            "unchanged": [],
+            "failures": [],
+        }
+        self.calls: list = []
+
+    def __call__(self, relay) -> dict:
+        self.calls.append(relay)
+        return dict(self.report)

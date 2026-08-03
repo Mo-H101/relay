@@ -12,7 +12,9 @@ from app.ui.app import RelayApp
 from app.ui.data import ServiceFacade
 from app.ui.screens.chat import ChatScreen
 from app.ui.screens.dashboard import DashboardScreen
+from app.ui.screens.models import ModelsScreen
 from app.ui.screens.placeholder import PlaceholderScreen
+from app.ui.screens.providers import ProvidersScreen
 from app.ui.widgets import StatTile
 
 from tests.ui_fakes import FakeProvider, make_relay
@@ -30,8 +32,8 @@ async def test_boots_to_dashboard_and_walks_all_tabs():
 
         expected = {
             "2": ChatScreen,
-            "3": PlaceholderScreen,
-            "4": PlaceholderScreen,
+            "3": ModelsScreen,
+            "4": ProvidersScreen,
             "5": PlaceholderScreen,
             "6": PlaceholderScreen,
             "7": PlaceholderScreen,

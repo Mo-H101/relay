@@ -19,7 +19,9 @@ from app.core.server import EmbeddedServer
 from app.ui.data import ServiceFacade
 from app.ui.screens.chat import ChatScreen
 from app.ui.screens.dashboard import DashboardScreen
+from app.ui.screens.models import ModelsScreen
 from app.ui.screens.placeholder import PlaceholderScreen
+from app.ui.screens.providers import ProvidersScreen
 from app.ui.theme import theme
 
 _logger = logging.getLogger("relay.ui")
@@ -135,6 +137,36 @@ class RelayApp(App[None]):
     .hidden {{
         display: none;
     }}
+
+    #models-root, #providers-root {{
+        padding: 0 1;
+        height: 1fr;
+    }}
+
+    #models-controls, #providers-controls {{
+        height: 3;
+        margin-bottom: 1;
+        align: center middle;
+    }}
+
+    #models-controls > *, #providers-controls > * {{
+        margin: 0 1;
+    }}
+
+    #provider-toggle {{
+        width: 24;
+    }}
+
+    #models-root DataTable, #providers-root DataTable {{
+        height: 1fr;
+        margin-bottom: 1;
+    }}
+
+    #models-status, #providers-status {{
+        height: 1;
+        padding: 0 1;
+        margin-top: 1;
+    }}
     """
 
     def __init__(
@@ -152,8 +184,8 @@ class RelayApp(App[None]):
         self._screens = {
             "dashboard": DashboardScreen(self._facade),
             "chat": ChatScreen(self._facade),
-            "models": PlaceholderScreen("Models", NOTES["models"]),
-            "providers": PlaceholderScreen("Providers", NOTES["providers"]),
+            "models": ModelsScreen(self._facade),
+            "providers": ProvidersScreen(self._facade),
             "configuration": PlaceholderScreen(
                 "Configuration", NOTES["configuration"]
             ),
