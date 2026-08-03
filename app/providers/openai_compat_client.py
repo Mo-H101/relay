@@ -477,6 +477,33 @@ class OpenAICompatibleClient:
             for model in data.get("data", [])
         ]
 
+    def key_check(self, provider: Provider):
+        """
+        Return ``(status_code, body_text)`` for a key validation request,
+        or ``(None, error)`` when the provider is unreachable.
+
+        Uses the same authenticated ``GET /models`` call as list_models so
+        validation exercises the real catalog endpoint.
+        """
+        headers = {}
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        try:
+            response = httpx.get(
+                f"{provider.base_url}/models",
+                headers=headers,
+                timeout=30,
+                **proxy_request_kwargs(
+                    provider, f"{provider.base_url}/models"
+                ),
+            )
+        except httpx.HTTPError as exc:
+            return None, str(exc)
+
+        return response.status_code, response.text
+
     def check_model(self, provider: Provider, model: str) -> bool:
         """
         Check whether a model is usable.

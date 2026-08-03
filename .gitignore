@@ -15,5 +15,17 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Packaging/build artifacts.
+dist/
+build/
+*.egg-info/
+
+# Setup/state marker directory.
+.relay/
+
+# Agent/tooling config.
+.agents/
+skills-lock.json
+
 # Logs.
 *.log

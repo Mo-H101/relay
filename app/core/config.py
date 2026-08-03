@@ -5,9 +5,44 @@ import os
 
 from dotenv import load_dotenv
 
-# Always load the .env from the project root
+# The project root is the directory that contains the `app` package.
+# When installed as a package this is the site-packages directory; the
+# user-facing `.env` and state files resolve from the working directory
+# instead (see below).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _resolve_env_file() -> Path:
+    """
+    Locate the `.env` file, in priority order:
+      1. The RELAY_ENV_FILE override.
+      2. `.env` in the current working directory.
+      3. `.env` next to the app package (source checkouts).
+    Defaults to `<cwd>/.env` so the setup wizard always has a place to
+    write a fresh configuration.
+    """
+    override = os.getenv("RELAY_ENV_FILE")
+    if override:
+        return Path(override)
+
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        return cwd_env
+
+    return PROJECT_ROOT / ".env"
+
+
+# The active configuration file. The setup wizard and CLI read/write this
+# exact file.
+env_file = _resolve_env_file()
+load_dotenv(env_file)
+
+# Setup/state storage directory. Holds first-run and setup state so Relay
+# can distinguish "never configured" from "configured and ready".
+_state_dir_override = os.getenv("RELAY_STATE_DIR")
+state_dir = Path(_state_dir_override) if _state_dir_override else (
+    env_file.parent / ".relay"
+)
 
 
 def _csv(value: str) -> List[str]:
@@ -110,6 +145,12 @@ class Settings:
         # =========================
 
         self.relay_name = "Relay"
+        self.relay_host = os.getenv("RELAY_HOST", "127.0.0.1")
+        self.relay_port = _valid_int(
+            "RELAY_PORT",
+            os.getenv("RELAY_PORT", "8000"),
+            minimum=0,
+        )
         self.request_timeout = _valid_int(
             "REQUEST_TIMEOUT",
             os.getenv("REQUEST_TIMEOUT", "120"),
@@ -196,12 +237,32 @@ class Settings:
         # =========================
 
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        self.anthropic_enabled = (
+            os.getenv("ANTHROPIC_ENABLED", "false").lower() == "true"
+        )
+        self.anthropic_base_url = os.getenv(
+            "ANTHROPIC_BASE_URL",
+            "https://api.anthropic.com/v1",
+        )
 
         # =========================
         # OpenRouter
         # =========================
 
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
+
+        # =========================
+        # Google Gemini
+        # =========================
+
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+        self.gemini_enabled = (
+            os.getenv("GEMINI_ENABLED", "false").lower() == "true"
+        )
+        self.gemini_base_url = os.getenv(
+            "GEMINI_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        )
 
         # =========================
         # Groq
@@ -234,6 +295,9 @@ class Settings:
         self.ollama_base_url = os.getenv(
             "OLLAMA_BASE_URL",
             "http://localhost:11434",
+        )
+        self.ollama_enabled = (
+            os.getenv("OLLAMA_ENABLED", "false").lower() == "true"
         )
 
         # =========================

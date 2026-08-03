@@ -1,6 +1,9 @@
 from app.providers.nvidia_client import NvidiaClient
 from app.providers.openai_client import OpenAIClient
 from app.providers.lmstudio_client import LMStudioClient
+from app.providers.anthropic_client import AnthropicClient
+from app.providers.gemini_client import GeminiClient
+from app.providers.ollama_client import OllamaClient
 
 
 class ClientRegistry:
@@ -13,6 +16,9 @@ class ClientRegistry:
             "NVIDIA": NvidiaClient(),
             "OpenAI": OpenAIClient(),
             "LM Studio": LMStudioClient(),
+            "Anthropic": AnthropicClient(),
+            "Google Gemini": GeminiClient(),
+            "Ollama": OllamaClient(),
         }
 
     def get(self, provider_name: str):

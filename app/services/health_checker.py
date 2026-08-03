@@ -6,6 +6,7 @@ import time
 
 import httpx
 
+from app.providers.availability import classify_probe
 from app.providers.base import Provider
 from app.providers.openai_compat_client import proxy_request_kwargs
 from app.services.capabilities import (
@@ -21,8 +22,6 @@ DEGRADED = "degraded"
 UNAVAILABLE = "unavailable"
 UNSUPPORTED = "unsupported"
 NOT_CHECKED = "not_checked"
-
-_DEGRADED_CODES = {429, 529}
 
 _DEFAULT_PROBE_COUNT = 5
 _MAX_PROBE_COUNT = 30
@@ -280,14 +279,11 @@ class HealthChecker:
 
             for model, probe in zip(model_names, probes):
 
-                if probe.healthy:
-                    status = HEALTHY
-                elif probe.status_code in _DEGRADED_CODES:
-                    status = DEGRADED
-                elif probe.status_code == 0 and "timeout" in probe.error.lower():
-                    status = DEGRADED
-                else:
-                    status = UNAVAILABLE
+                status = {
+                    "available": HEALTHY,
+                    "overloaded": DEGRADED,
+                    "unavailable": UNAVAILABLE,
+                }[classify_probe(probe)]
 
                 results.append(
                     ModelHealth(

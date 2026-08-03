@@ -48,6 +48,10 @@ http://localhost:8000/redoc (ReDoc).
 - [Hardening audit report](docs/audit-report.md) — findings, fixes, remaining risks.
 - [v1.0.0 readiness report](docs/v1.0.0-readiness-report.md) — release checklist, verification evidence, remaining risks, required actions.
 - [UX validation guide](docs/ux-validation-guide.md) — Phase 8 manual test checklist for first-time users.
+- [Platform analysis](docs/platform-architecture-report.md) — Phase 9 current-architecture report.
+- [Platform missing components](docs/platform-missing-components-report.md) — Phase 9 gap analysis vs. the target platform.
+- [Platform implementation roadmap](docs/platform-implementation-roadmap.md) — Phase 9 phased plan (P0–P8).
+- [Platform recommended order](docs/platform-recommended-order.md) — Phase 9 sequencing rationale.
 
 ## Endpoints
 
@@ -128,6 +132,36 @@ is intentionally left off here — it runs a background prober that needs live
 network access to every provider endpoint. See
 [docs/configuration.md](docs/configuration.md) for the full reference and
 dependency notes.
+
+## Installation
+
+Install Relay in a virtual environment, then start it by typing `relay`:
+
+```bash
+# From PyPI (once published)
+pip install relay
+
+# From GitHub (one command)
+pip install git+https://github.com/<org>/<repo>.git
+
+# One-command installers (from a checkout)
+#   Windows PowerShell:
+.\install.ps1
+#   macOS / Linux:
+./install.sh
+```
+
+After a successful install, the terminal prints:
+
+    Installation complete. Type 'relay' to start Relay.
+
+First launch detects a missing or incomplete configuration and walks you
+through provider setup. After setup completes, running `relay` starts the
+server, and any OpenAI-compatible client (Cline, OpenCode, Continue, …)
+can point at `http://127.0.0.1:8000/v1`.
+
+> Publishing to PyPI and Windows package managers (winget/choco) is
+> planned; until then use the commands above.
 
 ## Development
 

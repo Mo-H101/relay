@@ -1,10 +1,22 @@
 # Relay Configuration
 
 Relay reads configuration from environment variables, loaded from a
-`.env` file at the project root if present. Values are validated at
-startup; invalid values abort startup with a clear message. Hot reload
-(`POST /admin/reload`) applies only the fields marked **reloadable**
-below.
+`.env` file if present. The file is resolved from `RELAY_ENV_FILE`, then
+the current working directory, then the project root. Values are validated
+at startup; invalid values abort startup with a clear message. Hot reload
+(`POST /admin/reload`) applies only the fields marked **reloadable** below.
+
+## Server and installation state
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RELAY_HOST` | `127.0.0.1` | Host the `relay` command binds the server to. |
+| `RELAY_PORT` | `8000` | Port the `relay` command binds the server to. |
+| `RELAY_ENV_FILE` | *(resolved)* | Explicit path to the `.env` file. |
+| `RELAY_STATE_DIR` | `<env dir>/.relay` | Directory holding setup state (`state.json`) and the future platform database. |
+
+Setup state distinguishes "installed but not configured", "setup completed",
+and "incomplete/failed setup"; it is independent of whether a `.env` exists.
 
 ## General
 
