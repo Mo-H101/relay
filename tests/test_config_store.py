@@ -29,6 +29,26 @@ def test_get_env_missing_returns_default():
     assert config_store.get_env("RELAY_NO_SUCH_VAR_XYZ", "dflt") == "dflt"
 
 
+def test_unset_env_removes_key(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    config_store.set_env("FOO", "bar")
+
+    config_store.unset_env("FOO")
+
+    text = env_file.read_text(encoding="utf-8")
+    assert "FOO" not in text
+    assert config_store.get_env("FOO", "dflt") == "dflt"
+
+
+def test_unset_env_missing_key_is_noop(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    config_store.set_env("FOO", "bar")
+
+    config_store.unset_env("NOT_PRESENT_XYZ")
+
+    assert "FOO" in env_file.read_text(encoding="utf-8")
+
+
 def test_set_provider_config_writes_all_fields(monkeypatch, tmp_path):
     env_file = _patch_env(monkeypatch, tmp_path)
     defn = PROVIDER_REGISTRY["openai"]

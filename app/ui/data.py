@@ -9,7 +9,11 @@ call ``ServiceFacade`` and never touch ``app.core.relay`` directly.
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
+import time
 from typing import Any
 
 from app.core.config import settings
@@ -19,7 +23,11 @@ from app.providers.registry import PROVIDER_REGISTRY
 from app.services import config_store as config_store_module
 from app.services import setup_state
 from app.services.capabilities import is_chat_testable
+from app.services.client_tracking import ClientActivityEntry, client_tracking
+from app.services.diagnostics import DiagnosticsService
+from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
+from app.services.redaction import redact_dict, redact_text
 from app.services.reload import reload_config
 from app.setup import persistence
 from app.setup.scan import ScanEngine
@@ -136,6 +144,131 @@ class DashboardSummary:
     persistence_error: str
     env_file: str
     state_dir: str
+
+
+@dataclass(frozen=True)
+class ConfigField:
+    """
+    One row of the Configuration form.
+
+    ``kind`` is ``"bool"``, ``"text"``, or ``"csv"``. Exactly one of
+    ``reloadable`` / ``restart_required`` / ``informational`` describes how
+    the field takes effect. No secret or API-key field is ever exposed here.
+    """
+
+    env: str
+    label: str
+    value: str
+    kind: str
+    group: str
+    editable: bool
+    reloadable: bool
+    restart_required: bool
+    informational: bool
+    hint: str = ""
+
+
+@dataclass(frozen=True)
+class OpsEventView:
+    """Display-ready view of one metadata-only ops event."""
+
+    age_seconds: int
+    kind: str
+    method: str
+    route: str
+    status: int | None
+    latency_ms: float
+    endpoint: str
+    provider: str
+    model: str
+    stream: str
+    success: bool
+    fallback: bool
+
+
+@dataclass(frozen=True)
+class LogEntryView:
+    """Display-ready, redacted view of one JSON log line."""
+
+    ts: str
+    level: str
+    logger: str
+    event: str
+    data: str
+
+
+@dataclass(frozen=True)
+class AuthStatus:
+    """
+    Authentication posture for the Applications surface.
+
+    ``authenticated``/``failures`` come from the cumulative auth metrics;
+    ``presented`` is the per-scheme distribution of credential methods
+    seen by the request middleware (metadata only).
+    """
+
+    enabled: bool
+    authenticated: float
+    failures: float
+    by_method: dict[str, float]
+    by_reason: dict[str, float]
+    presented: dict[str, int]
+
+
+# ------------------------------------------------------------------ config
+
+# (env, settings attr, kind, group, editable, reloadable, restart_required,
+#  informational, label, hint). No secret/API-key fields appear here; keys
+# stay managed by the Providers flow and never reach the Configuration UI.
+_CONFIG_ROWS = (
+    ("TASK_ROUTING_ENABLED", "task_routing_enabled", "bool", "routing", True, True, False, False, "Enable task routing", "Route requests by task category using the TASK_* model preferences."),
+    ("CROSS_PROVIDER_MODEL_SELECTION", "cross_provider_model_selection", "bool", "routing", True, True, False, False, "Cross-provider model selection", "Allow a bare model reference to match every provider that has it."),
+    ("TASK_CODING", "task_coding", "csv", "routing", True, True, False, False, "Coding models", "Comma-separated model refs (model or Provider:model)."),
+    ("TASK_VISION", "task_vision", "csv", "routing", True, True, False, False, "Vision models", "Comma-separated model refs (model or Provider:model)."),
+    ("TASK_REASONING", "task_reasoning", "csv", "routing", True, True, False, False, "Reasoning models", "Comma-separated model refs (model or Provider:model)."),
+    ("TASK_GENERAL", "task_general", "csv", "routing", True, True, False, False, "General models", "Comma-separated model refs (model or Provider:model)."),
+    ("TASK_CREATIVE", "task_creative", "csv", "routing", True, True, False, False, "Creative models", "Comma-separated model refs (model or Provider:model)."),
+    ("TASK_TRANSLATION", "task_translation", "csv", "routing", True, True, False, False, "Translation models", "Comma-separated model refs (model or Provider:model)."),
+    ("REQUEST_TIMEOUT", "request_timeout", "text", "failover", True, True, False, False, "Request timeout (s)", "Seconds before a provider request times out."),
+    ("MAX_RETRIES", "max_retries", "text", "failover", True, True, False, False, "Max retries", "Retries across fallback candidates."),
+    ("RETRY_HONOR_RETRY_AFTER", "retry_honor_retry_after", "bool", "failover", True, True, False, False, "Honor Retry-After", "Wait for a provider's Retry-After on rate-limit responses."),
+    ("RETRY_AFTER_MAX_SECONDS", "retry_after_max_seconds", "text", "failover", True, True, False, False, "Retry-After cap (s)", "Upper bound for a Retry-After wait."),
+    ("RETRY_BACKOFF_BASE_SECONDS", "retry_backoff_base_seconds", "text", "failover", True, True, False, False, "Backoff base (s)", "Exponential backoff base between retries (0 = immediate)."),
+    ("RETRY_BACKOFF_MAX_SECONDS", "retry_backoff_max_seconds", "text", "failover", True, True, False, False, "Backoff max (s)", "Cap for exponential backoff."),
+    ("REQUEST_TIMEOUT_BUDGET_SECONDS", "request_timeout_budget_seconds", "text", "failover", True, True, False, False, "Request budget (s)", "Overall wall-clock budget for a chat request (0 = off)."),
+    ("RELAY_HOST", "relay_host", "text", "restart", False, False, True, False, "Host", "Server bind host. Restart required."),
+    ("RELAY_PORT", "relay_port", "text", "restart", False, False, True, False, "Port", "Server bind port. Restart required."),
+    ("PERSISTENCE_ENABLED", "persistence_enabled", "bool", "restart", False, False, True, False, "Persistence", "Learned-state persistence. Restart required."),
+    ("PERSISTENCE_PATH", "persistence_path", "text", "restart", False, False, True, False, "Persistence path", "State store path. Restart required."),
+    ("PERSISTENCE_FLUSH_INTERVAL_SECONDS", "persistence_flush_interval_seconds", "text", "restart", False, False, True, False, "Flush interval (s)", "State flush cadence. Restart required."),
+    ("LOG_LEVEL", "log_level", "text", "restart", False, False, True, False, "Log level", "Logging verbosity. Restart required."),
+    ("LOG_FILE", "log_file", "text", "restart", False, False, True, False, "Log file", "JSON log file path. Restart required."),
+    ("LMSTUDIO_BASE_URL", "lmstudio_base_url", "text", "restart", False, False, True, False, "LM Studio URL", "LM Studio server base URL. Restart required."),
+    ("DEFAULT_PROVIDER", "default_provider", "text", "info", False, False, False, True, "Default provider", "Informational only; no silent behavior change."),
+)
+
+_EDITABLE_FIELDS = frozenset(row[0] for row in _CONFIG_ROWS if row[4])
+_RESTART_FIELDS = frozenset(row[0] for row in _CONFIG_ROWS if row[6])
+_GROUP_TITLES = {
+    "routing": "Routing (TASK_*) — applied live",
+    "failover": "Failover & retry — applied live",
+    "restart": "Restart required (read-only)",
+    "info": "Informational (read-only)",
+}
+
+
+def _tail_lines(path: Path, *, max_bytes: int = 65536, limit: int = 50) -> list[str]:
+    """
+    Read the last ``limit`` lines of ``path`` by scanning its final
+    ``max_bytes``, so a huge log never loads into memory.
+    """
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        size = handle.tell()
+        start = max(0, size - max_bytes)
+        handle.seek(start)
+        text = handle.read().decode("utf-8", "replace")
+    return text.splitlines()[-limit:]
 
 
 class ServiceFacade:
@@ -469,6 +602,370 @@ class ServiceFacade:
 
     def ops_events(self) -> list:
         return ops_store.events()
+
+    # ------------------------------------------------------ configuration
+
+    def config_form(self) -> list[ConfigField]:
+        """
+        Current Configuration form values with their live/restart/
+        informational classification. No secret fields are included.
+        """
+        return [
+            ConfigField(
+                env=env,
+                label=label,
+                value=self._field_value(attr, kind),
+                kind=kind,
+                group=group,
+                editable=editable,
+                reloadable=reloadable,
+                restart_required=restart_required,
+                informational=informational,
+                hint=hint,
+            )
+            for env, attr, kind, group, editable, reloadable, restart_required, informational, label, hint in _CONFIG_ROWS
+        ]
+
+    def _field_value(self, attr: str, kind: str) -> str:
+        value = getattr(settings, attr, "")
+
+        if kind == "bool":
+            return "true" if value else "false"
+
+        if kind == "csv":
+            return ",".join(value or [])
+
+        return str(value)
+
+    def config_restart_required_fields(self) -> list[str]:
+        """
+        Env names that never change without a restart (server bind,
+        persistence, logging, LM Studio URL). Read-only in the form.
+        """
+        return sorted(_RESTART_FIELDS)
+
+    def save_config(self, changes: dict[str, str]) -> dict:
+        """
+        Save a Configuration change through the single writer.
+
+        Flow: write via ``config_store`` -> validate with a dry-run reload
+        -> apply with a real reload -> report. On any validation/apply
+        failure the previous ``.env`` values are restored so the file and
+        the in-process state stay consistent. Secret fields are not
+        accepted here (they are managed by the provider flows).
+        """
+        if not changes:
+            return {"saved": False, "error": "No changes to save."}
+
+        unknown = sorted(set(changes) - _EDITABLE_FIELDS)
+
+        if unknown:
+            return {
+                "saved": False,
+                "error": (
+                    "Read-only or unknown field(s): "
+                    + ", ".join(unknown)
+                    + ". Restart-required and informational settings are "
+                    "read-only; secrets are managed on the Providers screen."
+                ),
+            }
+
+        originals = {key: self._store.get_env(key, None) for key in changes}
+
+        try:
+            for key, value in changes.items():
+                self._store.set_env(key, value)
+
+            dry = self._reload_call(dry_run=True)
+
+            if not dry.get("reloaded"):
+                self._restore_env(originals)
+                return {"saved": False, **dry}
+
+            report = self._reload_call()
+
+            if not report.get("reloaded"):
+                self._restore_env(originals)
+
+            return {"saved": bool(report.get("reloaded")), **report}
+        except Exception as exc:  # noqa: BLE001 - surface in the status line
+            self._restore_env(originals)
+            return {"saved": False, "error": f"Reload failed: {exc}"}
+
+    def _reload_call(self, **kwargs) -> dict:
+        env_file = getattr(self._store, "env_file", None)
+
+        if env_file is not None:
+            kwargs["dotenv_path"] = str(env_file)
+
+        return self._reload(self._relay, **kwargs)
+
+    def _restore_env(self, originals: dict[str, str | None]) -> None:
+        for key, value in originals.items():
+            if value is None:
+                self._store.unset_env(key)
+            else:
+                self._store.set_env(key, value)
+
+    # ---------------------------------------------------------- applications
+
+    def client_activity(self) -> list[ClientActivityEntry]:
+        """
+        Client activity rows (bucket, trimmed UA, route, counters, auth
+        schemes). Metadata only; no credentials, bodies, or messages.
+        """
+        return client_tracking.activity()
+
+    def auth_status(self) -> AuthStatus:
+        enabled = bool((settings.relay_api_key or "").strip())
+
+        return AuthStatus(
+            enabled=enabled,
+            authenticated=relay_metrics.auth_success.total(),
+            failures=relay_metrics.auth_failures.total(),
+            by_method={
+                "bearer": relay_metrics.auth_success.value(method="bearer"),
+                "header": relay_metrics.auth_success.value(method="header"),
+            },
+            by_reason={
+                "missing": relay_metrics.auth_failures.value(reason="missing"),
+                "invalid": relay_metrics.auth_failures.value(reason="invalid"),
+            },
+            presented=client_tracking.auth_totals(),
+        )
+
+    def endpoint_status(self) -> dict:
+        """
+        Rolling endpoint summary from the ops window plus totals.
+        """
+        stats = ops_store.stats()
+        return {
+            "requests": stats["requests"],
+            "successes": stats["successes"],
+            "failures": stats["failures"],
+            "endpoints": stats["endpoints"],
+        }
+
+    # ---------------------------------------------------------- diagnostics
+
+    def ops_tail(self, limit: int = 100) -> list[OpsEventView]:
+        """
+        Newest-first metadata-only ops events (bounded window).
+        """
+        now = time.monotonic()
+
+        return [
+            OpsEventView(
+                age_seconds=max(0, int(now - event.ts)),
+                kind=event.kind,
+                method=event.method,
+                route=event.route,
+                status=event.status,
+                latency_ms=round(event.latency_ms, 1),
+                endpoint=event.endpoint,
+                provider=event.provider,
+                model=event.model,
+                stream=event.stream,
+                success=event.success,
+                fallback=event.fallback,
+            )
+            for event in reversed(ops_store.events()[-limit:])
+        ]
+
+    def log_tail(self, limit: int = 50) -> dict:
+        """
+        Redacted tail of the JSON file log (only when LOG_FILE is set).
+        Unparseable lines are skipped; secret-shaped ``data`` keys are
+        masked before rendering.
+        """
+        path = getattr(settings, "log_file", "")
+
+        if not path:
+            return {
+                "available": False,
+                "entries": [],
+                "error": "LOG_FILE is not configured.",
+            }
+
+        target = Path(path)
+
+        if not target.is_file():
+            return {
+                "available": False,
+                "entries": [],
+                "error": f"Log file not found: {path}",
+            }
+
+        try:
+            lines = _tail_lines(target, limit=limit)
+        except OSError as exc:
+            return {
+                "available": False,
+                "entries": [],
+                "error": f"Cannot read log: {exc}",
+            }
+
+        entries: list[LogEntryView] = []
+        skipped = 0
+
+        for line in lines:
+            try:
+                payload = json.loads(line)
+            except (ValueError, TypeError):
+                skipped += 1
+                continue
+
+            if not isinstance(payload, dict):
+                skipped += 1
+                continue
+
+            data = redact_dict(payload.get("data") or {})
+            entries.append(
+                LogEntryView(
+                    ts=str(payload.get("ts", "")),
+                    level=str(payload.get("level", "")),
+                    logger=str(payload.get("logger", "")),
+                    event=str(payload.get("event", "")),
+                    data=json.dumps(data)[:200],
+                )
+            )
+
+        return {"available": True, "entries": entries, "skipped": skipped}
+
+    def provider_health_deep(self, provider_name: str) -> dict:
+        """
+        Per-model health deep view for one provider: runtime health report
+        joined with the availability snapshot and learned marks. Read-only.
+        """
+        provider = self._relay.provider_manager.get(provider_name)
+
+        if provider is None:
+            return {"provider": provider_name, "found": False}
+
+        report = self._relay.health_store.get(provider_name)
+        snapshot_statuses = self._snapshot_statuses().get(provider_name, {})
+        learn_export = getattr(
+            self._relay.health_store,
+            "export_learned_state",
+            lambda: {},
+        )()
+        marks = ((learn_export or {}).get(provider_name) or {}).get(
+            "model_marks"
+        ) or {}
+
+        by_name = (
+            {model.name: model for model in report.models}
+            if report is not None
+            else {}
+        )
+
+        models = [
+            {
+                "name": name,
+                "health": (
+                    by_name[name].status if name in by_name else "not_checked"
+                ),
+                "latency_ms": (
+                    by_name[name].latency_ms if name in by_name else None
+                ),
+                "error": (by_name[name].error or "") if name in by_name else "",
+                "snapshot": snapshot_statuses.get(name, "unknown"),
+                "learned": list(marks.get(name) or []),
+            }
+            for name in provider.models
+        ]
+
+        return {
+            "provider": provider_name,
+            "found": True,
+            "enabled": provider.enabled,
+            "requires_api_key": provider.requires_api_key,
+            "has_api_key": provider.has_api_key(),
+            "status": (
+                getattr(report, "status", "not_checked")
+                if report is not None
+                else "not_checked"
+            ),
+            "connectivity": (
+                getattr(report, "connectivity", None)
+                if report is not None
+                else None
+            ),
+            "last_checked": (
+                getattr(report, "last_checked", None)
+                if report is not None
+                else None
+            ),
+            "rate_limit_status": (
+                getattr(report, "rate_limit_status", None)
+                if report is not None
+                else None
+            ),
+            "models": models,
+        }
+
+    def test_connection(self, provider_name: str) -> dict:
+        """
+        Explicit per-provider test connection: probes one chat-testable
+        model through the P1 availability path. Network I/O; run off the
+        UI thread. Never mutates state.
+        """
+        provider = self._relay.provider_manager.get(provider_name)
+
+        if provider is None:
+            return {"ok": False, "error": f"Unknown provider '{provider_name}'."}
+
+        model = next(
+            (candidate for candidate in provider.models if is_chat_testable(candidate)),
+            None,
+        )
+
+        if model is None:
+            return {
+                "ok": False,
+                "error": f"No chat-testable model for {provider_name}.",
+            }
+
+        result = self.probe_model(provider_name, model)
+
+        if result is None:
+            return {"ok": False, "error": f"Probe failed for {provider_name}."}
+
+        return {
+            "ok": result.status != "unavailable",
+            "provider": provider_name,
+            "model": model,
+            "status": result.status,
+            "latency_ms": result.latency_ms,
+            "error": result.error,
+        }
+
+    def export_diagnostics(self, path: str) -> dict:
+        """
+        Export the redacted diagnostics snapshot to ``path``.
+
+        Every export passes through the redaction layer before the atomic
+        file write, so even an unexpected secret shape in the snapshot can
+        never survive into the file.
+        """
+        try:
+            snapshot = DiagnosticsService().build_snapshot(self._relay)
+            text = json.dumps(snapshot, indent=2, default=str)
+            redacted = redact_text(text)
+
+            target = Path(path)
+            tmp = target.with_name(target.name + ".tmp")
+            tmp.write_text(redacted + "\n", encoding="utf-8")
+            os.replace(str(tmp), str(target))
+
+            return {
+                "ok": True,
+                "path": str(target),
+                "generated_at": snapshot.get("generated_at", ""),
+                "bytes": len(redacted.encode("utf-8")),
+            }
+        except Exception as exc:  # noqa: BLE001 - surface in the status line
+            return {"ok": False, "error": str(exc)}
 
     # ---------------------------------------------------------------- chat
 

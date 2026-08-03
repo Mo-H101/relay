@@ -25,6 +25,34 @@ _HEADER_API_KEY = "x-relay-api-key"
 _BEARER_PREFIX = "bearer"
 
 
+def auth_scheme(
+    *,
+    path: str,
+    authorization: str = "",
+    x_api_key: str = "",
+    auth_enabled: bool = False,
+) -> str:
+    """
+    Label the credential method presented by a request, without
+    comparing anything: ``"public"`` (allowlisted path while auth is
+    enabled), ``"bearer"``, ``"header"`` (X-Relay-API-Key), or ``"none"``.
+    Used for the Applications metadata surface; never logs values.
+    """
+    if auth_enabled and path in PUBLIC_PATHS:
+        return "public"
+
+    if authorization:
+        scheme = authorization.partition(" ")[0].strip().lower()
+
+        if scheme == _BEARER_PREFIX:
+            return "bearer"
+
+    if x_api_key:
+        return "header"
+
+    return "none"
+
+
 def _constant_time_eq(left: str, right: str) -> bool:
     """
     Compare two strings in constant time over their SHA-256 digests, so
@@ -94,9 +122,10 @@ def require_api_key(request: Request) -> None:
         )
 
     authorization = request.headers.get("authorization", "")
-    scheme = authorization.partition(" ")[0].strip().lower()
-    relay_metrics.record_auth(
-        True,
-        True,
-        "bearer" if scheme == _BEARER_PREFIX else "header",
+    scheme = auth_scheme(
+        path=request.url.path,
+        authorization=authorization,
+        x_api_key=request.headers.get(_HEADER_API_KEY, ""),
+        auth_enabled=True,
     )
+    relay_metrics.record_auth(True, True, scheme)

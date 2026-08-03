@@ -174,3 +174,105 @@ def test_health_stays_minimal_when_auth_enabled(client, monkeypatch):
     response = client.get("/health")
     assert response.status_code == 200
     assert set(response.json().keys()) == {"status"}
+
+
+# ------------------------------------------------------------ auth scheme
+
+
+def test_auth_scheme_public_paths():
+    from app.security.auth import auth_scheme
+
+    for path in PUBLIC_PATHS:
+        assert (
+            auth_scheme(
+                path=path,
+                authorization=None,
+                x_api_key=None,
+                auth_enabled=True,
+            )
+            == "public"
+        )
+
+
+def test_auth_scheme_disabled_is_none():
+    from app.security.auth import auth_scheme
+
+    assert (
+        auth_scheme(
+            path="/providers",
+            authorization=None,
+            x_api_key=None,
+            auth_enabled=False,
+        )
+        == "none"
+    )
+
+
+def test_auth_scheme_missing_credentials_is_none():
+    from app.security.auth import auth_scheme
+
+    assert (
+        auth_scheme(
+            path="/providers",
+            authorization=None,
+            x_api_key=None,
+            auth_enabled=True,
+        )
+        == "none"
+    )
+
+
+def test_auth_scheme_bearer_prefix():
+    from app.security.auth import auth_scheme
+
+    assert (
+        auth_scheme(
+            path="/providers",
+            authorization="Bearer token",
+            x_api_key=None,
+            auth_enabled=True,
+        )
+        == "bearer"
+    )
+
+
+def test_auth_scheme_bearer_is_case_insensitive():
+    from app.security.auth import auth_scheme
+
+    assert (
+        auth_scheme(
+            path="/providers",
+            authorization="bearer token",
+            x_api_key=None,
+            auth_enabled=True,
+        )
+        == "bearer"
+    )
+
+
+def test_auth_scheme_header_key():
+    from app.security.auth import auth_scheme
+
+    assert (
+        auth_scheme(
+            path="/providers",
+            authorization=None,
+            x_api_key="token",
+            auth_enabled=True,
+        )
+        == "header"
+    )
+
+
+def test_auth_scheme_other_authorization_is_none():
+    from app.security.auth import auth_scheme
+
+    assert (
+        auth_scheme(
+            path="/providers",
+            authorization="Basic dXNlcjpwYXNz",
+            x_api_key=None,
+            auth_enabled=True,
+        )
+        == "none"
+    )

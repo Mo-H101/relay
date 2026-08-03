@@ -10,10 +10,31 @@ never inspects payloads, and never raises. Unmatched routes are labeled
 
 import time
 
+from app.core.config import settings
+from app.security.auth import auth_scheme
+from app.services.client_detection import classify_client
+from app.services.client_tracking import client_tracking
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
 
 UNMATCHED_ROUTE = "unmatched"
+
+
+def _scope_headers(scope) -> dict[str, str]:
+    """
+    Flatten the ASGI headers list into a lower-cased string map. Header
+    names and values are treated as bytes and decoded lossily; only the
+    trimmed User-Agent and the presented auth-scheme label are kept.
+    """
+    result: dict[str, str] = {}
+
+    for raw_key, raw_value in scope.get("headers") or []:
+        key = raw_key.decode("latin-1").lower()
+
+        if key in ("user-agent", "authorization", "x-relay-api-key"):
+            result[key] = raw_value.decode("latin-1").strip()
+
+    return result
 
 
 class MetricsMiddleware:
@@ -76,5 +97,29 @@ class MetricsMiddleware:
                     status=status or 500,
                     latency_ms=duration * 1000.0,
                 )
+                self._record_client(scope, route_path, status or 500)
             except Exception:
                 pass
+
+    def _record_client(self, scope, route_path: str, status: int) -> None:
+        """
+        Record client metadata (bucket, trimmed UA, route, status, and the
+        presented auth-scheme label) into the bounded client tracker. The
+        Authorization header value itself is never stored.
+        """
+        headers = _scope_headers(scope)
+        user_agent = (headers.get("user-agent") or "")[:200]
+        bucket = classify_client(user_agent)
+        scheme = auth_scheme(
+            path=route_path,
+            authorization=headers.get("authorization", ""),
+            x_api_key=headers.get("x-relay-api-key", ""),
+            auth_enabled=bool((settings.relay_api_key or "").strip()),
+        )
+        client_tracking.record(
+            bucket,
+            user_agent,
+            route_path,
+            status,
+            scheme,
+        )

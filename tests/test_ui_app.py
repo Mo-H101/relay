@@ -10,10 +10,12 @@ import pytest
 from app.services import setup_state
 from app.ui.app import RelayApp
 from app.ui.data import ServiceFacade
+from app.ui.screens.applications import ApplicationsScreen
 from app.ui.screens.chat import ChatScreen
+from app.ui.screens.configuration import ConfigurationScreen
 from app.ui.screens.dashboard import DashboardScreen
+from app.ui.screens.diagnostics import DiagnosticsScreen
 from app.ui.screens.models import ModelsScreen
-from app.ui.screens.placeholder import PlaceholderScreen
 from app.ui.screens.providers import ProvidersScreen
 from app.ui.widgets import StatTile
 
@@ -34,9 +36,9 @@ async def test_boots_to_dashboard_and_walks_all_tabs():
             "2": ChatScreen,
             "3": ModelsScreen,
             "4": ProvidersScreen,
-            "5": PlaceholderScreen,
-            "6": PlaceholderScreen,
-            "7": PlaceholderScreen,
+            "5": ConfigurationScreen,
+            "6": ApplicationsScreen,
+            "7": DiagnosticsScreen,
             "1": DashboardScreen,
         }
         for key, screen_cls in expected.items():

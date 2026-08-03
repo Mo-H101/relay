@@ -12,7 +12,7 @@ Keys are never printed or logged by this module.
 
 import os
 
-from dotenv import set_key
+from dotenv import dotenv_values, set_key, unset_key
 
 from app.core.config import env_file
 from app.providers.registry import ProviderDefinition
@@ -25,10 +25,25 @@ def set_env(key: str, value: str) -> None:
     set_key(str(env_file), key, value, quote_mode="always")
 
 
+def unset_env(key: str) -> None:
+    """
+    Remove a single value from the active ``.env`` file if present.
+    """
+    unset_key(str(env_file), key)
+
+
 def get_env(key: str, default: str = "") -> str:
     """
-    Read a value from the process environment.
+    Read a value from the active ``.env`` file, falling back to the
+    process environment. The file is the single writer's source of truth,
+    so a value saved but not yet reloaded is still visible here (this is
+    what makes restore-on-failure rollback correct).
     """
+    values = dotenv_values(str(env_file))
+
+    if key in values:
+        return values[key]
+
     return os.getenv(key, default)
 
 

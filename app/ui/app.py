@@ -17,10 +17,12 @@ from textual.binding import BindingType
 from app.core import config
 from app.core.server import EmbeddedServer
 from app.ui.data import ServiceFacade
+from app.ui.screens.applications import ApplicationsScreen
 from app.ui.screens.chat import ChatScreen
+from app.ui.screens.configuration import ConfigurationScreen
 from app.ui.screens.dashboard import DashboardScreen
+from app.ui.screens.diagnostics import DiagnosticsScreen
 from app.ui.screens.models import ModelsScreen
-from app.ui.screens.placeholder import PlaceholderScreen
 from app.ui.screens.providers import ProvidersScreen
 from app.ui.theme import theme
 
@@ -167,6 +169,62 @@ class RelayApp(App[None]):
         padding: 0 1;
         margin-top: 1;
     }}
+
+    #config-root, #applications-root, #diagnostics-root {{
+        padding: 0 1;
+        height: 1fr;
+    }}
+
+    .config-group {{
+        color: {theme.accent};
+        text-style: bold;
+        margin-top: 1;
+    }}
+
+    .config-note {{
+        color: {theme.warn};
+        height: 1;
+        margin-top: 1;
+    }}
+
+    #config-root Input, #config-root Checkbox {{
+        margin-bottom: 1;
+    }}
+
+    #config-controls, #applications-controls, #diag-controls, #diag-probe-controls {{
+        height: 3;
+        margin: 1 0;
+        align: left middle;
+    }}
+
+    #config-controls > *, #applications-controls > *, #diag-controls > *, #diag-probe-controls > * {{
+        margin: 0 1 0 0;
+    }}
+
+    #config-status, #applications-status, #diagnostics-status {{
+        height: 1;
+        padding: 0 1;
+        margin-top: 1;
+    }}
+
+    #auth-line, #endpoint-line, #diag-summary {{
+        height: 1;
+        color: {theme.text};
+        margin-bottom: 1;
+    }}
+
+    #applications-root DataTable, #diagnostics-root DataTable {{
+        height: 1fr;
+        margin-bottom: 1;
+    }}
+
+    #export-path {{
+        width: 40;
+    }}
+
+    #provider-select {{
+        width: 24;
+    }}
     """
 
     def __init__(
@@ -186,15 +244,9 @@ class RelayApp(App[None]):
             "chat": ChatScreen(self._facade),
             "models": ModelsScreen(self._facade),
             "providers": ProvidersScreen(self._facade),
-            "configuration": PlaceholderScreen(
-                "Configuration", NOTES["configuration"]
-            ),
-            "applications": PlaceholderScreen(
-                "Applications", NOTES["applications"]
-            ),
-            "diagnostics": PlaceholderScreen(
-                "Diagnostics", NOTES["diagnostics"]
-            ),
+            "configuration": ConfigurationScreen(self._facade),
+            "applications": ApplicationsScreen(self._facade),
+            "diagnostics": DiagnosticsScreen(self._facade),
         }
 
     async def on_mount(self) -> None:

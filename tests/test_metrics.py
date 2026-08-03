@@ -576,6 +576,51 @@ class TestHealthMetrics:
         assert 'relay_provider_connectivity{provider="A"} 1.0' in body
 
 
+class TestClientTracking:
+    def test_middleware_records_client_activity(self, client):
+        from app.services.client_tracking import client_tracking
+
+        client_tracking.clear()
+        client.get("/health", headers={"User-Agent": "Cline/3.0 (VS Code)"})
+        client.get("/health", headers={"User-Agent": "opencode/0.1"})
+        client.get("/health", headers={"User-Agent": "curl/8.6"})
+
+        rows = {r.bucket: r for r in client_tracking.activity()}
+        assert rows["cline"].requests == 1
+        assert rows["opencode"].requests == 1
+        assert rows["other"].requests == 1
+
+        client_tracking.clear()
+
+    def test_middleware_captures_auth_scheme_labels(self, client, monkeypatch):
+        from app.core.config import settings
+        from app.services.client_tracking import client_tracking
+
+        monkeypatch.setattr(settings, "relay_api_key", "secret")
+        client_tracking.clear()
+        client.get("/providers", headers={"Authorization": "Bearer secret"})
+        client.get("/providers", headers={"X-Relay-API-Key": "secret"})
+        client.get("/health")
+
+        auth = client_tracking.auth_totals()
+        assert auth.get("bearer") == 1
+        assert auth.get("header") == 1
+        assert auth.get("public") == 1
+
+        client_tracking.clear()
+
+    def test_middleware_never_records_authorization_value(self, client):
+        from app.services.client_tracking import client_tracking
+
+        client_tracking.clear()
+        client.get("/health", headers={"Authorization": "Bearer super-secret-xyz"})
+        rendered = repr(client_tracking.activity()) + repr(client_tracking.auth_totals())
+        assert "super-secret-xyz" not in rendered
+        assert "Bearer" not in rendered
+
+        client_tracking.clear()
+
+
 class FakeResponse:
     def __init__(self, status_code=200, json_data=None, text=""):
         self.status_code = status_code

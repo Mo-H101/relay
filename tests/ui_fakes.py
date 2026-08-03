@@ -67,6 +67,9 @@ class FakeHealthStore:
     def get(self, name: str):
         return self._reports.get(name)
 
+    def export_learned_state(self) -> dict:
+        return {}
+
 
 class FakeProviderManager:
     def __init__(self) -> None:
@@ -81,11 +84,24 @@ class FakeProviderManager:
     def enabled(self) -> list[FakeProvider]:
         return [p for p in self._providers if p.enabled]
 
+    def ranked(self) -> list[FakeProvider]:
+        return sorted(self.enabled(), key=lambda p: p.priority)
+
     def get(self, name: str) -> FakeProvider | None:
         for provider in self._providers:
             if provider.name == name:
                 return provider
         return None
+
+
+class FakeTelemetry:
+    """Empty per-(provider, model) telemetry surface for diagnostics."""
+
+    def all(self) -> list:
+        return []
+
+    def record(self, *args, **kwargs) -> None:
+        pass
 
 
 class FakeClient:
@@ -149,6 +165,9 @@ class FakeRelay:
         self.provider_manager = FakeProviderManager()
         self.health_store = FakeHealthStore()
         self.chat_service = FakeChatService()
+        self.telemetry = FakeTelemetry()
+        self.state_store = None
+        self.state_flusher = None
         self.persistence_init_error: str | None = None
 
     def choose_provider(self) -> FakeProvider | None:
@@ -183,14 +202,26 @@ def make_relay(providers: list[FakeProvider]) -> FakeRelay:
 class FakeStore:
     """
     Recording stand-in for ``app.services.config_store``. ``get_env``
-    returns empty by default; only the write surface is recorded.
+    returns the recorded value (or the default); the write surface is
+    recorded so tests can assert what would be persisted.
     """
 
     def __init__(self) -> None:
         self.writes: list[tuple[str, dict]] = []
+        self.env_writes: list[tuple[str, str | None]] = []
+        self.env_file = None
+        self._values: dict[str, str] = {}
 
     def get_env(self, key: str, default: str = "") -> str:
-        return default
+        return self._values.get(key, default)
+
+    def set_env(self, key: str, value: str) -> None:
+        self._values[key] = value
+        self.env_writes.append((key, value))
+
+    def unset_env(self, key: str) -> None:
+        self._values.pop(key, None)
+        self.env_writes.append((key, None))
 
     def set_provider_config(self, defn, **kwargs) -> None:
         self.writes.append((defn.id, kwargs))
@@ -210,7 +241,9 @@ class FakeReloader:
             "failures": [],
         }
         self.calls: list = []
+        self.kwargs: list[dict] = []
 
-    def __call__(self, relay) -> dict:
+    def __call__(self, relay, **kwargs) -> dict:
         self.calls.append(relay)
+        self.kwargs.append(kwargs)
         return dict(self.report)
