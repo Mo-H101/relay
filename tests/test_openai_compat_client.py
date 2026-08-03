@@ -1,0 +1,416 @@
+import pytest
+
+import httpx
+
+from app.providers.base import Provider
+from app.providers.exceptions import (
+    ProviderHTTPError,
+    ProviderTimeout,
+)
+from app.providers.nvidia_client import NvidiaClient
+from app.providers.openai_client import OpenAIClient
+from app.providers.openai_compat_client import OpenAICompatibleClient
+
+
+class FakeResponse:
+    def __init__(self, status_code=200, json_data=None, text="", headers=None):
+        self.status_code = status_code
+        self._json = json_data
+        self.text = text
+        self.headers = headers or {}
+
+    def json(self):
+        return self._json
+
+
+def make_provider(key="sk-test", base_url="https://api.example.com/v1"):
+    return Provider(name="Test", base_url=base_url, api_key=key)
+
+
+def patch_post(monkeypatch, response, recorded=None):
+    def handler(url, **kwargs):
+        if recorded is not None:
+            recorded["url"] = url
+            recorded["headers"] = kwargs.get("headers", {})
+            recorded["json"] = kwargs.get("json")
+            recorded["timeout"] = kwargs.get("timeout")
+        return response
+
+    monkeypatch.setattr(
+        "app.providers.openai_compat_client.httpx.post",
+        handler,
+    )
+
+
+def patch_get(monkeypatch, response, recorded=None):
+    def handler(url, **kwargs):
+        if recorded is not None:
+            recorded["url"] = url
+            recorded["headers"] = kwargs.get("headers", {})
+        return response
+
+    monkeypatch.setattr(
+        "app.providers.openai_compat_client.httpx.get",
+        handler,
+    )
+
+
+class TestSharedClientInheritance:
+    def test_existing_clients_subclass_shared_client(self):
+        assert issubclass(NvidiaClient, OpenAICompatibleClient)
+        assert issubclass(OpenAIClient, OpenAICompatibleClient)
+        assert NvidiaClient().name == "NVIDIA"
+        assert OpenAIClient().name == "OpenAI"
+
+
+class TestChat:
+    def test_chat_returns_message_content(self, monkeypatch):
+        recorded = {}
+        patch_post(
+            monkeypatch,
+            FakeResponse(200, {"choices": [{"message": {"content": "hello"}}]}),
+            recorded,
+        )
+
+        result = OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert result == "hello"
+        assert recorded["url"] == "https://api.example.com/v1/chat/completions"
+        assert recorded["json"]["model"] == "m"
+        assert recorded["json"]["temperature"] == 0.2
+        assert recorded["json"]["max_tokens"] == 512
+        assert recorded["json"]["messages"] == [
+            {"role": "user", "content": "hi"}
+        ]
+        assert recorded["headers"]["Authorization"] == "Bearer sk-test"
+        assert recorded["headers"]["Content-Type"] == "application/json"
+
+    def test_chat_omits_bearer_header_without_key(self, monkeypatch):
+        recorded = {}
+        patch_post(
+            monkeypatch,
+            FakeResponse(200, {"choices": [{"message": {"content": "x"}}]}),
+            recorded,
+        )
+
+        OpenAICompatibleClient().chat(make_provider(key=""), "m", "hi")
+
+        assert "Authorization" not in recorded["headers"]
+
+    def test_chat_uses_configured_request_timeout(self, monkeypatch):
+        recorded = {}
+        patch_post(
+            monkeypatch,
+            FakeResponse(200, {"choices": [{"message": {"content": "x"}}]}),
+            recorded,
+        )
+
+        OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert recorded["timeout"] is not None
+
+    def test_chat_raises_provider_http_error_on_4xx(self, monkeypatch):
+        patch_post(monkeypatch, FakeResponse(400, text="bad request"))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert exc.value.status_code == 400
+
+    def test_chat_captures_retry_after_seconds(self, monkeypatch):
+        patch_post(
+            monkeypatch,
+            FakeResponse(429, text="slow down", headers={"Retry-After": "2"}),
+        )
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert exc.value.status_code == 429
+        assert exc.value.retry_after == 2.0
+
+    def test_chat_retry_after_defaults_to_none_when_absent(self, monkeypatch):
+        patch_post(monkeypatch, FakeResponse(429, text="slow down"))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert exc.value.status_code == 429
+        assert exc.value.retry_after is None
+
+    def test_chat_retry_after_ignores_unparseable_header(self, monkeypatch):
+        patch_post(
+            monkeypatch,
+            FakeResponse(
+                429,
+                text="slow down",
+                headers={"Retry-After": "not-a-date-or-number"},
+            ),
+        )
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert exc.value.retry_after is None
+
+    def test_chat_messages_captures_retry_after(self, monkeypatch):
+        recorded = {}
+        patch_post(
+            monkeypatch,
+            FakeResponse(429, text="limited", headers={"Retry-After": "5"}),
+            recorded,
+        )
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat_messages(
+                make_provider(),
+                {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+
+        assert exc.value.status_code == 429
+        assert exc.value.retry_after == 5.0
+        assert recorded["json"]["model"] == "m"
+
+    def test_chat_raises_provider_timeout_on_read_timeout(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.ReadTimeout("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.post",
+            handler,
+        )
+
+        with pytest.raises(ProviderTimeout):
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+    def test_chat_raises_provider_timeout_on_generic_timeout(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.TimeoutException("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.post",
+            handler,
+        )
+
+        with pytest.raises(ProviderTimeout):
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+    def test_chat_raises_provider_http_error_on_transport_error(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.HTTPError("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.post",
+            handler,
+        )
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert exc.value.status_code == 0
+
+
+class TestListModels:
+    def test_list_models_parses_ids(self, monkeypatch):
+        recorded = {}
+        patch_get(
+            monkeypatch,
+            FakeResponse(200, {"data": [{"id": "a"}, {"id": "b"}]}),
+            recorded,
+        )
+
+        result = OpenAICompatibleClient().list_models(make_provider(key="sk-1"))
+
+        assert result == ["a", "b"]
+        assert recorded["url"] == "https://api.example.com/v1/models"
+        assert recorded["headers"]["Authorization"] == "Bearer sk-1"
+
+    def test_list_models_omits_auth_when_keyless(self, monkeypatch):
+        recorded = {}
+        patch_get(monkeypatch, FakeResponse(200, {"data": []}), recorded)
+
+        OpenAICompatibleClient().list_models(make_provider(key=""))
+
+        assert "Authorization" not in recorded["headers"]
+
+    def test_list_models_raises_on_http_error(self, monkeypatch):
+        patch_get(monkeypatch, FakeResponse(500, text="nope"))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().list_models(make_provider())
+
+        assert exc.value.status_code == 500
+
+    def test_list_models_raises_on_timeout(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.TimeoutException("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.get",
+            handler,
+        )
+
+        with pytest.raises(ProviderTimeout):
+            OpenAICompatibleClient().list_models(make_provider())
+
+
+class TestProbeModel:
+    def test_probe_model_healthy(self, monkeypatch):
+        recorded = {}
+        patch_post(
+            monkeypatch,
+            FakeResponse(200, {"choices": []}),
+            recorded,
+        )
+
+        probe = OpenAICompatibleClient().probe_model(make_provider(), "m")
+
+        assert probe.healthy is True
+        assert probe.status_code == 200
+        assert probe.error == ""
+        assert recorded["json"]["max_tokens"] == 1
+        assert recorded["json"]["messages"][0]["content"] == "ping"
+
+    def test_probe_model_unhealthy_with_status(self, monkeypatch):
+        patch_post(monkeypatch, FakeResponse(404, text="missing"))
+
+        probe = OpenAICompatibleClient().probe_model(make_provider(), "m")
+
+        assert probe.healthy is False
+        assert probe.status_code == 404
+        assert probe.error == "missing"
+
+    def test_probe_model_timeout(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.ReadTimeout("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.post",
+            handler,
+        )
+
+        probe = OpenAICompatibleClient().probe_model(make_provider(), "m")
+
+        assert probe.healthy is False
+        assert probe.status_code == 0
+        assert probe.error == "timeout"
+
+    def test_check_model_delegates_to_probe(self, monkeypatch):
+        patch_post(
+            monkeypatch,
+            FakeResponse(200, {"choices": []}),
+        )
+
+        assert OpenAICompatibleClient().check_model(make_provider(), "m") is True
+
+
+class TestProviderBodyRedaction:
+    def test_error_body_redacts_api_key(self, monkeypatch):
+        body = '{"error": {"message": "invalid api key sk-test-123"}}'
+        patch_post(monkeypatch, FakeResponse(400, text=body))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(
+                make_provider(key="sk-test-123"), "m", "hi"
+            )
+
+        assert "sk-test-123" not in exc.value.message
+        assert "[REDACTED]" in exc.value.message
+
+    def test_error_body_is_truncated(self, monkeypatch):
+        body = "x" * 500
+        patch_post(monkeypatch, FakeResponse(500, text=body))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert len(exc.value.message) <= 203
+        assert exc.value.message.endswith("...")
+
+    def test_error_body_strips_control_characters(self, monkeypatch):
+        body = "line1\x00\x1bline2"
+        patch_post(monkeypatch, FakeResponse(400, text=body))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert "\x00" not in exc.value.message
+        assert "\x1b" not in exc.value.message
+
+    def test_error_body_survives_short_plain_text(self, monkeypatch):
+        patch_post(monkeypatch, FakeResponse(400, text="bad request"))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat(make_provider(), "m", "hi")
+
+        assert exc.value.message == "bad request"
+
+    def test_probe_details_redacted_and_bounded(self, monkeypatch):
+        body = "denied sk-test-123 " + "y" * 500
+        patch_post(monkeypatch, FakeResponse(404, text=body))
+
+        probe = OpenAICompatibleClient().probe_model(
+            make_provider(key="sk-test-123"), "m"
+        )
+
+        assert probe.error
+        assert "sk-test-123" not in probe.error
+        assert len(probe.error) <= 203
+
+
+class TestProviderSpecificWording:
+    def test_nvidia_chat_timeout_wording(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.ReadTimeout("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.post",
+            handler,
+        )
+
+        with pytest.raises(ProviderTimeout) as exc:
+            NvidiaClient().chat(make_provider(), "m", "hi")
+
+        assert str(exc.value) == "NVIDIA request timed out."
+
+    def test_openai_chat_timeout_wording(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.ReadTimeout("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.post",
+            handler,
+        )
+
+        with pytest.raises(ProviderTimeout) as exc:
+            OpenAIClient().chat(make_provider(), "m", "hi")
+
+        assert str(exc.value) == "OpenAI request timed out."
+
+    def test_nvidia_discovery_timeout_wording(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.TimeoutException("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.get",
+            handler,
+        )
+
+        with pytest.raises(ProviderTimeout) as exc:
+            NvidiaClient().list_models(make_provider())
+
+        assert str(exc.value) == "NVIDIA model discovery timed out."
+
+    def test_openai_discovery_timeout_wording(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.TimeoutException("boom")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.get",
+            handler,
+        )
+
+        with pytest.raises(ProviderTimeout) as exc:
+            OpenAIClient().list_models(make_provider())
+
+        assert str(exc.value) == "OpenAI model discovery timed out."

@@ -1,0 +1,825 @@
+from typing import List, Union, Optional, Generator
+import os
+import time
+import json
+from urllib.parse import urlparse
+
+import httpx
+
+from app.core.config import settings
+from app.providers.base import ModelProbe, Provider
+from app.providers.exceptions import (
+    ProviderHTTPError,
+    ProviderTimeout,
+)
+from app.services.metrics import relay_metrics
+
+
+_MAX_ERROR_BODY = 200
+
+
+def _safe_provider_body(provider: Provider, status_code: int, body: str) -> str:
+    """
+    Build a bounded, redacted message from an untrusted provider body.
+
+    Provider error bodies are treated as untrusted: they may echo the
+    request prompt or response back to the relay. The API key is stripped
+    when present, non-printable control characters are removed, and the
+    text is truncated to a fixed bound so it never flows verbatim into
+    error responses or logs.
+    """
+    if not body:
+        return f"status {status_code}"
+
+    text = body
+
+    if provider is not None and provider.has_api_key():
+        text = text.replace(provider.api_key, "[REDACTED]")
+
+    text = "".join(
+        ch
+        for ch in text
+        if ch == "\n" or ch == "\t" or ch.isprintable()
+    )
+
+    if len(text) > _MAX_ERROR_BODY:
+        text = text[:_MAX_ERROR_BODY].rstrip() + "..."
+
+    return text
+
+
+def _stream_error_text(response: httpx.Response) -> str:
+    """
+    Return the error body text of a streaming response.
+
+    A response from httpx.stream cannot expose .text until its body has
+    been consumed. Reading first keeps the provider's actual error body
+    in the surfaced message instead of httpx's internal ResponseNotRead
+    error.
+    """
+    try:
+        response.read()
+    except Exception:
+        pass
+    return response.text
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """
+    Parse the Retry-After header into seconds to wait, or None when
+    absent or unparseable. Supports integer/float seconds and the
+    HTTP-date form (best effort).
+    """
+    headers = getattr(response, "headers", None)
+
+    if headers is None:
+        return None
+
+    raw = headers.get("Retry-After")
+
+    if not raw:
+        return None
+
+    raw = raw.strip()
+
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+
+    try:
+        from email.utils import parsedate_to_datetime
+        import datetime
+
+        retry_at = parsedate_to_datetime(raw)
+        retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+        remaining = (
+            retry_at - datetime.datetime.now(datetime.timezone.utc)
+        ).total_seconds()
+        return max(0.0, remaining)
+    except Exception:
+        return None
+
+
+def _matches_no_proxy(url: str, no_proxy: str) -> bool:
+    """
+    True when the request URL's host is covered by a NO_PROXY-style list.
+
+    Matches exact hosts and domain suffixes, supporting a leading dot and
+    a bare "*" wildcard. The configured value is never logged.
+    """
+    if not no_proxy:
+        return False
+
+    host = (urlparse(url).hostname or "").lower()
+
+    if not host:
+        return False
+
+    for entry in no_proxy.split(","):
+        entry = entry.strip().lower().lstrip(".")
+
+        if not entry:
+            continue
+        if entry == "*":
+            return True
+        if host == entry or host.endswith("." + entry):
+            return True
+
+    return False
+
+
+def proxy_request_kwargs(provider: Provider, url: str) -> dict:
+    """
+    Compute httpx proxy kwargs for one outbound request.
+
+    Behavior matrix:
+    - Provider.proxy is a URL: force that proxy (trust_env disabled).
+    - Provider.proxy is "": explicitly bypass the proxy (trust_env
+      disabled, no proxy configured).
+    - Provider.proxy is None and PROXY_ENABLED=true: select
+      HTTP_PROXY/HTTPS_PROXY per request scheme from settings (with an
+      env fallback) when configured; otherwise preserve httpx's default
+      trust_env behavior. NO_PROXY is honored for explicit selections.
+    - Provider.proxy is None and PROXY_ENABLED=false: no proxy at all.
+
+    Proxy URLs and credentials are configuration only and are never
+    logged or included in metrics/errors.
+    """
+    if provider.proxy is not None:
+        if provider.proxy == "":
+            return {"trust_env": False, "proxy": None}
+        return {"trust_env": False, "proxy": provider.proxy}
+
+    if not getattr(settings, "proxy_enabled", True):
+        return {"trust_env": False, "proxy": None}
+
+    scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+
+    http_proxy = (getattr(settings, "http_proxy", "") or "").strip()
+    https_proxy = (getattr(settings, "https_proxy", "") or "").strip()
+    no_proxy = (getattr(settings, "no_proxy", "") or "").strip()
+
+    if not http_proxy:
+        http_proxy = (os.getenv("HTTP_PROXY", "") or "").strip()
+    if not https_proxy:
+        https_proxy = (os.getenv("HTTPS_PROXY", "") or "").strip()
+    if not no_proxy:
+        no_proxy = (os.getenv("NO_PROXY", "") or "").strip()
+
+    if not http_proxy and not https_proxy:
+        return {"trust_env": True, "proxy": None}
+
+    selected = https_proxy if scheme == "https" else http_proxy
+
+    if selected and not _matches_no_proxy(url, no_proxy):
+        return {"trust_env": False, "proxy": selected}
+
+    return {"trust_env": False, "proxy": None}
+
+
+class OpenAICompatibleClient:
+    """
+    OpenAI-compatible chat client.
+
+    Shared implementation for providers that expose the OpenAI REST
+    protocol (chat completions and model listing): NVIDIA, OpenAI, and
+    local endpoints like LM Studio. The display name is used in error
+    messages so each provider keeps its own wording.
+
+    The per-method authentication behavior is preserved exactly:
+    - chat()/probe_model() send a Bearer header whenever the provider
+      has a key; the header is omitted for keyless providers (the
+      original per-provider clients always had a key, so sending an
+      empty Bearer value was never exercised).
+    - list_models() sends the header only when the provider has a key.
+    """
+
+    def __init__(self, name: str = "OpenAI compatible") -> None:
+        self.name = name
+
+    def chat(
+        self,
+        provider: Provider,
+        model: str,
+        message: str,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        seed: Optional[int] = None,
+    ) -> str:
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        # Determine effective values, falling back to internal defaults
+        eff_temp = 0.2 if temperature is None else temperature
+        eff_max_tokens = 512 if max_tokens is None else max_tokens
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": message,
+                }
+            ],
+            "temperature": eff_temp,
+            "max_tokens": eff_max_tokens,
+        }
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if stop is not None:
+            payload["stop"] = stop
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if seed is not None:
+            payload["seed"] = seed
+
+        start = time.perf_counter()
+
+        try:
+            response = httpx.post(
+                f"{provider.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=settings.request_timeout,
+                **proxy_request_kwargs(
+                    provider, f"{provider.base_url}/chat/completions"
+                ),
+            )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        if response.status_code >= 400:
+            relay_metrics.record_provider(
+                provider.name, "chat", response.status_code, latency_ms
+            )
+            raise ProviderHTTPError(
+                response.status_code,
+                _safe_provider_body(
+                    provider, response.status_code, response.text
+                ),
+                retry_after=_retry_after_seconds(response),
+            )
+
+        relay_metrics.record_provider(
+            provider.name, "chat", response.status_code, latency_ms
+        )
+
+        data = response.json()
+
+        return data["choices"][0]["message"]["content"]
+
+    def chat_messages(
+        self,
+        provider: Provider,
+        payload: dict,
+    ) -> dict:
+        """
+        Send a full OpenAI chat-completions payload (message array, tools,
+        tool_choice, stream_options, ...) and return the provider's parsed
+        response body unchanged.
+
+        Unlike chat(), the payload is forwarded verbatim: no defaults are
+        injected and the message structure reaches the provider exactly as
+        the caller sent it. Raises ProviderTimeout or ProviderHTTPError on
+        failure, with the provider body bounded and redacted.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        start = time.perf_counter()
+
+        try:
+            response = httpx.post(
+                f"{provider.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=settings.request_timeout,
+                **proxy_request_kwargs(
+                    provider, f"{provider.base_url}/chat/completions"
+                ),
+            )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        if response.status_code >= 400:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_messages",
+                response.status_code,
+                latency_ms,
+            )
+            raise ProviderHTTPError(
+                response.status_code,
+                _safe_provider_body(
+                    provider, response.status_code, response.text
+                ),
+                retry_after=_retry_after_seconds(response),
+            )
+
+        relay_metrics.record_provider(
+            provider.name, "chat_messages", response.status_code, latency_ms
+        )
+
+        return response.json()
+
+    def list_models(self, provider: Provider) -> List[str]:
+        """
+        Fetch the models available from the provider API.
+        """
+
+        headers = {}
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        start = time.perf_counter()
+
+        try:
+            response = httpx.get(
+                f"{provider.base_url}/models",
+                headers=headers,
+                timeout=30,
+                **proxy_request_kwargs(
+                    provider, f"{provider.base_url}/models"
+                ),
+            )
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "list_models",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} model discovery timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "list_models",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        if response.status_code >= 400:
+            relay_metrics.record_provider(
+                provider.name,
+                "list_models",
+                response.status_code,
+                latency_ms,
+            )
+            raise ProviderHTTPError(
+                response.status_code,
+                _safe_provider_body(
+                    provider, response.status_code, response.text
+                ),
+            )
+
+        relay_metrics.record_provider(
+            provider.name,
+            "list_models",
+            response.status_code,
+            latency_ms,
+        )
+
+        data = response.json()
+
+        return [
+            model["id"]
+            for model in data.get("data", [])
+        ]
+
+    def check_model(self, provider: Provider, model: str) -> bool:
+        """
+        Check whether a model is usable.
+        """
+        return self.probe_model(provider, model).healthy
+
+    def probe_model(
+        self,
+        provider: Provider,
+        model: str,
+    ) -> ModelProbe:
+        """
+        Probe a model, returning health, latency, and failure detail.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "ping",
+                }
+            ],
+            "max_tokens": 1,
+        }
+
+        start = time.perf_counter()
+
+        try:
+            response = httpx.post(
+                f"{provider.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=10,
+                **proxy_request_kwargs(
+                    provider, f"{provider.base_url}/chat/completions"
+                ),
+            )
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "probe_model",
+                (time.perf_counter() - start) * 1000,
+            )
+            return ModelProbe(
+                False,
+                int((time.perf_counter() - start) * 1000),
+                0,
+                "timeout",
+            )
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "probe_model",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            return ModelProbe(
+                False,
+                int((time.perf_counter() - start) * 1000),
+                0,
+                str(exc),
+            )
+
+        latency = int((time.perf_counter() - start) * 1000)
+
+        if response.status_code == 200:
+            relay_metrics.record_provider(
+                provider.name,
+                "probe_model",
+                response.status_code,
+                latency,
+            )
+            return ModelProbe(True, latency, 200, "")
+
+        relay_metrics.record_provider(
+            provider.name,
+            "probe_model",
+            response.status_code,
+            latency,
+        )
+
+        return ModelProbe(
+            False,
+            latency,
+            response.status_code,
+            _safe_provider_body(
+                provider, response.status_code, response.text
+            ),
+        )
+
+    def chat_stream(
+        self,
+        provider: Provider,
+        model: str,
+        message: str,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        seed: Optional[int] = None,
+    ) -> Generator[str, None, None]:
+        """
+        Stream chat completion from the provider.
+
+        Yields content delta strings as they arrive.
+        Raises ProviderTimeout or ProviderHTTPError on failure.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        # Determine effective values, falling back to internal defaults
+        eff_temp = 0.2 if temperature is None else temperature
+        eff_max_tokens = 512 if max_tokens is None else max_tokens
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": message,
+                }
+            ],
+            "temperature": eff_temp,
+            "max_tokens": eff_max_tokens,
+            "stream": True,
+        }
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if stop is not None:
+            payload["stop"] = stop
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if seed is not None:
+            payload["seed"] = seed
+
+        try:
+            start = time.perf_counter()
+
+            with httpx.stream(
+                "POST",
+                f"{provider.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=settings.request_timeout,
+                **proxy_request_kwargs(
+                    provider, f"{provider.base_url}/chat/completions"
+                ),
+            ) as response:
+                if response.status_code >= 400:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream",
+                        response.status_code,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        response.status_code,
+                        _safe_provider_body(
+                            provider,
+                            response.status_code,
+                            _stream_error_text(response),
+                        ),
+                        retry_after=_retry_after_seconds(response),
+                    )
+
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    # Each line should start with "data: "
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk["choices"][0]["delta"]
+                            content = delta.get("content")
+                            if content:
+                                yield content
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            # Malformed chunk, skip
+                            continue
+
+                relay_metrics.record_provider(
+                    provider.name,
+                    "chat_stream",
+                    200,
+                    (time.perf_counter() - start) * 1000,
+                )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
+
+    def chat_stream_messages(
+        self,
+        provider: Provider,
+        payload: dict,
+    ) -> Generator[dict, None, None]:
+        """
+        Stream a full OpenAI chat-completions payload.
+
+        Yields parsed chunk dicts (including tool_call deltas and the
+        usage chunk when the provider emits one) as they arrive. Raises
+        ProviderTimeout or ProviderHTTPError on failure; the provider
+        body is bounded and redacted. The payload is forwarded verbatim.
+        """
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        if provider.has_api_key():
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+
+        try:
+            start = time.perf_counter()
+
+            with httpx.stream(
+                "POST",
+                f"{provider.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=settings.request_timeout,
+                **proxy_request_kwargs(
+                    provider, f"{provider.base_url}/chat/completions"
+                ),
+            ) as response:
+                if response.status_code >= 400:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream_messages",
+                        response.status_code,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        response.status_code,
+                        _safe_provider_body(
+                            provider,
+                            response.status_code,
+                            _stream_error_text(response),
+                        ),
+                        retry_after=_retry_after_seconds(response),
+                    )
+
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if not chunk.get("choices") and "usage" not in chunk:
+                        continue
+                    yield chunk
+
+                relay_metrics.record_provider(
+                    provider.name,
+                    "chat_stream_messages",
+                    200,
+                    (time.perf_counter() - start) * 1000,
+                )
+
+        except httpx.ReadTimeout as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.TimeoutException as exc:
+            relay_metrics.record_provider_timeout(
+                provider.name,
+                "chat_stream_messages",
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderTimeout(
+                f"{self.name} request timed out."
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise ProviderHTTPError(
+                0,
+                str(exc),
+            ) from exc
