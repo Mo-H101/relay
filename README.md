@@ -16,6 +16,8 @@ from real request outcomes to keep routing smart over time.
   restarts.
 - Optional API-key authentication, optional Prometheus metrics, optional
   outbound proxy support, and hot configuration reload.
+- A terminal interface (`relay`) with a dashboard, chat, model/provider
+  management, and diagnostics panels.
 
 ## Quick start
 
@@ -23,8 +25,10 @@ from real request outcomes to keep routing smart over time.
 # 1. Configure providers (interactive: API keys, model priority, task routing)
 python -m app.cli setup
 
-# 2. Run the server
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+# 2. Run the terminal interface (starts an embedded API server)
+python -m app.cli
+#   ...or, to run only the headless API server:
+#   python -m app.cli serve
 ```
 
 Send a chat:
@@ -103,6 +107,7 @@ the full reference. The most common settings:
 | `PERSISTENCE_ENABLED` | `false` | Persist learned state to SQLite |
 | `TELEMETRY_ENABLED` | `false` | Record per-attempt telemetry |
 | `HEALTH_FEEDBACK_ENABLED` | `false` | Feed request outcomes into the health store |
+| `RELAY_TUI_NO_EMBED` | `false` | Run the TUI without the embedded API server |
 
 ### Recommended production profile
 
@@ -156,9 +161,28 @@ After a successful install, the terminal prints:
     Installation complete. Type 'relay' to start Relay.
 
 First launch detects a missing or incomplete configuration and walks you
-through provider setup. After setup completes, running `relay` starts the
-server, and any OpenAI-compatible client (Cline, OpenCode, Continue, …)
-can point at `http://127.0.0.1:8000/v1`.
+through provider setup. After setup completes, running `relay` opens the
+terminal interface with an embedded API server, so any OpenAI-compatible
+client (Cline, OpenCode, Continue, …) can point at
+`http://127.0.0.1:8000/v1` while the TUI is open. Run `relay serve` for
+the pre-TUI behavior (headless server only).
+
+### Terminal interface
+
+`relay` (and `relay tui`) opens the terminal UI:
+
+- `1` Dashboard — server state, provider/model availability, recent activity
+- `2` Chat — talk to your configured providers *(P2b)*
+- `3` Models — availability and priority controls *(P2c)*
+- `4` Providers — keys, scanning, and setup *(P2c)*
+- `5` Configuration — routing, failover, server settings *(P2d)*
+- `6` Applications — client activity and endpoint/auth status *(P2d)*
+- `7` Diagnostics — operations tail, health, and export *(P2d)*
+- `q` quit
+
+Panels marked *(P2x)* land in later P2 phases and show a placeholder for
+now. Set `RELAY_TUI_NO_EMBED=1` to run the TUI against a separately
+managed `relay serve` instead of the embedded server.
 
 > Publishing to PyPI and Windows package managers (winget/choco) is
 > planned; until then use the commands above.

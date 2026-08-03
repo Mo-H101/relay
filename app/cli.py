@@ -1,7 +1,7 @@
 import argparse
 
 from app import __version__
-from app.core.config import settings
+from app.core.config import reload_settings, settings
 from app.providers.registry import PROVIDER_REGISTRY
 from app.services.setup_state import read_setup_state
 
@@ -35,10 +35,31 @@ def _config_configured() -> bool:
     return read_setup_state() == "configured" and _has_usable_provider()
 
 
+def _cmd_tui() -> None:
+    """
+    Launch the Relay terminal interface.
+
+    Re-reads `.env` before importing the relay facade so a freshly
+    written setup (or an external edit) is reflected in this process's
+    singletons, then runs the TUI with an embedded API server that is
+    stopped on exit.
+    """
+    reload_settings()
+
+    from app.core.server import EmbeddedServer
+    from app.ui.app import RelayApp
+
+    server = EmbeddedServer()
+    try:
+        RelayApp(embedded_server=server).run()
+    finally:
+        server.stop()
+
+
 def _cmd_setup(args) -> None:
     """
     Interactive setup wizard. On a completed, usable setup it hands off
-    straight to the server (no second `relay` run needed).
+    straight to the TUI (no second `relay` run needed).
     """
     from app.setup.ui import TerminalUI
     from app.setup.wizard import run_setup
@@ -47,7 +68,7 @@ def _cmd_setup(args) -> None:
 
     if result.usable:
         print("Relay setup complete.")
-        _cmd_serve()
+        _cmd_tui()
     elif result.completed:
         print(
             "Relay is not fully configured yet. "
@@ -60,7 +81,7 @@ def _cmd_setup(args) -> None:
 def _first_run() -> None:
     """
     First-launch path: the wizard decides the welcome/resume wording from
-    the setup-state marker and starts the server on a completed setup.
+    the setup-state marker and starts the TUI on a completed setup.
     """
     _cmd_setup(None)
 
@@ -79,7 +100,12 @@ def _cmd_serve() -> None:
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         prog="relay",
-        description="Relay — zero-friction AI gateway platform.",
+        description=(
+            "Relay — zero-friction AI gateway platform.\n\n"
+            "Run 'relay' (or 'relay tui') for the terminal interface, "
+            "'relay serve' for the headless API server, and 'relay setup' "
+            "to (re)run the setup wizard."
+        ),
     )
 
     parser.add_argument(
@@ -94,14 +120,28 @@ def main(argv=None) -> None:
         help="Interactive setup: providers, API keys, model priority, "
              "and availability scans.",
     )
+    subparsers.add_parser(
+        "tui",
+        help="Launch the terminal interface (same as 'relay' with no "
+             "arguments).",
+    )
+    subparsers.add_parser(
+        "serve",
+        help="Launch the headless API server (the pre-P2 'relay' "
+             "behavior).",
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "setup":
         _cmd_setup(args)
+    elif args.command == "tui":
+        _cmd_tui()
+    elif args.command == "serve":
+        _cmd_serve()
     elif args.command is None:
         if _config_configured():
-            _cmd_serve()
+            _cmd_tui()
         else:
             _first_run()
     else:

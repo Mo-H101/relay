@@ -62,6 +62,20 @@ def test_module_cli_help_lists_setup():
     assert "setup" in (proc.stdout + proc.stderr)
 
 
+def test_module_cli_help_lists_tui_and_serve():
+    proc = subprocess.run(
+        [sys.executable, "-m", "app.cli", "--help"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout + proc.stderr
+    assert "tui" in out
+    assert "serve" in out
+    assert "setup" in out
+
+
 def test_module_cli_version_matches_package():
     proc = subprocess.run(
         [sys.executable, "-m", "app.cli", "--version"],
@@ -153,7 +167,7 @@ def test_unconfigured_first_run_launches_setup(monkeypatch, tmp_path):
     assert serve_calls == []
 
 
-def test_configured_execution_path_serves(monkeypatch, tmp_path):
+def test_configured_execution_path_launches_tui(monkeypatch, tmp_path):
     import app.cli as cli
     from app.services import setup_state
     monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
@@ -161,13 +175,37 @@ def test_configured_execution_path_serves(monkeypatch, tmp_path):
     _patch_provider_state(monkeypatch, configured=True)
 
     setup_calls = []
-    serve_calls = []
+    tui_calls = []
     monkeypatch.setattr(cli, "_cmd_setup", lambda args: setup_calls.append(True))
-    monkeypatch.setattr(cli, "_cmd_serve", lambda: serve_calls.append(True))
+    monkeypatch.setattr(cli, "_cmd_tui", lambda: tui_calls.append(True))
 
     cli.main([])
-    assert serve_calls == [True]
+    assert tui_calls == [True]
     assert setup_calls == []
+
+
+def test_serve_subcommand_dispatches_to_server(monkeypatch, tmp_path):
+    import app.cli as cli
+    from app.services import setup_state
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+
+    serve_calls = []
+    monkeypatch.setattr(cli, "_cmd_serve", lambda: serve_calls.append(True))
+
+    cli.main(["serve"])
+    assert serve_calls == [True]
+
+
+def test_tui_subcommand_dispatches_to_tui(monkeypatch, tmp_path):
+    import app.cli as cli
+    from app.services import setup_state
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+
+    tui_calls = []
+    monkeypatch.setattr(cli, "_cmd_tui", lambda: tui_calls.append(True))
+
+    cli.main(["tui"])
+    assert tui_calls == [True]
 
 
 def test_incomplete_state_reruns_setup(monkeypatch, tmp_path):

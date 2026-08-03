@@ -1,0 +1,101 @@
+"""Dashboard screen — the TUI landing tab."""
+
+from __future__ import annotations
+
+from textual.app import ComposeResult
+from textual.containers import Horizontal
+from textual.screen import Screen
+from textual.widgets import Footer, Header, Static
+
+from app.ui.data import DashboardSummary
+from app.ui.theme import theme
+from app.ui.widgets import StatTile
+
+
+class DashboardScreen(Screen):
+    """
+    Overview of server state, provider/model availability, and recent
+    activity. Data comes from the ServiceFacade view-model so the screen
+    stays free of core imports.
+    """
+
+    def __init__(self, facade) -> None:
+        super().__init__()
+        self._facade = facade
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Static("", id="dashboard-title", classes="screen-title")
+        with Horizontal(classes="tile-row"):
+            yield StatTile("Server", id="tile-server")
+            yield StatTile("Setup", id="tile-setup")
+            yield StatTile("Default provider", id="tile-provider")
+            yield StatTile("Providers", id="tile-providers")
+        with Horizontal(classes="tile-row"):
+            yield StatTile("Models", id="tile-models")
+            yield StatTile("Requests", id="tile-requests")
+            yield StatTile("Success rate", id="tile-success")
+            yield StatTile("Avg latency", id="tile-latency")
+        with Horizontal(classes="tile-row"):
+            yield StatTile("Chats", id="tile-chats")
+            yield StatTile("Persistence", id="tile-persistence")
+            yield StatTile("Env file", id="tile-env")
+            yield StatTile("State dir", id="tile-state")
+        yield Static("", id="dashboard-status", classes="status-line")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self.refresh_summary()
+
+    async def refresh_summary(self) -> None:
+        summary = self._facade.dashboard_summary()
+        self._render_summary(summary)
+
+    def _render_summary(self, summary: DashboardSummary) -> None:
+        self.query_one("#dashboard-title", Static).update(
+            f"[bold {theme.accent}]{summary.relay_name} — Dashboard[/]"
+        )
+
+        server_tile = self.query_one("#tile-server", StatTile)
+        server_tile.update_value(
+            "Running" if summary.server.running else "Stopped",
+            theme.ok if summary.server.running else theme.error,
+        )
+        self.query_one("#tile-setup", StatTile).update_value(summary.setup_state)
+        self.query_one("#tile-provider", StatTile).update_value(
+            summary.default_provider
+        )
+        self.query_one("#tile-providers", StatTile).update_value(
+            f"{summary.enabled_providers}/{summary.provider_count}"
+        )
+        self.query_one("#tile-models", StatTile).update_value(
+            f"{summary.healthy_models}/{summary.model_count}"
+        )
+        self.query_one("#tile-requests", StatTile).update_value(str(summary.requests))
+        success_text = (
+            f"{summary.success_rate:.1%}" if summary.success_rate is not None else "-"
+        )
+        self.query_one("#tile-success", StatTile).update_value(success_text)
+        latency_text = (
+            f"{summary.average_latency_ms:.0f} ms"
+            if summary.average_latency_ms is not None
+            else "-"
+        )
+        self.query_one("#tile-latency", StatTile).update_value(latency_text)
+        self.query_one("#tile-chats", StatTile).update_value(str(summary.chats))
+        persistence_text = (
+            "on" if summary.persistence_enabled else "off"
+        )
+        self.query_one("#tile-persistence", StatTile).update_value(
+            persistence_text,
+            theme.ok if summary.persistence_enabled else theme.muted,
+        )
+        self.query_one("#tile-env", StatTile).update_value(summary.env_file)
+        self.query_one("#tile-state", StatTile).update_value(summary.state_dir)
+
+        status = (
+            f"[{theme.muted}]API:[/] {summary.server.url}"
+            + (f"   [{theme.warn}]persistence error:[/] {summary.persistence_error}"
+               if summary.persistence_error else "")
+        )
+        self.query_one("#dashboard-status", Static).update(status)

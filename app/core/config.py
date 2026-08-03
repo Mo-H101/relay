@@ -355,6 +355,17 @@ class Settings:
         self.relay_api_key = os.getenv("RELAY_API_KEY", "")
 
         # =========================
+        # Terminal UI
+        # =========================
+
+        # When set, the TUI runs UI-only and expects a separately running
+        # `relay serve` (e.g., managed by a service manager) instead of
+        # starting an embedded API server thread.
+        self.relay_tui_no_embed = (
+            os.getenv("RELAY_TUI_NO_EMBED", "").lower() == "true"
+        )
+
+        # =========================
         # Task routing
         # =========================
 
@@ -688,3 +699,19 @@ class Settings:
 
 
 settings = Settings()
+
+
+def reload_settings() -> Settings:
+    """
+    Re-read the active ``.env`` into the process environment and re-run
+    ``Settings.__init__`` on the module singleton in place.
+
+    This is how a post-setup or post-write configuration becomes live in
+    an already-running process: every module that imported ``settings``
+    keeps the same object, so no re-import is needed. ``load_dotenv`` is
+    called with ``override=True`` because ``dotenv.set_key`` (used by the
+    config store) never touches ``os.environ``.
+    """
+    load_dotenv(env_file, override=True)
+    settings.__init__()
+    return settings

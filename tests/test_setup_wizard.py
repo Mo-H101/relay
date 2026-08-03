@@ -272,11 +272,11 @@ def test_script_exhaustion_fails_loudly(isolated_state):
 
 # ------------------------------------------------------------------ CLI handoff
 
-def test_cli_hands_off_to_serve(monkeypatch, capsys):
+def test_cli_hands_off_to_tui(monkeypatch, capsys):
     import app.cli as cli
 
-    served = []
-    monkeypatch.setattr(cli, "_cmd_serve", lambda: served.append(True))
+    tui = []
+    monkeypatch.setattr(cli, "_cmd_tui", lambda: tui.append(True))
     monkeypatch.setattr(
         "app.setup.wizard.run_setup",
         lambda ui: SetupResult(
@@ -286,15 +286,15 @@ def test_cli_hands_off_to_serve(monkeypatch, capsys):
 
     cli._cmd_setup(None)
 
-    assert served == [True]
+    assert tui == [True]
     assert "Relay setup complete." in capsys.readouterr().out
 
 
-def test_cli_incomplete_does_not_serve(monkeypatch, capsys):
+def test_cli_incomplete_does_not_launch_tui(monkeypatch, capsys):
     import app.cli as cli
 
-    served = []
-    monkeypatch.setattr(cli, "_cmd_serve", lambda: served.append(True))
+    tui = []
+    monkeypatch.setattr(cli, "_cmd_tui", lambda: tui.append(True))
     monkeypatch.setattr(
         "app.setup.wizard.run_setup",
         lambda ui: SetupResult(completed=True, usable=False, state="incomplete"),
@@ -302,5 +302,5 @@ def test_cli_incomplete_does_not_serve(monkeypatch, capsys):
 
     cli._cmd_setup(None)
 
-    assert served == []
+    assert tui == []
     assert "not fully configured" in capsys.readouterr().out

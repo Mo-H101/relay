@@ -12,6 +12,7 @@ at startup; invalid values abort startup with a clear message. Hot reload
 | --- | --- | --- |
 | `RELAY_HOST` | `127.0.0.1` | Host the `relay` command binds the server to. |
 | `RELAY_PORT` | `8000` | Port the `relay` command binds the server to. |
+| `RELAY_TUI_NO_EMBED` | `false` | When true, `relay`/`relay tui` runs the terminal interface without starting an embedded API server (for setups managed by a service manager). |
 | `RELAY_ENV_FILE` | *(resolved)* | Explicit path to the `.env` file. |
 | `RELAY_STATE_DIR` | `<env dir>/.relay` | Directory holding setup state (`state.json`) and the future platform database. |
 
