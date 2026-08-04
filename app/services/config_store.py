@@ -22,6 +22,7 @@ def set_env(key: str, value: str) -> None:
     """
     Write a single value into the active ``.env`` file.
     """
+    env_file.parent.mkdir(parents=True, exist_ok=True)
     set_key(str(env_file), key, value, quote_mode="always")
 
 

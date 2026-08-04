@@ -176,15 +176,26 @@ pip install relay
 pip install git+https://github.com/<org>/<repo>.git
 
 # One-command installers (from a checkout)
-#   Windows PowerShell:
-.\install.ps1
+#   Windows (recommended — bypasses the default execution policy safely):
+.\install.cmd
+#   Windows PowerShell (requires an execution-policy bypass or remote-signed
+#   policy; the .cmd wrapper above does this for you):
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 #   macOS / Linux:
 ./install.sh
 ```
 
 After a successful install, the terminal prints:
 
-    Installation complete. Type 'relay' to start Relay.
+    Installation complete. ... Open a NEW terminal and type:
+        relay
+
+The installer adds `relay` to your PATH, but already-open terminals do
+**not** see the change — open a new cmd/PowerShell/shell window first.
+On Windows, if a new terminal still reports `'relay' is not recognized`,
+open one as administrator and run
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned`
+(process-local, not persisted) before re-running the installer.
 
 First launch detects a missing or incomplete configuration and walks you
 through provider setup. After setup completes, running `relay` opens the

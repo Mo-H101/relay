@@ -41,4 +41,12 @@ else
 fi
 
 echo ""
-echo "Installation complete. Type 'relay' to start Relay."
+echo "Installation complete."
+echo ""
+echo "Relay was added to your PATH, but this current shell will not pick"
+echo "it up. Open a NEW terminal and type:"
+echo ""
+echo "    relay"
+echo ""
+echo "If a new terminal still cannot find 'relay', start the shell with"
+echo "the PATH above (or source your profile) before running it."

@@ -6,30 +6,57 @@ import os
 from dotenv import load_dotenv
 
 # The project root is the directory that contains the `app` package.
-# When installed as a package this is the site-packages directory; the
-# user-facing `.env` and state files resolve from the working directory
-# instead (see below).
+# When installed as a package this is the site-packages directory.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# True when running from a source checkout (the project root carries a
+# pyproject.toml). Source checkouts keep config/state next to the source
+# tree so nothing surprises developers; installed packages use a stable
+# per-user data directory instead (see _user_data_dir).
+IS_SOURCE_CHECKOUT = (PROJECT_ROOT / "pyproject.toml").exists()
+
+
+def _user_data_dir() -> Path:
+    """
+    Stable per-user data directory for installed Relay installations.
+
+    Overridable with RELAY_DATA_DIR (also how tests redirect writes).
+    Defaults to the platform user data directory (platformdirs), e.g.
+    ``~/.local/share/relay`` on Linux and ``%LOCALAPPDATA%\\relay`` on
+    Windows.
+    """
+    override = os.getenv("RELAY_DATA_DIR")
+    if override:
+        return Path(override)
+
+    import platformdirs
+
+    return Path(platformdirs.user_data_dir(appname="relay", appauthor=False))
 
 
 def _resolve_env_file() -> Path:
     """
-    Locate the `.env` file, in priority order:
+    Locate the `.env` file.
+
+    Source checkouts (priority order):
       1. The RELAY_ENV_FILE override.
       2. `.env` in the current working directory.
-      3. `.env` next to the app package (source checkouts).
-    Defaults to `<cwd>/.env` so the setup wizard always has a place to
-    write a fresh configuration.
+      3. `.env` next to the app package.
+    Installed packages always use ``<user data dir>/.env`` so the wizard
+    has one stable place to write configuration regardless of CWD.
     """
     override = os.getenv("RELAY_ENV_FILE")
     if override:
         return Path(override)
 
-    cwd_env = Path.cwd() / ".env"
-    if cwd_env.exists():
-        return cwd_env
+    if IS_SOURCE_CHECKOUT:
+        cwd_env = Path.cwd() / ".env"
+        if cwd_env.exists():
+            return cwd_env
 
-    return PROJECT_ROOT / ".env"
+        return PROJECT_ROOT / ".env"
+
+    return _user_data_dir() / ".env"
 
 
 # The active configuration file. The setup wizard and CLI read/write this
@@ -39,10 +66,25 @@ load_dotenv(env_file)
 
 # Setup/state storage directory. Holds first-run and setup state so Relay
 # can distinguish "never configured" from "configured and ready".
-_state_dir_override = os.getenv("RELAY_STATE_DIR")
-state_dir = Path(_state_dir_override) if _state_dir_override else (
-    env_file.parent / ".relay"
-)
+def _resolve_state_dir() -> Path:
+    override = os.getenv("RELAY_STATE_DIR")
+    if override:
+        return Path(override)
+
+    if IS_SOURCE_CHECKOUT:
+        return _resolve_env_file().parent / ".relay"
+
+    return _user_data_dir()
+
+
+state_dir = _resolve_state_dir()
+
+
+def _resolve_persistence_path() -> Path:
+    if IS_SOURCE_CHECKOUT:
+        return PROJECT_ROOT / "relay_state.db"
+
+    return _user_data_dir() / "relay_state.db"
 
 
 def _csv(value: str) -> List[str]:
@@ -682,7 +724,7 @@ class Settings:
             os.getenv("PERSISTENCE_ENABLED", "false").lower() == "true"
         )
         self.persistence_path = os.getenv("PERSISTENCE_PATH", "") or str(
-            PROJECT_ROOT / "relay_state.db"
+            _resolve_persistence_path()
         )
         self.persistence_flush_interval_seconds = _valid_int(
             "PERSISTENCE_FLUSH_INTERVAL_SECONDS",

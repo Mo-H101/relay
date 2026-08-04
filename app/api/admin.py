@@ -14,13 +14,13 @@ map to HTTP 500.
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
-from app.core.config import PROJECT_ROOT
+from app.core.config import env_file
 from app.core.relay import relay
 from app.services.reload import reload_config
 
 router = APIRouter()
 
-_ENV_PATH = PROJECT_ROOT / ".env"
+_ENV_PATH = env_file
 
 
 @router.post("/admin/reload")

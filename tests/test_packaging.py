@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import sysconfig
 import tomllib
 import zipfile
 from pathlib import Path
@@ -58,11 +59,57 @@ def test_windows_installer_exposes_relay_on_user_path():
     assert "Scripts" in text
 
 
+def test_windows_installer_cmd_uses_process_local_policy_bypass():
+    text = (PROJECT_ROOT / "install.cmd").read_text(encoding="utf-8")
+    assert "ExecutionPolicy Bypass" in text
+    assert "install.ps1" in text
+
+
 def test_posix_installer_exposes_relay_on_path():
     text = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
     assert "PATH" in text
     assert ".local/bin" in text
     assert "export PATH" in text
+
+
+# ----------------------------------------------------- installed config layout
+
+def test_installed_layout_uses_stable_user_data_dir(monkeypatch, tmp_path):
+    import app.core.config as config
+
+    monkeypatch.delenv("RELAY_ENV_FILE", raising=False)
+    monkeypatch.delenv("RELAY_STATE_DIR", raising=False)
+    monkeypatch.setattr(config, "IS_SOURCE_CHECKOUT", False)
+    monkeypatch.setattr(config, "_user_data_dir", lambda: tmp_path)
+
+    assert config._resolve_env_file() == tmp_path / ".env"
+    assert config._resolve_state_dir() == tmp_path
+    assert config._resolve_persistence_path() == tmp_path / "relay_state.db"
+
+
+def test_source_checkout_keeps_env_next_to_project(monkeypatch, tmp_path):
+    import app.core.config as config
+
+    monkeypatch.delenv("RELAY_ENV_FILE", raising=False)
+    monkeypatch.delenv("RELAY_STATE_DIR", raising=False)
+    assert config.IS_SOURCE_CHECKOUT is True
+
+    monkeypatch.chdir(tmp_path)
+    assert config._resolve_env_file() == config.PROJECT_ROOT / ".env"
+    assert config._resolve_state_dir() == config.PROJECT_ROOT / ".relay"
+    assert config._resolve_persistence_path() == config.PROJECT_ROOT / "relay_state.db"
+
+
+def test_source_checkout_prefers_cwd_env_when_present(monkeypatch, tmp_path):
+    import app.core.config as config
+
+    monkeypatch.delenv("RELAY_ENV_FILE", raising=False)
+    cwd_env = tmp_path / ".env"
+    cwd_env.write_text("RELAY_PORT=7777\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert config._resolve_env_file() == cwd_env
+    assert config._resolve_state_dir() == tmp_path / ".relay"
 
 
 def test_module_cli_help_lists_setup():
@@ -254,17 +301,21 @@ def test_configured_marker_but_no_provider_reruns_setup(monkeypatch, tmp_path):
 
 # -------------------------------------------------------------- package build
 
-@pytest.mark.skipif(
-    os.environ.get("RUN_PACKAGING_SMOKE") == "0",
-    reason="disabled via RUN_PACKAGING_SMOKE=0",
-)
-def test_package_build_and_console_script(tmp_path):
+@pytest.fixture(scope="module")
+def installed_env(tmp_path_factory):
+    """
+    Build the wheel and install it into an isolated venv, once per module.
+
+    The venv inherits the host test environment's packages via a ``.pth``
+    file: ``python -m venv --system-site-packages`` from inside a venv
+    resolves against the *base* interpreter (which may lack optional deps
+    such as ``rich`` or ``platformdirs``), so a plain isolated venv plus a
+    pointer to the host site-packages is used instead.
+    """
     pytest.importorskip("setuptools")
     pytest.importorskip("wheel")
 
-    wheel_dir = tmp_path / "wheel"
-    wheel_dir.mkdir()
-
+    wheel_dir = tmp_path_factory.mktemp("wheel")
     proc = subprocess.run(
         [
             sys.executable, "-m", "pip", "wheel",
@@ -280,7 +331,56 @@ def test_package_build_and_console_script(tmp_path):
     wheels = sorted(wheel_dir.glob("relay-*.whl"))
     assert wheels, "no wheel produced"
 
-    with zipfile.ZipFile(wheels[-1]) as zf:
+    venv_dir = tmp_path_factory.mktemp("venv")
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(venv_dir)],
+        check=True,
+        capture_output=True,
+    )
+    venv_python = venv_dir / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    _inherit_host_site_packages(venv_python)
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install",
+         "--no-deps", "--ignore-installed", str(wheels[-1])],
+        check=True,
+        capture_output=True,
+    )
+    relay_exe = venv_dir / (
+        "Scripts/relay.exe" if os.name == "nt" else "bin/relay"
+    )
+    assert relay_exe.exists(), "relay console script missing"
+
+    return {
+        "wheel": wheels[-1],
+        "venv_python": venv_python,
+        "relay_exe": relay_exe,
+    }
+
+
+def _inherit_host_site_packages(venv_python):
+    """Make the isolated venv see the packages of the pytest interpreter."""
+    host_purelib = sysconfig.get_paths()["purelib"]
+    probe = subprocess.run(
+        [str(venv_python), "-c",
+         "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    venv_site = Path(probe.stdout.strip())
+    (venv_site / "_relay_host.pth").write_text(
+        f"{host_purelib}\n", encoding="utf-8"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_PACKAGING_SMOKE") == "0",
+    reason="disabled via RUN_PACKAGING_SMOKE=0",
+)
+def test_package_build_and_console_script(installed_env):
+    with zipfile.ZipFile(installed_env["wheel"]) as zf:
         names = zf.namelist()
         assert any(name.startswith("app/") for name in names), (
             "app package missing from wheel"
@@ -290,24 +390,7 @@ def test_package_build_and_console_script(tmp_path):
         ep_text = zf.read(entry_points[0]).decode()
         assert "relay = app.cli:main" in ep_text
 
-    venv_dir = tmp_path / "venv"
-    subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
-        check=True,
-        capture_output=True,
-    )
-    venv_python = venv_dir / (
-        "Scripts/python.exe" if os.name == "nt" else "bin/python"
-    )
-    subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "--no-deps", str(wheels[-1])],
-        check=True,
-        capture_output=True,
-    )
-    relay_exe = venv_dir / (
-        "Scripts/relay.exe" if os.name == "nt" else "bin/relay"
-    )
-    assert relay_exe.exists(), "relay console script missing"
+    relay_exe = installed_env["relay_exe"]
 
     help_proc = subprocess.run(
         [str(relay_exe), "--help"], capture_output=True, text=True
@@ -320,3 +403,70 @@ def test_package_build_and_console_script(tmp_path):
     )
     assert version_proc.returncode == 0
     assert _version() in (version_proc.stdout + version_proc.stderr)
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_PACKAGING_SMOKE") == "0",
+    reason="disabled via RUN_PACKAGING_SMOKE=0",
+)
+def test_installed_cli_runs_from_arbitrary_cwd_with_stable_state(
+    installed_env, tmp_path
+):
+    """
+    Installed Relay must run from any directory (no venv activation) and
+    keep config/state/data in a stable user-data dir, not the CWD.
+    """
+    relay_exe = installed_env["relay_exe"]
+    venv_python = installed_env["venv_python"]
+
+    data_dir = tmp_path / "relay-data"
+    arbitrary_cwd = tmp_path / "somewhere-else"
+    arbitrary_cwd.mkdir()
+
+    env = dict(os.environ)
+    env["RELAY_DATA_DIR"] = str(data_dir)
+
+    ver = subprocess.run(
+        [str(relay_exe), "--version"],
+        cwd=str(arbitrary_cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert ver.returncode == 0
+    assert _version() in (ver.stdout + ver.stderr)
+
+    probe = subprocess.run(
+        [
+            str(venv_python), "-c",
+            "from app.core import config; "
+            "print(config.env_file); print(config.state_dir); "
+            "print(config.settings.persistence_path)",
+        ],
+        cwd=str(arbitrary_cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    out = probe.stdout.splitlines()
+    assert out[0] == str(data_dir / ".env")
+    assert out[1] == str(data_dir)
+    assert out[2] == str(data_dir / "relay_state.db")
+
+    write = subprocess.run(
+        [
+            str(venv_python), "-c",
+            "from app.services import setup_state; "
+            "from app.setup import persistence; "
+            "setup_state.write_setup_state('configured'); "
+            "persistence.write_snapshot('nvidia', [])",
+        ],
+        cwd=str(arbitrary_cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert write.returncode == 0, write.stderr
+    assert (data_dir / "state.json").exists()
+    assert (data_dir / "availability.json").exists()
