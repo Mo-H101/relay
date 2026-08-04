@@ -44,6 +44,8 @@ class ProviderDefinition:
     priority_env: str | None
     health_endpoint: str
     client_class: type
+    base_url_attr: str | None = None
+    priority_attr: str | None = None
     runtime_priority: int = 0
 
     def client(self):
@@ -61,6 +63,7 @@ class ProviderDefinition:
         Build a runtime Provider object.
         """
         return Provider(
+            id=self.id,
             name=self.provider_name,
             base_url=base_url or self.base_url_default,
             api_key=api_key,
@@ -104,7 +107,7 @@ PROVIDER_REGISTRY = {
         priority_env="OPENAI_MODEL_PRIORITY",
         health_endpoint="/models",
         client_class=OpenAIClient,
-        runtime_priority=9,
+        runtime_priority=5,
     ),
     "anthropic": ProviderDefinition(
         id="anthropic",
@@ -117,6 +120,7 @@ PROVIDER_REGISTRY = {
         key_attr="anthropic_api_key",
         enabled_attr="anthropic_enabled",
         base_url_env="ANTHROPIC_BASE_URL",
+        base_url_attr="anthropic_base_url",
         base_url_default="https://api.anthropic.com/v1",
         priority_env="ANTHROPIC_MODEL_PRIORITY",
         health_endpoint="/models",
@@ -134,6 +138,7 @@ PROVIDER_REGISTRY = {
         key_attr="gemini_api_key",
         enabled_attr="gemini_enabled",
         base_url_env="GEMINI_BASE_URL",
+        base_url_attr="gemini_base_url",
         base_url_default="https://generativelanguage.googleapis.com/v1beta",
         priority_env="GEMINI_MODEL_PRIORITY",
         health_endpoint="/models",
@@ -151,8 +156,10 @@ PROVIDER_REGISTRY = {
         key_attr="lmstudio_api_key",
         enabled_attr="lmstudio_enabled",
         base_url_env="LMSTUDIO_BASE_URL",
+        base_url_attr="lmstudio_base_url",
         base_url_default="http://localhost:1234/v1",
         priority_env="LMSTUDIO_MODEL_PRIORITY",
+        priority_attr="lmstudio_priority",
         health_endpoint="/models",
         client_class=LMStudioClient,
         runtime_priority=1,
@@ -168,6 +175,7 @@ PROVIDER_REGISTRY = {
         key_attr=None,
         enabled_attr="ollama_enabled",
         base_url_env="OLLAMA_BASE_URL",
+        base_url_attr="ollama_base_url",
         base_url_default="http://localhost:11434",
         priority_env="OLLAMA_MODEL_PRIORITY",
         health_endpoint="/api/tags",
@@ -185,3 +193,8 @@ PROVIDER_MENU: List[ProviderDefinition] = [
     PROVIDER_REGISTRY["lmstudio"],
     PROVIDER_REGISTRY["ollama"],
 ]
+
+# Providers wired into runtime chat routing. Setup may configure others,
+# but only these are loaded by Relay and reloaded by /admin/reload until
+# P4.2 wires the remaining clients into routing.
+RUNTIME_READY = {"nvidia", "openai", "lmstudio"}

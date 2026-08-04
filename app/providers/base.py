@@ -23,6 +23,12 @@ class Provider:
     name: str
     base_url: str
     health_endpoint: str = "/models"
+
+    # Stable runtime identity (e.g. "nvidia"). Empty for providers built
+    # without a registry definition; identity() then falls back to name so
+    # legacy hand-built providers keep name-keyed behavior.
+    id: str = ""
+
     api_key: str = ""
     enabled: bool = True
     priority: int = 0
@@ -37,6 +43,15 @@ class Provider:
 
     def has_api_key(self) -> bool:
         return bool(self.api_key.strip())
+
+    def identity(self) -> str:
+        """
+        Stable runtime identity used for lookups and keying.
+
+        Returns ``id`` when set (registry-built providers) and falls back
+        to ``name`` for legacy providers constructed without an id.
+        """
+        return self.id or self.name
 
 
 def apply_model_priority(

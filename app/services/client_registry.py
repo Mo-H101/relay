@@ -1,32 +1,33 @@
-from app.providers.nvidia_client import NvidiaClient
-from app.providers.openai_client import OpenAIClient
-from app.providers.lmstudio_client import LMStudioClient
-from app.providers.anthropic_client import AnthropicClient
-from app.providers.gemini_client import GeminiClient
-from app.providers.ollama_client import OllamaClient
+from app.providers.registry import PROVIDER_REGISTRY
 
 
 class ClientRegistry:
     """
-    Maps provider names to their corresponding client implementation.
+    Maps provider identities to their corresponding client implementation.
+
+    Keyed by stable provider id (P4.1). ``get`` also resolves a legacy
+    provider name to its id, so both ``get("lmstudio")`` and the older
+    ``get("LM Studio")`` callers work during the transition.
     """
 
     def __init__(self) -> None:
-        self._clients = {
-            "NVIDIA": NvidiaClient(),
-            "OpenAI": OpenAIClient(),
-            "LM Studio": LMStudioClient(),
-            "Anthropic": AnthropicClient(),
-            "Google Gemini": GeminiClient(),
-            "Ollama": OllamaClient(),
+        self._by_id = {
+            defn.id: defn.client() for defn in PROVIDER_REGISTRY.values()
+        }
+        self._by_name = {
+            defn.provider_name: self._by_id[defn.id]
+            for defn in PROVIDER_REGISTRY.values()
         }
 
-    def get(self, provider_name: str):
-        client = self._clients.get(provider_name)
+    def get(self, key: str):
+        client = self._by_id.get(key)
+
+        if client is None:
+            client = self._by_name.get(key)
 
         if client is None:
             raise RuntimeError(
-                f"No client registered for provider '{provider_name}'."
+                f"No client registered for provider '{key}'."
             )
 
         return client

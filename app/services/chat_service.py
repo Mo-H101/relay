@@ -47,7 +47,7 @@ class ChatService:
         start = time.perf_counter()
 
         try:
-            client = self.registry.get(provider.name)
+            client = self.registry.get(provider.identity())
             response = client.chat(
                 provider=provider,
                 model=model,
@@ -215,7 +215,7 @@ class ChatService:
         start = time.perf_counter()
 
         try:
-            client = self.registry.get(provider.name)
+            client = self.registry.get(provider.identity())
             response = client.chat_messages(
                 provider=provider,
                 payload=payload,
@@ -357,7 +357,7 @@ class ChatService:
         Yields content delta strings.
         Raises an exception if the stream fails to start or fails mid-stream.
         """
-        client = self.registry.get(provider.name)
+        client = self.registry.get(provider.identity())
         # The provider's chat_stream method returns a generator
         yield from client.chat_stream(
             provider=provider,
@@ -473,7 +473,7 @@ class ChatService:
         Yields parsed chunk dicts.
         Raises an exception if the stream fails to start or fails mid-stream.
         """
-        client = self.registry.get(provider.name)
+        client = self.registry.get(provider.identity())
         yield from client.chat_stream_messages(
             provider=provider,
             payload=payload,

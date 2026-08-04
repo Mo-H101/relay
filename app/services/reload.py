@@ -27,12 +27,8 @@ from dotenv import dotenv_values
 
 from app.core.config import PROJECT_ROOT, Settings, settings
 from app.providers.base import apply_model_priority
-from app.providers.lmstudio import create_provider as create_lmstudio_provider
-from app.providers.lmstudio_client import LMStudioClient
-from app.providers.nvidia import create_provider as create_nvidia_provider
-from app.providers.nvidia_client import NvidiaClient
-from app.providers.openai import create_provider as create_openai_provider
-from app.providers.openai_client import OpenAIClient
+from app.providers.factory import build_runtime_provider
+from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 
 # Settings read dynamically at request time and safe to reload in place.
 _SIMPLE_FIELDS = (
@@ -99,42 +95,32 @@ _SIMPLE_FIELDS = (
 )
 
 # Secrets: reported by field name only.
-_SECRET_FIELDS = (
-    "relay_api_key",
-    "nvidia_api_key",
-    "openai_api_key",
-    "lmstudio_api_key",
+_SECRET_FIELDS = ("relay_api_key",) + tuple(
+    defn.key_attr
+    for defn in PROVIDER_REGISTRY.values()
+    if defn.id in RUNTIME_READY and defn.key_attr
 )
 
-_PROVIDER_PREFIXES = ("nvidia", "openai", "lmstudio")
-
-_PROVIDER_SPECS = (
+# Runtime provider specs are derived from the provider registry (P4.1) so
+# the registry is the single source of runtime truth. Only providers wired
+# into routing (RUNTIME_READY) are reloadable in this phase.
+_PROVIDER_SPECS = tuple(
     {
-        "name": "NVIDIA",
-        "prefix": "nvidia",
-        "factory": create_nvidia_provider,
-        "client": lambda: NvidiaClient(),
-    },
-    {
-        "name": "OpenAI",
-        "prefix": "openai",
-        "factory": create_openai_provider,
-        "client": lambda: OpenAIClient(),
-    },
-    {
-        "name": "LM Studio",
-        "prefix": "lmstudio",
-        "factory": create_lmstudio_provider,
-        "client": lambda: LMStudioClient(),
-    },
+        "id": defn.id,
+        "prefix": defn.id,
+        "factory": build_runtime_provider,
+        "client": defn.client,
+    }
+    for defn in PROVIDER_REGISTRY.values()
+    if defn.id in RUNTIME_READY
 )
 
 _RELOADABLE_FIELDS = (
     tuple(_SIMPLE_FIELDS)
     + _SECRET_FIELDS
     + tuple(
-        f"{prefix}_{suffix}"
-        for prefix in _PROVIDER_PREFIXES
+        f"{spec['prefix']}_{suffix}"
+        for spec in _PROVIDER_SPECS
         for suffix in ("enabled", "api_key", "model_priority")
     )
 )
@@ -194,7 +180,7 @@ def _snapshot(relay) -> list:
     ]
 
     for spec in _PROVIDER_SPECS:
-        provider = relay.provider_manager.get(spec["name"])
+        provider = relay.provider_manager.get(spec["id"])
 
         if provider is None:
             continue
@@ -224,7 +210,7 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
     """
     for spec in _PROVIDER_SPECS:
         prefix = spec["prefix"]
-        provider = relay.provider_manager.get(spec["name"])
+        provider = relay.provider_manager.get(spec["id"])
 
         enabled_changed = f"{prefix}_enabled" in applied_set
         key_changed = f"{prefix}_api_key" in applied_set

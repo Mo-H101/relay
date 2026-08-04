@@ -257,7 +257,7 @@ class HealthChecker:
             return []
 
         try:
-            client = self.registry.get(provider.name)
+            client = self.registry.get(provider.identity())
         except RuntimeError:
             return [
                 ModelHealth(

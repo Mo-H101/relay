@@ -2,6 +2,14 @@ from threading import RLock
 from typing import Dict, List
 
 from app.providers.base import Provider
+from app.providers.registry import PROVIDER_REGISTRY
+
+# Legacy lookup: display-ish provider names → stable ids. Lets callers
+# that still hold a provider name (e.g. the TUI) resolve a registry-built
+# provider registered under its id.
+_LEGACY_NAME_TO_ID = {
+    defn.provider_name: defn.id for defn in PROVIDER_REGISTRY.values()
+}
 
 
 class ProviderManager:
@@ -11,6 +19,10 @@ class ProviderManager:
     Thread-safe: the provider dict is guarded by a reentrant lock so a
     runtime registration (e.g. hot reload re-enabling an absent provider)
     never races with request-path iteration over the provider list.
+
+    Providers are keyed by ``identity()`` (stable id when set, name
+    fallback for legacy hand-built providers). ``get`` also resolves a
+    legacy provider name to its stable id, so both keys work.
     """
 
     def __init__(self) -> None:
@@ -19,17 +31,24 @@ class ProviderManager:
 
     def register(self, provider: Provider) -> None:
         """
-        Register a provider.
+        Register a provider under its stable identity.
         """
         with self._lock:
-            self._providers[provider.name] = provider
+            self._providers[provider.identity()] = provider
 
-    def get(self, name: str) -> Provider | None:
+    def get(self, key: str) -> Provider | None:
         """
-        Retrieve a provider by name.
+        Retrieve a provider by stable id (or legacy provider name).
         """
         with self._lock:
-            return self._providers.get(name)
+            provider = self._providers.get(key)
+
+            if provider is None:
+                provider = self._providers.get(
+                    _LEGACY_NAME_TO_ID.get(key, key)
+                )
+
+            return provider
 
     def all(self) -> List[Provider]:
         """

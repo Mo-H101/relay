@@ -18,9 +18,8 @@ from app.services.telemetry import TelemetryStore
 from app.services.quality import QualityStore
 from app.services.state_store import StateStore, StateStoreError
 from app.services.state_flusher import StateFlusher
-from app.providers.nvidia import create_provider as create_nvidia_provider
-from app.providers.openai import create_provider as create_openai_provider
-from app.providers.lmstudio import create_provider as create_lmstudio_provider
+from app.providers.factory import build_runtime_provider
+from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 
 _logger = logging.getLogger("relay")
 
@@ -159,20 +158,15 @@ class Relay:
             self.state_store = None
 
     def _load_providers(self):
-        factories = []
+        for defn in PROVIDER_REGISTRY.values():
+            if defn.id not in RUNTIME_READY:
+                continue
 
-        if settings.nvidia_enabled:
-            factories.append(create_nvidia_provider)
+            if not getattr(settings, defn.enabled_attr, False):
+                continue
 
-        if settings.openai_enabled:
-            factories.append(create_openai_provider)
-
-        if settings.lmstudio_enabled:
-            factories.append(create_lmstudio_provider)
-
-        for factory in factories:
             try:
-                self.provider_manager.register(factory())
+                self.provider_manager.register(build_runtime_provider(defn))
             except Exception:
                 continue
 

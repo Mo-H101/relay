@@ -19,17 +19,12 @@ from dataclasses import dataclass, field
 from typing import List
 
 from app.providers.availability import GLYPH, UNAVAILABLE
-from app.providers.registry import PROVIDER_MENU
+from app.providers.registry import PROVIDER_MENU, RUNTIME_READY
 from app.services import config_store, setup_state
 from app.setup.key_validation import resolve_cloud_key
 from app.setup.persistence import write_snapshot
 from app.setup.reporting import ROLLING_WINDOW
 from app.setup.scan import ScanEngine
-
-# Provider ids wired into the server hot path today. Providers configured
-# but not listed here are noted in the wizard summary as deferred to P4
-# (see the P1 plan, §2 B).
-RUNTIME_READY = {"nvidia", "openai", "lmstudio"}
 
 _MAX_VISIBLE = 60
 

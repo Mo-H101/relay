@@ -23,6 +23,7 @@ from app.services.reload import reload_config
 from app.services.routing import RoutingEngine
 from app.services.quality import QualityStore
 from app.services.telemetry import TelemetryStore
+from app.services.provider_manager import _LEGACY_NAME_TO_ID
 
 
 class FakeProviderManager:
@@ -30,10 +31,17 @@ class FakeProviderManager:
         self.providers = {}
 
     def get(self, name):
-        return self.providers.get(name)
+        provider = self.providers.get(name)
+
+        if provider is None:
+            provider = self.providers.get(
+                _LEGACY_NAME_TO_ID.get(name, name)
+            )
+
+        return provider
 
     def register(self, provider):
-        self.providers[provider.name] = provider
+        self.providers[provider.identity()] = provider
 
 
 class FakeRefreshable:
@@ -145,13 +153,14 @@ class TestApply:
     def test_provider_enable_side_effect(self):
         relay = FakeRelay()
         provider = Provider(
+            id="nvidia",
             name="NVIDIA",
             base_url="https://nvidia.invalid",
             api_key="old-key",
             enabled=False,
             models=["m1"],
         )
-        relay.provider_manager.providers["NVIDIA"] = provider
+        relay.provider_manager.register(provider)
 
         result = reload_config(
             relay, env=SimpleNamespace(nvidia_enabled=True)
@@ -374,16 +383,14 @@ class TestPersistenceRetentionReload:
 
 class TestSecrets:
     def test_secret_values_never_appear_in_report(self, monkeypatch):
-        class FakeNvidiaClient:
-            def list_models(self, provider):
-                return ["m1", "m2"]
-
         monkeypatch.setattr(
-            reload_module, "NvidiaClient", lambda: FakeNvidiaClient()
+            "app.providers.nvidia_client.NvidiaClient.list_models",
+            lambda self, provider: ["m1", "m2"],
         )
 
         relay = FakeRelay()
-        relay.provider_manager.providers["NVIDIA"] = Provider(
+        relay.provider_manager.providers["nvidia"] = Provider(
+            id="nvidia",
             name="NVIDIA",
             base_url="https://nvidia.invalid",
             api_key="old-key",

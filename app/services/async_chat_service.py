@@ -69,7 +69,7 @@ class AsyncChatService:
         start = time.perf_counter()
 
         try:
-            client = self.registry.get(provider.name)
+            client = self.registry.get(provider.identity())
             response = await client.achat(
                 provider=provider,
                 model=model,
@@ -234,7 +234,7 @@ class AsyncChatService:
         Raises an exception if the stream fails to start or fails
         mid-stream.
         """
-        client = self.registry.get(provider.name)
+        client = self.registry.get(provider.identity())
         async for chunk in client.achat_stream(
             provider=provider,
             model=model,
@@ -356,7 +356,7 @@ class AsyncChatService:
         start = time.perf_counter()
 
         try:
-            client = self.registry.get(provider.name)
+            client = self.registry.get(provider.identity())
             response = await client.achat_messages(
                 provider=provider,
                 payload=payload,
@@ -499,7 +499,7 @@ class AsyncChatService:
         Raises an exception if the stream fails to start or fails
         mid-stream.
         """
-        client = self.registry.get(provider.name)
+        client = self.registry.get(provider.identity())
         async for chunk in client.achat_stream_messages(
             provider=provider,
             payload=payload,
