@@ -341,6 +341,9 @@ class Settings:
         self.ollama_enabled = (
             os.getenv("OLLAMA_ENABLED", "false").lower() == "true"
         )
+        self.ollama_model_priority = _csv(
+            os.getenv("OLLAMA_MODEL_PRIORITY", "")
+        )
 
         # =========================
         # Relay

@@ -16,6 +16,7 @@ import pytest
 import app.services.reload as reload_module
 from app.core.config import settings
 from app.providers.base import Provider
+from app.providers.registry import PROVIDER_REGISTRY
 from app.services.candidate_builder import CandidateBuilder
 from app.services.health_store import HealthStore
 from app.services.provider_manager import ProviderManager
@@ -186,6 +187,112 @@ class TestApply:
         assert result["reloaded"] is False
         assert result["error_kind"] == "apply"
         assert settings.request_timeout == before
+
+
+class TestRegisterNewProvider:
+    """
+    The register-new-provider branch of _apply_provider_side_effects must
+    hand the registry-driven factory its ProviderDefinition (P4.2.1 fix):
+    without it the factory call raises TypeError and a provider that was
+    never registered at startup can never be brought up by reload.
+    """
+
+    def test_register_new_runtime_provider_through_reload(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.nvidia_client.NvidiaClient.list_models",
+            lambda self, provider: ["m1", "m2"],
+        )
+
+        relay = FakeRelay()
+
+        result = reload_config(
+            relay,
+            env=SimpleNamespace(
+                nvidia_enabled=True,
+                nvidia_api_key="sk-test",
+            ),
+        )
+
+        assert result["reloaded"] is True
+        assert "nvidia_enabled" in result["applied"]
+        assert "nvidia_api_key" in result["applied"]
+        assert result["failures"] == []
+        assert "nvidia" in relay.provider_manager.providers
+
+        provider = relay.provider_manager.providers["nvidia"]
+        assert provider.name == "NVIDIA"
+        assert provider.id == "nvidia"
+        assert provider.enabled is True
+        assert provider.api_key == "sk-test"
+        assert provider.models == ["m1", "m2"]
+
+    def test_factory_receives_provider_definition(self, monkeypatch):
+        received = {}
+
+        def spy_factory(defn):
+            received["defn"] = defn
+            return Provider(
+                id=defn.id,
+                name=defn.provider_name,
+                base_url=defn.base_url_default,
+                enabled=True,
+            )
+
+        spec = {
+            "id": "nvidia",
+            "prefix": "nvidia",
+            "defn": PROVIDER_REGISTRY["nvidia"],
+            "factory": spy_factory,
+            "client": PROVIDER_REGISTRY["nvidia"].client,
+        }
+        monkeypatch.setattr(reload_module, "_PROVIDER_SPECS", (spec,))
+
+        relay = FakeRelay()
+
+        result = reload_config(
+            relay, env=SimpleNamespace(nvidia_enabled=True)
+        )
+
+        assert result["reloaded"] is True
+        assert result["failures"] == []
+        assert received["defn"] is PROVIDER_REGISTRY["nvidia"]
+        assert "nvidia" in relay.provider_manager.providers
+
+    def test_registered_provider_is_mutated_in_place_not_rebuilt(self, monkeypatch):
+        called = {"count": 0}
+
+        def spy_factory(defn):
+            called["count"] += 1
+            return Provider(
+                id=defn.id,
+                name=defn.provider_name,
+                base_url=defn.base_url_default,
+                enabled=True,
+            )
+
+        monkeypatch.setattr(
+            reload_module, "build_runtime_provider", spy_factory
+        )
+
+        relay = FakeRelay()
+        provider = Provider(
+            id="nvidia",
+            name="NVIDIA",
+            base_url="https://nvidia.invalid",
+            api_key="old-key",
+            enabled=False,
+            models=["m1"],
+        )
+        relay.provider_manager.register(provider)
+
+        result = reload_config(
+            relay, env=SimpleNamespace(nvidia_enabled=True)
+        )
+
+        assert result["reloaded"] is True
+        assert provider.enabled is True
+        assert called["count"] == 0
+        assert relay.provider_manager.providers["nvidia"] is provider
 
 
 class TestScoringRefresh:

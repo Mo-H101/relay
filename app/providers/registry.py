@@ -197,4 +197,4 @@ PROVIDER_MENU: List[ProviderDefinition] = [
 # Providers wired into runtime chat routing. Setup may configure others,
 # but only these are loaded by Relay and reloaded by /admin/reload until
 # P4.2 wires the remaining clients into routing.
-RUNTIME_READY = {"nvidia", "openai", "lmstudio"}
+RUNTIME_READY = {"nvidia", "openai", "lmstudio", "ollama"}

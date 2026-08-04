@@ -108,6 +108,7 @@ _PROVIDER_SPECS = tuple(
     {
         "id": defn.id,
         "prefix": defn.id,
+        "defn": defn,
         "factory": build_runtime_provider,
         "client": defn.client,
     }
@@ -224,7 +225,9 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
         if provider is None:
             if new_enabled:
                 try:
-                    relay.provider_manager.register(spec["factory"]())
+                    relay.provider_manager.register(
+                        spec["factory"](spec["defn"])
+                    )
                 except Exception as exc:
                     failures.append(
                         {"field": f"{prefix}_enabled", "error": _redact(exc)}
