@@ -29,3 +29,10 @@ skills-lock.json
 
 # Logs.
 *.log
+
+# NVIDIA model benchmark runtime output (docs/nvidia-model-benchmark-plan.md §6).
+# bench/prompts.json stays tracked; everything else under bench/ is generated.
+bench/raw/
+bench/probe.json
+bench/results.json
+bench/report.md

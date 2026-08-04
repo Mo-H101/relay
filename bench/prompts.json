@@ -1,0 +1,167 @@
+{
+  "meta": {
+    "revision": 1,
+    "date": "2026-08-04",
+    "temperature": 0.2,
+    "seed": 42,
+    "runs_per_task": 3
+  },
+  "suites": {
+    "A": {
+      "name": "Coding / agent work",
+      "key": "coding",
+      "max_tokens": 1024,
+      "tasks": {
+        "codegen": {
+          "prompt": "Write a complete, runnable Python function named `chunk_list(items, size)` that splits the input list into consecutive sublists of at most `size` elements and returns the list of sublists. Requirements: an empty input returns []; size == 1 returns one-element sublists; size larger than the list returns the whole list as a single sublist; size must be a positive int, otherwise raise ValueError. Include a docstring and type hints. Output only the function definition.",
+          "marker": "chunk_list"
+        },
+        "debugging": {
+          "prompt": "The code below raises an IndexError on the input `words = ['a', 'b', 'c']`. Find the root cause, fix the bug, and explain the fix in two sentences.\n\n```python\ndef last_three(items):\n    return [items[i] for i in range(len(items), len(items) - 3, -1)]\n```",
+          "marker": "IndexError"
+        },
+        "refactor": {
+          "prompt": "Refactor the code below to remove duplication and improve readability while preserving behavior exactly. Do not change the function names or signatures. Output only the refactored code.\n\n```python\ndef describe_user(user):\n    if user.get('admin'):\n        line = 'Admin'\n    else:\n        line = 'User'\n    if user.get('name'):\n        line = line + ' ' + user['name']\n    else:\n        line = line + ' ' + 'Unknown'\n    return line\n```",
+          "marker": "describe_user"
+        },
+        "unit_tests": {
+          "prompt": "Write a pytest test suite for the `chunk_list(items, size)` function below. Cover: empty input, size 1, size larger than the list, and ValueError for non-positive size. Output only the test code.\n\n```python\ndef chunk_list(items, size):\n    if not isinstance(size, int) or size < 1:\n        raise ValueError('size must be a positive int')\n    return [items[i:i + size] for i in range(0, len(items), size)]\n```",
+          "marker": "chunk_list"
+        }
+      }
+    },
+    "B": {
+      "name": "Reasoning / university tutor",
+      "key": "reasoning",
+      "max_tokens": 1024,
+      "tasks": {
+        "math": {
+          "prompt": "Solve the following problem step by step, showing every step: A train departs station A toward station B at 60 km/h. At the same moment, a train departs station B toward station A at 90 km/h. The stations are 150 km apart. At what distance from station A do the trains meet? End your answer with the line `ANSWER: <distance> km`."
+        },
+        "concept": {
+          "prompt": "Explain what a mutex is to a first-year computer science student. Cover the problem it solves and give a short example. Then answer this follow-up: two threads each increment a shared counter 100 times using read-modify-write without any lock; what is the maximum number of lost updates possible? Explain briefly."
+        },
+        "check_student_work": {
+          "prompt": "A student solved `2x + 3 = 11` and wrote: \"Subtract 3 from the left side: 2x + 3 - 3 = 11, so 2x = 11, and therefore x = 5.5.\" Check the student's work. If it is correct, say so and confirm the answer. If it is wrong, identify the exact error and show the correct solution step by step."
+        },
+        "logic": {
+          "prompt": "Three boxes are labeled \"Apples\", \"Oranges\", and \"Apples and Oranges\". All three labels are guaranteed to be wrong. Each box contains either only apples, only oranges, or a mix of both. You may take one fruit from exactly one box without looking inside. Which box should you open, and what does the fruit you draw tell you about all three boxes? Give the exact reasoning."
+        }
+      }
+    },
+    "C": {
+      "name": "General assistant",
+      "key": "general",
+      "max_tokens": 512,
+      "tasks": {
+        "summarization": {
+          "prompt": "Summarize the paragraph below in exactly two sentences. Keep every key fact and add nothing that is not in the source. Source: \"Relay is an open-source AI gateway that routes requests across many model providers. It learns from feedback to improve model selection over time. Relay's configuration lives in a single .env file, and it exposes an OpenAI-compatible API so existing clients keep working unchanged.\""
+        },
+        "qa": {
+          "prompt": "Answer with a single word: What is the capital of Australia?",
+          "expected": ["Canberra"]
+        },
+        "instruction_following": {
+          "prompt": "Output exactly the text PONG and nothing else. No explanation, no punctuation beyond the word.",
+          "exact": "PONG"
+        },
+        "tone": {
+          "prompt": "Rewrite the following message in a formal, professional tone as exactly one sentence: \"Hey, this code is kinda broken and I need u to fix it fast.\""
+        }
+      }
+    },
+    "D": {
+      "name": "Fast everyday usage",
+      "key": "fast",
+      "max_tokens": 200,
+      "tasks": {
+        "single_sentence": {"prompt": "Reply with a single short sentence."},
+        "data_structures": {"prompt": "List three common Python data structures as a comma-separated list."},
+        "status_404": {"prompt": "Explain in one short paragraph what an HTTP 404 status code means."}
+      }
+    },
+    "E": {
+      "name": "Tool / agent instruction following",
+      "key": "tool",
+      "max_tokens": 512,
+      "tasks": {
+        "single_tool": {
+          "prompt": "Use the available tool to get the current weather in Lyon, France.",
+          "tool": "get_weather"
+        },
+        "multi_turn": {
+          "prompt": "You have access to weather and stock tools. Get the weather in Lyon and in Paris, then state which city is warmer using the tool results.",
+          "tools": ["get_weather"]
+        },
+        "parallel": {
+          "prompt": "In a single turn, use the available tools to get the weather in Lyon and the current stock price of AAPL.",
+          "tools": ["get_weather", "get_stock_price"]
+        },
+        "reject": {
+          "prompt": "Answer from memory only. Do NOT call any tools: What is the capital of Japan?"
+        }
+      }
+    },
+    "F": {
+      "name": "Long context handling",
+      "key": "long_context",
+      "max_tokens": 1024,
+      "tasks": {
+        "32k_retrieval": {
+          "doc_kind": "synthetic",
+          "target_tokens": 32000,
+          "block": "Warehouse W-{index} stores the serial number {serial}.",
+          "question": "According to the document, what is the serial number stored in warehouse W-2048? Answer with just the serial number.",
+          "expected": ["BX-2048"],
+          "answer_index": 2048
+        },
+        "64k_instruction_at_end": {
+          "doc_kind": "synthetic",
+          "target_tokens": 64000,
+          "block": "Record {index}: container C-{index} holds shipment {serial}.",
+          "instruction": "After the document, start your final answer with the exact line `RELAY-SIGNAL-OK:` followed by the total number of records described in the document. Nothing else before that line.",
+          "expected_prefix": "RELAY-SIGNAL-OK:"
+        }
+      }
+    },
+    "G": {
+      "name": "Structured JSON output reliability",
+      "key": "json",
+      "max_tokens": 512,
+      "tasks": {
+        "json_object": {
+          "prompt": "Return a JSON object describing a fictional person with exactly the keys name (string), age (integer), and city (string). Output only the JSON object, no markdown fences and no prose.",
+          "schema_keys": ["name", "age", "city"]
+        },
+        "json_schema": {
+          "prompt": "Suggest a well-known movie and return JSON that conforms exactly to the provided JSON schema. Output only the JSON object.",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "title": {"type": "string"},
+              "year": {"type": "integer"},
+              "tags": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["title", "year", "tags"],
+            "additionalProperties": false
+          },
+          "schema_keys": ["title", "year", "tags"]
+        },
+        "embedded_json": {
+          "prompt": "Recommend a book in one short sentence and include a JSON object with exactly the keys title (string) and author (string) inside the sentence. The JSON may appear anywhere.",
+          "schema_keys": ["title", "author"]
+        }
+      }
+    },
+    "H": {
+      "name": "Streaming reliability",
+      "key": "stream",
+      "max_tokens": 128,
+      "tasks": {
+        "completion": {"prompt": "Count from one to ten."},
+        "stable_id": {"prompt": "Repeat the word streaming five times."},
+        "malformed_request": {"prompt": "(no valid output expected; the harness sends an invalid model id)"}
+      }
+    }
+  }
+}
