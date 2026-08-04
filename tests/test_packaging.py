@@ -51,6 +51,20 @@ def test_entry_point_is_importable():
     assert callable(app.cli.main)
 
 
+def test_windows_installer_exposes_relay_on_user_path():
+    text = (PROJECT_ROOT / "install.ps1").read_text(encoding="utf-8")
+    assert "SetEnvironmentVariable" in text
+    assert '"User"' in text
+    assert "Scripts" in text
+
+
+def test_posix_installer_exposes_relay_on_path():
+    text = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "PATH" in text
+    assert ".local/bin" in text
+    assert "export PATH" in text
+
+
 def test_module_cli_help_lists_setup():
     proc = subprocess.run(
         [sys.executable, "-m", "app.cli", "--help"],

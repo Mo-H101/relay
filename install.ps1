@@ -34,5 +34,14 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & "$Prefix\Scripts\python.exe" -m pip install "$Source"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+$BinDir = Join-Path $Prefix "Scripts"
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$Entries = @($UserPath -split ';' | Where-Object { $_ })
+if ($Entries -notcontains $BinDir) {
+    $NewPath = ($Entries + $BinDir) -join ';'
+    [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+    Write-Host "Added '$BinDir' to your user PATH."
+}
+
 Write-Host ""
 Write-Host "Installation complete. Type 'relay' to start Relay."

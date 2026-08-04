@@ -704,13 +704,13 @@ class TestNativeChatWorkflow:
         relay = prod_components()
         nvidia_mock.script(json_body=_completion("ok", model="deepseek-ai/deepseek-r1"))
         captured = {}
-        original = relay.chat
+        original = relay.achat
 
-        def wrapped(message, task=None, **kwargs):
+        async def wrapped(message, task=None, **kwargs):
             captured["task"] = task
-            return original(message, task=task, **kwargs)
+            return await original(message, task=task, **kwargs)
 
-        monkeypatch.setattr(relay, "chat", wrapped)
+        monkeypatch.setattr(relay, "achat", wrapped)
 
         response = _post(
             rc_client, "/chat", json={"message": "describe this image"}

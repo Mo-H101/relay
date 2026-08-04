@@ -31,5 +31,14 @@ PY="$(command -v python3 || command -v python)"
 "$PREFIX/bin/python" -m pip install --upgrade pip
 "$PREFIX/bin/python" -m pip install "$SOURCE"
 
+BINDIR="$PREFIX/bin"
+if [ -d "$HOME/.local/bin" ] && echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+    ln -sf "$BINDIR/relay" "$HOME/.local/bin/relay"
+    echo "[relay] Linked 'relay' into $HOME/.local/bin."
+else
+    echo "[relay] Add this to your shell profile to run 'relay' from anywhere:"
+    echo "  export PATH=\"$BINDIR:\$PATH\""
+fi
+
 echo ""
 echo "Installation complete. Type 'relay' to start Relay."
