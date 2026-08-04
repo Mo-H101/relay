@@ -15,6 +15,7 @@ class FailureKind(str, Enum):
     RATE_LIMIT = "rate_limit"
     QUOTA_EXHAUSTED = "quota_exhausted"
     INVALID_REQUEST = "invalid_request"
+    EMPTY_RESPONSE = "empty_response"
     SERVER_ERROR = "server_error"
     AUTH_ERROR = "auth_error"
     UNKNOWN = "unknown"

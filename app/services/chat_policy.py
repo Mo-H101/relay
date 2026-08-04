@@ -79,6 +79,19 @@ def retry_wait_seconds(
     return min(wait, remaining)
 
 
+def empty_content(content: str | None) -> bool:
+    """
+    True when a chat response carries no visible assistant content.
+
+    A provider may return HTTP 200 with a null or blank ``content`` field
+    (for example a reasoning model that exhausts its token budget on
+    ``reasoning_content``). Such a response is useless to the caller, so
+    the sync and async services treat it as a failed attempt and fail
+    over to the next candidate.
+    """
+    return content is None or not content.strip()
+
+
 def budget_exhausted(elapsed_seconds: float) -> bool:
     """
     True when a configured request-timeout budget has been consumed.

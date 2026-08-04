@@ -1061,6 +1061,44 @@ class TestRegressionChatEndpoint:
         assert "presence_penalty" not in kwargs
         assert "seed" not in kwargs
 
+    def test_chat_endpoint_empty_content_returns_502(self, wired_relay, fake_registry, client):
+        """A provider success with empty content must not crash /chat."""
+        provider = make_provider("A", ["a-1"])
+        make_client(
+            fake_registry,
+            "A",
+            {"a-1": [None]},
+        )
+        wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 502
+        assert "empty content" in response.json()["detail"]
+
+    def test_chat_endpoint_fails_over_empty_content(self, wired_relay, fake_registry, client):
+        """/chat fails over to the next candidate when one returns empty content."""
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(
+            fake_registry,
+            "A",
+            {"a-1": [None], "a-2": ["fallback ok"]},
+        )
+        wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["model"] == "a-2"
+        assert payload["response"] == "fallback ok"
+
 
 class TestPrivacy:
     def test_no_api_keys_in_response(self, wired_relay, fake_registry, client):

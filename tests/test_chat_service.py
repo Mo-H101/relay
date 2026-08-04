@@ -238,6 +238,64 @@ class TestModelLevelFailover:
         assert result["fallback_reason"] is None
 
 
+class TestEmptyContentFailover:
+    def test_empty_content_is_treated_as_failure(self, fake_registry):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": [None]})
+        service = ChatService()
+
+        result = service.chat_across([(provider, "a-1")], "hello")
+
+        assert result["success"] is False
+        assert result["error"] == "a-1 (A): Provider returned empty content."
+
+    def test_blank_content_is_treated_as_failure(self, fake_registry):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["   "]})
+        service = ChatService()
+
+        result = service.chat_across([(provider, "a-1")], "hello")
+
+        assert result["success"] is False
+        assert result["error"] == "a-1 (A): Provider returned empty content."
+
+    def test_fails_over_after_empty_content(self, fake_registry):
+        provider = make_provider("A", ["a-1", "a-2"])
+        client = make_client(
+            fake_registry,
+            "A",
+            {
+                "a-1": [None],
+                "a-2": ["ok-from-a-2"],
+            },
+        )
+        service = ChatService()
+
+        result = service.chat_across(
+            [(provider, "a-1"), (provider, "a-2")],
+            "hello",
+        )
+
+        assert result["success"] is True
+        assert result["model"] == "a-2"
+        assert result["response"] == "ok-from-a-2"
+        assert result["fallback_reason"] == "Provider returned empty content."
+        assert client.calls == [("A", "a-1"), ("A", "a-2")]
+
+    def test_empty_content_attempt_is_recorded(self, fake_registry):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": [None]})
+        service = ChatService()
+
+        result = service.chat_across([(provider, "a-1")], "hello")
+
+        attempts = result["attempts"]
+        assert len(attempts) == 1
+        assert attempts[0]["success"] is False
+        assert attempts[0]["failure_type"] == "empty_response"
+        assert attempts[0]["reason"] == "Provider returned empty content."
+
+
 class TestProviderLevelFailover:
     def test_auth_failure_skips_entire_provider(self, fake_registry):
         provider_a = make_provider("A", ["a-1", "a-2"])

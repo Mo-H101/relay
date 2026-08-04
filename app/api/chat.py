@@ -139,6 +139,13 @@ async def chat(request: ChatRequest, response: Response):
             headers=_correlation_headers(correlation_id),
         )
 
+    if not result.get("response"):
+        raise HTTPException(
+            status_code=502,
+            detail="Provider returned empty content.",
+            headers=_correlation_headers(correlation_id),
+        )
+
     return ChatResponse(
         provider=result["provider"],
         model=result["model"],

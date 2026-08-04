@@ -6,6 +6,7 @@ from app.providers.exceptions import ProviderError
 from app.services.chat_policy import (
     Attempt,
     budget_exhausted,
+    empty_content,
     fallback_reason,
     retry_wait_seconds,
 )
@@ -73,6 +74,21 @@ class ChatService:
             )
 
         latency = int((time.perf_counter() - start) * 1000)
+
+        if empty_content(response):
+            return (
+                Attempt(
+                    provider=provider.name,
+                    model=model,
+                    attempt=attempt_no,
+                    latency_ms=latency,
+                    success=False,
+                    failure_type=FailureKind.EMPTY_RESPONSE.value,
+                    reason="Provider returned empty content.",
+                ),
+                None,
+                FailureKind.EMPTY_RESPONSE,
+            )
 
         return (
             Attempt(
