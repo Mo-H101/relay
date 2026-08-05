@@ -152,10 +152,30 @@ class HealthChecker:
 
         return report
 
+    def _client_for(self, provider: Provider):
+        """
+        Resolve the provider's client, or None when unknown so the
+        generic connectivity probe falls back for legacy providers.
+        """
+        try:
+            return self.registry.get(provider.identity())
+        except Exception:
+            return None
+
     def _check_connectivity(self, provider: Provider):
         """
         Probe the provider endpoint. Returns (ok, details, latency_ms).
+
+        Clients that implement ``connectivity_probe`` supply their own
+        auth convention (Anthropic sends ``x-api-key``, Gemini sends a
+        query key). Otherwise the generic Bearer GET is used, which is
+        correct for OpenAI-compatible providers and keyless ones.
         """
+
+        probe = getattr(self._client_for(provider), "connectivity_probe", None)
+
+        if probe is not None:
+            return probe(provider)
 
         start = time.perf_counter()
 

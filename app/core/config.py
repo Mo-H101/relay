@@ -286,6 +286,9 @@ class Settings:
             "ANTHROPIC_BASE_URL",
             "https://api.anthropic.com/v1",
         )
+        self.anthropic_model_priority = _csv(
+            os.getenv("ANTHROPIC_MODEL_PRIORITY", "")
+        )
 
         # =========================
         # OpenRouter
