@@ -7,7 +7,7 @@ the ``Authorization`` header value, API keys, request bodies, prompts,
 messages, and generated responses are never stored.
 
 This is the interim "connected applications" store. It is deliberately
-isolated (write-only tracker + read projection) so the P6 ``relay.db``
+isolated (write-only tracker + read projection) so the P6 ``platform.db``
 swap (``apps`` = labeled keys x ``request_log``) can replace it locally.
 """
 

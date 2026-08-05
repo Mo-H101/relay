@@ -1,11 +1,12 @@
 """
 Persistent state storage for Relay intelligence.
 
-StateStore is the only component that touches SQLite. It persists only
-learned health degradation and telemetry aggregates/failure history:
-never health snapshots, prompts, responses, API keys, or generated
-content. The in-memory stores remain the source of truth for reads;
-StateStore is a durable write-behind copy.
+StateStore reads and writes its tables in the shared ``platform.db``
+SQLite file (``state_dir/platform.db``) through ``PlatformStore``. It
+persists only learned health degradation and telemetry
+aggregates/failure history: never health snapshots, prompts, responses,
+API keys, or generated content. The in-memory stores remain the source
+of truth for reads; StateStore is a durable write-behind copy.
 
 Time model: the in-memory stores use monotonic clocks. StateStore
 persists wall-clock timestamps (failure events) and remaining-TTL
@@ -18,96 +19,14 @@ NOTE: This component assumes a single-process, single-writer model. Multiple pro
 
 from collections import deque
 import json
-import os
-import shutil
 import sqlite3
 import threading
 import time
 from typing import Dict, List, Optional
 
+from app.services import platform_store
 from app.services.metrics import relay_metrics
-
-MIGRATIONS: Dict[int, List[str]] = {
-    1: [
-        """
-        CREATE TABLE IF NOT EXISTS learned_state (
-            provider TEXT PRIMARY KEY,
-            provider_status TEXT,
-            provider_status_remaining_seconds REAL,
-            model_marks TEXT NOT NULL,
-            model_counts TEXT NOT NULL,
-            provider_counts TEXT NOT NULL
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS telemetry (
-            provider TEXT NOT NULL,
-            model TEXT NOT NULL,
-            request_count INTEGER NOT NULL,
-            success_count INTEGER NOT NULL,
-            failure_count INTEGER NOT NULL,
-            total_latency_ms INTEGER NOT NULL,
-            PRIMARY KEY (provider, model)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS telemetry_failures (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            provider TEXT NOT NULL,
-            model TEXT NOT NULL,
-            failure_type TEXT NOT NULL,
-            ts REAL NOT NULL
-        )
-        """,
-        """
-        CREATE INDEX IF NOT EXISTS idx_telemetry_failures_pair
-            ON telemetry_failures (provider, model)
-        """,
-    ],
-    2: [
-        """
-        ALTER TABLE learned_state
-            ADD COLUMN provider_status_expires_wall REAL
-        """,
-    ],
-    3: [
-        """
-        ALTER TABLE telemetry
-            ADD COLUMN ewma_success REAL
-        """,
-        """
-        ALTER TABLE telemetry
-            ADD COLUMN ewma_latency_ms REAL
-        """,
-        """
-        ALTER TABLE telemetry
-            ADD COLUMN last_updated_wall REAL
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS quality_aggregates (
-            provider TEXT NOT NULL,
-            model TEXT NOT NULL,
-            sample_count INTEGER NOT NULL,
-            positive_count INTEGER NOT NULL,
-            negative_count INTEGER NOT NULL,
-            ewma_score REAL,
-            categories TEXT NOT NULL,
-            last_updated_wall REAL,
-            PRIMARY KEY (provider, model)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS decision_stats (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            decisions INTEGER NOT NULL,
-            candidates INTEGER NOT NULL,
-            selected TEXT NOT NULL,
-            by_band TEXT NOT NULL,
-            last_updated_wall REAL NOT NULL
-        )
-        """,
-    ],
-}
+from app.services.platform_store import PlatformStoreError
 
 
 class StateStoreError(Exception):
@@ -124,7 +43,7 @@ class StateStore:
     outside those paths.
     """
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = platform_store.SCHEMA_VERSION
 
     def __init__(self, path: Optional[str] = None) -> None:
         self._path = path or ":memory:"
@@ -585,80 +504,14 @@ class StateStore:
                 self._open()
 
     def _open(self) -> None:
-        last_error: Optional[Exception] = None
-
-        for attempt in range(2):
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-
-            try:
-                conn.execute("PRAGMA busy_timeout = 5000")
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
-                self._migrate(conn)
-            except StateStoreError:
-                conn.close()
-                raise
-            except sqlite3.Error as exc:
-                conn.close()
-                last_error = exc
-
-                if attempt == 0:
-                    self._backup_corrupt()
-                    continue
-
-            else:
-                self._conn = conn
-                self._schema_version = conn.execute(
-                    "PRAGMA user_version"
-                ).fetchone()[0]
-                return
-
-        raise StateStoreError(f"cannot open state database: {last_error}")
-
-    def _migrate(self, conn: sqlite3.Connection) -> None:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-
-        if version > self.SCHEMA_VERSION:
-            raise StateStoreError(
-                f"state database schema version {version} is newer than "
-                f"supported version {self.SCHEMA_VERSION}; upgrade the app."
-            )
-
-        for target in range(version + 1, self.SCHEMA_VERSION + 1):
-            statements = MIGRATIONS.get(target)
-
-            if not statements:
-                raise StateStoreError(
-                    f"no migration defined for schema version {target}"
-                )
-
-            with conn:
-                for statement in statements:
-                    conn.execute(statement)
-
-                conn.execute(f"PRAGMA user_version = {target}")
-
-    def _backup_corrupt(self) -> None:
-        if self._path == ":memory:":
-            return
-
-        backup_path = f"{self._path}.corrupt-{int(time.time())}.bak"
-
         try:
-            if os.path.exists(self._path):
-                shutil.copy2(self._path, backup_path)
-                os.remove(self._path)
-        except OSError:
-            return
+            self._conn = platform_store.open_connection(self._path)
+        except PlatformStoreError as exc:
+            raise StateStoreError(str(exc)) from exc
 
-        for suffix in ("-wal", "-shm"):
-            try:
-                side = f"{self._path}{suffix}"
-
-                if os.path.exists(side):
-                    os.remove(side)
-            except OSError:
-                pass
+        self._schema_version = self._conn.execute(
+            "PRAGMA user_version"
+        ).fetchone()[0]
 
     @staticmethod
     def _decode_json(text: Optional[str]) -> dict:

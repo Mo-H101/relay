@@ -1,20 +1,22 @@
 """
 Scrypt-backed storage for Relay API keys (P5 Phase 1).
 
-KeyStore is the only component that touches the ``relay_keys.db`` SQLite
-file. It persists only scrypt hashes of API keys: raw key material is
-generated, returned to the caller exactly once, and never written to
-disk. The file lives in the per-user state directory and is created with
-user-only permissions.
+KeyStore reads and writes the ``api_keys`` table in the shared
+``platform.db`` SQLite file (``state_dir/platform.db``). It persists only
+scrypt hashes of API keys: raw key material is generated, returned to
+the caller exactly once, and never written to disk. The file is created
+with user-only permissions.
 
-The schema follows the ``StateStore`` migration convention (``MIGRATIONS``
-dict + ``PRAGMA user_version``) so the ``api_keys`` table can be folded
-into the P6 ``platform.db`` unchanged. The ``key_hash`` column is never
-indexed: verification iterates active rows with constant-time digest
-comparison so the database cannot leak which key matched through timing.
+The ``api_keys`` table is part of the platform migration history
+(``PlatformStore.MIGRATIONS`` + ``PRAGMA user_version``), folded unchanged
+from the legacy ``relay_keys.db`` schema. The ``key_hash`` column is
+never indexed: verification iterates active rows with constant-time
+digest comparison so the database cannot leak which key matched through
+timing.
 
-Nothing in the request path reads this store yet (Phase 1 is storage
-only); the auth dependency consumes it in Phase 4.
+File-level concerns (migrations, permissions, corruption recovery) are
+owned by ``PlatformStore``; this module keeps the public ``KeyStore`` API
+unchanged.
 """
 
 from __future__ import annotations
@@ -22,18 +24,17 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import secrets
-import shutil
 import sqlite3
 import threading
 import time
 import uuid
 from typing import List, Optional
 
-from app.core.config import state_dir
+from app.services import platform_store
+from app.services.platform_store import PlatformStoreError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = platform_store.SCHEMA_VERSION
 
 # scrypt parameters. Stored per row in the ``kdf`` column so parameters
 # can be raised later without invalidating existing hashes.
@@ -54,25 +55,6 @@ _SELECT_COLUMNS = (
     "id, key_hash, key_salt, kdf, label, scopes, expires_at, "
     "created_at, last_used_at, revoked_at"
 )
-
-MIGRATIONS: dict = {
-    1: [
-        """
-        CREATE TABLE IF NOT EXISTS api_keys (
-            id TEXT PRIMARY KEY,
-            key_hash BLOB NOT NULL,
-            key_salt BLOB NOT NULL,
-            kdf TEXT NOT NULL,
-            label TEXT NOT NULL,
-            scopes TEXT NOT NULL,
-            expires_at REAL,
-            created_at REAL NOT NULL,
-            last_used_at REAL,
-            revoked_at REAL
-        )
-        """,
-    ],
-}
 
 
 class KeyStoreError(Exception):
@@ -157,7 +139,7 @@ class KeyStore:
     SCHEMA_VERSION = SCHEMA_VERSION
 
     def __init__(self, path: Optional[str] = None) -> None:
-        self._path = path or str(state_dir / "relay_keys.db")
+        self._path = path or str(platform_store.default_path())
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         self._open()
@@ -451,99 +433,7 @@ class KeyStore:
                 self._open()
 
     def _open(self) -> None:
-        last_error: Optional[Exception] = None
-
-        for attempt in range(2):
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-
-            try:
-                conn.execute("PRAGMA busy_timeout = 5000")
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
-                self._migrate(conn)
-            except KeyStoreError:
-                conn.close()
-                raise
-            except sqlite3.Error as exc:
-                conn.close()
-                last_error = exc
-
-                if attempt == 0:
-                    self._backup_corrupt()
-                    continue
-
-            else:
-                self._conn = conn
-                self._secure_file_permissions()
-                return
-
-        raise KeyStoreError(f"cannot open key store database: {last_error}")
-
-    def _migrate(self, conn: sqlite3.Connection) -> None:
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-
-        if version > self.SCHEMA_VERSION:
-            raise KeyStoreError(
-                f"key store schema version {version} is newer than "
-                f"supported version {self.SCHEMA_VERSION}; upgrade the app."
-            )
-
-        for target in range(version + 1, self.SCHEMA_VERSION + 1):
-            statements = MIGRATIONS.get(target)
-
-            if not statements:
-                raise KeyStoreError(
-                    f"no migration defined for schema version {target}"
-                )
-
-            with conn:
-                for statement in statements:
-                    conn.execute(statement)
-
-                conn.execute(f"PRAGMA user_version = {target}")
-
-    def _secure_file_permissions(self) -> None:
-        if os.name == "nt":
-            return
-
         try:
-            os.chmod(self._path, 0o600)
-        except OSError:
-            pass
-
-        # WAL sidecars inherit the database mode and would leak through
-        # the same directory listing; tighten them alongside the main file.
-        for suffix in ("-wal", "-shm"):
-            try:
-                side = f"{self._path}{suffix}"
-
-                if os.path.exists(side):
-                    os.chmod(side, 0o600)
-            except OSError:
-                pass
-
-    def _backup_corrupt(self) -> None:
-        backup_path = f"{self._path}.corrupt-{int(time.time())}.bak"
-
-        try:
-            if os.path.exists(self._path):
-                shutil.copy2(self._path, backup_path)
-
-                if os.name != "nt":
-                    try:
-                        os.chmod(backup_path, 0o600)
-                    except OSError:
-                        pass
-
-                os.remove(self._path)
-        except OSError:
-            return
-
-        for suffix in ("-wal", "-shm"):
-            try:
-                side = f"{self._path}{suffix}"
-
-                if os.path.exists(side):
-                    os.remove(side)
-            except OSError:
-                pass
+            self._conn = platform_store.open_connection(self._path)
+        except PlatformStoreError as exc:
+            raise KeyStoreError(str(exc)) from exc

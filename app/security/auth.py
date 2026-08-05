@@ -8,7 +8,7 @@ application. Authentication has two tiers (P5 Phase 4):
   the public allowlist must present a matching credential. This path is
   byte-identical to pre-Phase-4 behavior.
 * Tier 2 (store): when RELAY_AUTH_STORE is enabled, the dependency also
-  accepts keys from the KeyStore (relay_keys.db) with scope enforcement.
+  accepts keys from the KeyStore (platform.db) with scope enforcement.
   Store-backed success is always checked after the bootstrap key, and a
   store outage fails closed (401) so a broken store cannot silently
   disable authentication.

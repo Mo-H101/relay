@@ -5,7 +5,9 @@ state to the StateStore.
 Runs on a single daemon thread, modeled after HealthRefresher.
 Injectable and inert until start() is called. SQLite writes happen only
 on this thread (periodically) or on explicit flush() calls -- never on
-the chat request path.
+the chat request path. The durable surface is the shared ``platform.db``
+(``state_dir/platform.db``); this module takes a ``StateStore`` instance,
+never a path.
 """
 
 import logging

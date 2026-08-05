@@ -113,7 +113,9 @@ def main(argv=None) -> None:
             "Run 'relay' (or 'relay tui') for the terminal interface, "
             "'relay serve' for the headless API server, 'relay setup' "
             "to (re)run the setup wizard, 'relay keys' to manage API "
-            "keys, and 'relay provider keys' to manage provider keys."
+            "keys, 'relay provider keys' to manage provider keys, and "
+            "'relay migrate' to consolidate legacy state files into "
+            "platform.db."
         ),
     )
 
@@ -163,6 +165,16 @@ def main(argv=None) -> None:
 
     add_provider_keys_parser(pk)
 
+    migrate = subparsers.add_parser(
+        "migrate",
+        help="Consolidate legacy state files into platform.db (backup, "
+             "verify, manifest; dry-run and rollback supported).",
+    )
+
+    from app.cli.migrate import add_migrate_flags
+
+    add_migrate_flags(migrate)
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -179,6 +191,10 @@ def main(argv=None) -> None:
         from app.cli.provider_keys import _run_provider_keys
 
         _run_provider_keys(args, parser)
+    elif args.command == "migrate":
+        from app.cli.migrate import _run_migrate
+
+        _run_migrate(args, parser)
     elif args.command is None:
         if _config_configured():
             _cmd_tui()

@@ -84,7 +84,7 @@ def test_installed_layout_uses_stable_user_data_dir(monkeypatch, tmp_path):
 
     assert config._resolve_env_file() == tmp_path / ".env"
     assert config._resolve_state_dir() == tmp_path
-    assert config._resolve_persistence_path() == tmp_path / "relay_state.db"
+    assert config._resolve_persistence_path() == tmp_path / "platform.db"
 
 
 def test_source_checkout_keeps_env_next_to_project(monkeypatch, tmp_path):
@@ -97,7 +97,7 @@ def test_source_checkout_keeps_env_next_to_project(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     assert config._resolve_env_file() == config.PROJECT_ROOT / ".env"
     assert config._resolve_state_dir() == config.PROJECT_ROOT / ".relay"
-    assert config._resolve_persistence_path() == config.PROJECT_ROOT / "relay_state.db"
+    assert config._resolve_persistence_path() == config.PROJECT_ROOT / ".relay" / "platform.db"
 
 
 def test_source_checkout_prefers_cwd_env_when_present(monkeypatch, tmp_path):
@@ -452,7 +452,7 @@ def test_installed_cli_runs_from_arbitrary_cwd_with_stable_state(
     out = probe.stdout.splitlines()
     assert out[0] == str(data_dir / ".env")
     assert out[1] == str(data_dir)
-    assert out[2] == str(data_dir / "relay_state.db")
+    assert out[2] == str(data_dir / "platform.db")
 
     write = subprocess.run(
         [

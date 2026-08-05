@@ -81,10 +81,7 @@ state_dir = _resolve_state_dir()
 
 
 def _resolve_persistence_path() -> Path:
-    if IS_SOURCE_CHECKOUT:
-        return PROJECT_ROOT / "relay_state.db"
-
-    return _user_data_dir() / "relay_state.db"
+    return _resolve_state_dir() / "platform.db"
 
 
 def _csv(value: str) -> List[str]:
@@ -418,7 +415,7 @@ class Settings:
 
         # Store-backed API-key authentication (P5 Phase 4): when enabled,
         # the auth dependency also accepts keys from the KeyStore
-        # (relay_keys.db) with scope enforcement, after the bootstrap key
+        # (platform.db) with scope enforcement, after the bootstrap key
         # above. Read per request like RELAY_API_KEY, so flipping it takes
         # effect without a restart. Off by default, preserving the
         # bootstrap-only behavior. Fails closed: with this on, non-public

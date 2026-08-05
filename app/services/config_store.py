@@ -3,7 +3,7 @@ Provider configuration persistence.
 
 The *only* module allowed to write provider configuration. For P1 the
 target is the user's ``.env`` file (runtime-compatible with ``Settings``);
-the P6 ``relay.db`` swap replaces this module's implementation, and the
+the P6 ``platform.db`` swap replaces this module's implementation, and the
 P5 keyring migration replaces only the ``api_key`` path. Nothing in the
 wizard or CLI writes dotenv directly.
 

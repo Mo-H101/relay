@@ -220,7 +220,7 @@ def test_schema_version_and_table(store, tmp_path):
     ).fetchone()
     conn.close()
 
-    assert version == 1
+    assert version == KeyStore.SCHEMA_VERSION
     assert table is not None
 
 

@@ -10,11 +10,12 @@ import time
 
 import pytest
 
-import app.services.state_store as state_store_module
+import app.services.platform_store as platform_store
 from app.services.decision_engine import DecisionStats
 from app.services.health_store import HealthStore
+from app.services.platform_store import MIGRATIONS
 from app.services.quality import QualityStore
-from app.services.state_store import MIGRATIONS, StateStore, StateStoreError
+from app.services.state_store import StateStore, StateStoreError
 from app.services.telemetry import TelemetryStore
 
 
@@ -80,9 +81,9 @@ class TestStateStoreDatabase:
         conn.commit()
         conn.close()
 
-        monkeypatch.setattr(StateStore, "SCHEMA_VERSION", 2)
+        monkeypatch.setattr(platform_store, "SCHEMA_VERSION", 2)
         monkeypatch.setattr(
-            state_store_module,
+            platform_store,
             "MIGRATIONS",
             {
                 1: MIGRATIONS[1],
@@ -93,8 +94,8 @@ class TestStateStoreDatabase:
             },
         )
 
-        store = StateStore(str(path))
-        store.close()
+        conn = platform_store.open_connection(str(path))
+        conn.close()
 
         conn = sqlite3.connect(path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -107,6 +108,10 @@ class TestStateStoreDatabase:
         assert "provider_status" in columns
 
     def test_v2_migrates_to_v3_additively(self, tmp_path):
+        # A combined-schema v2 database: the state v1 tables without the
+        # v3 additions. Opening it through StateStore runs the platform
+        # runner (v2 -> v4), which adds the EWMA/quality/decision and
+        # model_status surfaces.
         path = tmp_path / "v2.db"
         conn = sqlite3.connect(path)
         conn.execute("PRAGMA user_version = 2")
@@ -114,8 +119,7 @@ class TestStateStoreDatabase:
             "CREATE TABLE learned_state ("
             " provider TEXT PRIMARY KEY, provider_status TEXT,"
             " provider_status_remaining_seconds REAL, model_marks TEXT NOT NULL,"
-            " model_counts TEXT NOT NULL, provider_counts TEXT NOT NULL,"
-            " provider_status_expires_wall REAL)"
+            " model_counts TEXT NOT NULL, provider_counts TEXT NOT NULL)"
         )
         conn.execute(
             "CREATE TABLE telemetry ("
@@ -138,7 +142,7 @@ class TestStateStoreDatabase:
         conn.close()
 
         store = StateStore(str(path))
-        assert store.stats()["schema_version"] == 3
+        assert store.stats()["schema_version"] == StateStore.SCHEMA_VERSION
 
         loaded = store.load_telemetry()
         assert loaded == [
@@ -159,11 +163,15 @@ class TestStateStoreDatabase:
 
         conn = sqlite3.connect(path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        assert version == 3
+        assert version == StateStore.SCHEMA_VERSION
 
         telemetry_columns = {
             row[1]
             for row in conn.execute("PRAGMA table_info(telemetry)")
+        }
+        learned_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(learned_state)")
         }
         tables = {
             row[0]
@@ -179,6 +187,8 @@ class TestStateStoreDatabase:
             "last_updated_wall",
         } <= telemetry_columns
         assert {"quality_aggregates", "decision_stats"} <= tables
+        assert "provider_status_expires_wall" in learned_columns
+        assert "model_status" in tables
 
     def test_reopen_does_not_rerun_migrations(self, tmp_path):
         path = tmp_path / "stable.db"

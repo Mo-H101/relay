@@ -17,8 +17,9 @@ These can be done independently.
 1. Confirm the exact running version and the version you are rolling to:
    `git log --oneline -5` (or the deployed artifact tag).
 2. Capture the current state for post-mortem:
-   `GET /diagnostics` and `GET /metrics`; save the `relay_state.db` file
-   to a timestamped backup (do **not** delete it — you may need it).
+   `GET /diagnostics` and `GET /metrics`; save the `platform.db` file
+   (and its `-wal`/`-shm` sidecars) to a timestamped backup — do **not**
+   delete it, you may need it.
 3. Verify the target version's test state before switching:
    `python -m pytest tests -q`.
 
@@ -45,13 +46,23 @@ These can be done independently.
 
 ## 5. Roll back learned state
 
-Learned state lives in the SQLite DB at `PERSISTENCE_PATH`. To reset it:
+Since P6.1, learned state lives in the consolidated `platform.db` at
+`PERSISTENCE_PATH` (see [platform-db-schema.md](platform-db-schema.md)).
+Legacy `relay_keys.db` / `relay_state.db` / `availability.json` remain on
+disk, inert, as the migration rollback target.
+
+To reset the consolidated database:
 
 1. Stop the server (graceful: `SIGTERM`; a final flush runs on shutdown).
-2. Replace `relay_state.db` with the backup from step 2, or delete it to
-   start clean (Relay will recreate it and continue in memory until the
-   first flush).
-3. Start the server and confirm `/diagnostics` shows the expected
+2. Restore `platform.db` (and sidecars) from the backup in step 2, or use
+   `relay migrate --rollback <timestamp|last>` to restore the legacy
+   sources and remove `platform.db` (relies on the backup under
+   `state_dir/backups/` made by the migration). A manual restore always
+   works too, because the migration copies rather than moves the sources.
+3. After `--rollback`, the runtime's legacy-unmigrated guard re-engages:
+   it refuses to create a fresh `platform.db` until `relay migrate` is run
+   again.
+4. Start the server and confirm `/diagnostics` shows the expected
    `learned_health` / telemetry / quality state.
 
 ## 6. Restart and verify
