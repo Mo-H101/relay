@@ -308,6 +308,9 @@ class Settings:
             "GEMINI_BASE_URL",
             "https://generativelanguage.googleapis.com/v1beta",
         )
+        self.gemini_model_priority = _csv(
+            os.getenv("GEMINI_MODEL_PRIORITY", "")
+        )
 
         # =========================
         # Groq

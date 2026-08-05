@@ -229,13 +229,13 @@ def test_existing_key_kept_and_revalidated(isolated_state):
 
 
 def test_deferred_provider_gets_runtime_note(isolated_state):
-    menu = [make_defn("gemini", "Google Gemini", make_client())]
+    menu = [make_defn("openrouter", "OpenRouter", make_client())]
     ui = ScriptedUI([1, "sk-test", "n", "n", 2])
 
     result = run_setup(ui, menu=menu, store=FakeStore())
 
     assert result.usable
-    assert result.deferred == ["gemini"]
+    assert result.deferred == ["openrouter"]
     assert any("not wired into chat routing" in n for n in ui.notices)
 
 
