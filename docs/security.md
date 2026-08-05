@@ -66,6 +66,32 @@ silently disable authentication. All auth failures return an identical
 - The state directory (`.relay`) is created with default permissions and
   should be owned by the service account.
 
+### Windows-specific security behavior
+
+Windows does not map POSIX permission bits, so the `0600` guarantees
+above do not exist there. The equivalent protections are provided by the
+**user-profile ACL** and by where Relay puts files:
+
+- `platform.db`, its `-wal`/`-shm` sidecars, `.corrupt-*.bak` backups,
+  and `.env` are created under the invoking user's profile/working
+  directory and are not world-readable by default. Relay does **not**
+  force ACL changes on these files on Windows.
+- The permission-mode tests (`mode == 0o600` checks in the test suite)
+  are **skipped on Windows** and only execute on POSIX (Linux CI). A
+  Windows deploy should rely on profile ACLs and, in shared-user or
+  service contexts, tighten ACLs at the directory level so only the
+  service account can read `state_dir` and `.env`.
+- The **keyring requirement** on Windows is the OS Credential Manager,
+  which the `keyring` package uses automatically for the interactive
+  user. Two caveats:
+  - Running Relay as a Windows service under a virtual account may have
+    **no accessible credential store**; verify with `relay provider keys
+    set` / `relay provider keys migrate`, or point
+    `RELAY_KEYRING_BACKEND` at an encrypted, headless-capable backend.
+  - When the keyring is unavailable or `RELAY_KEYRING=false`, provider
+    keys fall back to `.env` (plaintext on disk) — see the at-rest
+    section below.
+
 ## Keyring backends and headless servers
 
 The `keyring` package picks a backend for the current session. On a
@@ -80,6 +106,40 @@ there may be no backend or no desktop session:
   `relay provider keys set` / `relay provider keys migrate` succeed.
 - The migration command aborts before touching `.env` if a keyring write
   fails, so a keyring outage never leaves a half-migrated environment.
+
+## At-rest protection of provider secrets (deployment requirement)
+
+Relay has **no encryption-at-rest subsystem of its own.** Provider keys
+are protected at rest in exactly one way: the **OS keyring**, which
+encrypts its own material and which Relay never holds a master key for.
+
+What this means in practice:
+
+- **With `RELAY_KEYRING=true` and a working backend**, provider keys are
+  stored in the encrypted OS credential store (Windows Credential
+  Manager / macOS Keychain / libsecret) and never written to disk in
+  plaintext.
+- **Without a keyring** (`RELAY_KEYRING=false`, or a backend that is
+  unavailable), provider keys fall back to the `.env` file, which is
+  **plaintext on disk** (permission-tightened to `0600` on POSIX only).
+  The runtime also treats an empty keyring read as "no stored key" and
+  degrades to the `.env` value rather than failing the request.
+
+There is intentionally **no Relay-side key-encryption key** that would
+encrypt provider keys when the keyring is absent: that design was
+evaluated (P6.4) and rejected to avoid a new at-rest crypto subsystem
+whose master key would itself need a safe home. The consequence is a
+**deployment requirement**, not a code fix:
+
+> Run Relay with `RELAY_KEYRING=true` and an encrypted, working keyring
+> backend. If that is not possible, protect the `.env` file at rest —
+> full-disk encryption, directory ACLs limited to the service account,
+> and rotating provider keys promptly — and treat `.env` as the
+> secret it contains.
+
+The migration runbook (`relay provider keys migrate`) is the supported
+path out of plaintext `.env` storage; see the [deployment
+runbook](deployment.md) for steps and rollback.
 
 ## Redaction contract
 

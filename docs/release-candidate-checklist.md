@@ -11,7 +11,12 @@ providers remain disabled (deferred until the cloud gateway is stable).
 |---|---|---|
 | `tests/test_rc_validation.py` | Full production-profile gateway behavior against scripted loopback upstreams standing in for NVIDIA/OpenAI (deterministic, repeatable) | **28 passed** |
 | `tests/run_live_smoke.py` | Real cloud connectivity through the real server using live `.env` keys | **6/6 vs NVIDIA** |
-| Full regression `pytest tests -q` | No behavior change outside the gateway surface | **821 passed, 5 skipped** |
+| Full regression `pytest tests -q` | No behavior change outside the gateway surface | **1916 passed, 18 skipped** |
+| CI (`.github/workflows/ci.yml`) | Full suite + compile check on Linux (Python 3.11/3.12) and Windows (Python 3.12); sdist/wheel build + fresh-venv install smoke on Linux | Pass on merge gate |
+
+The 1916/18 count is the P6.3+ baseline (previously 821/5). The suite is
+run as a merge gate by CI, so the regression row is verified on every
+push.
 
 Run order (offline checks first, then the paid live smoke):
 

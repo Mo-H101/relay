@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Compile check (app and tests)
+        run: python -m compileall -q app tests
+
+      - name: Run full test suite
+        run: python -m pytest tests -q
+
+  packaging:
+    name: Packaging (build + wheel install smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build setuptools wheel
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Install wheel into fresh venv and smoke test
+        run: |
+          python -m venv .venv-smoke
+          .venv-smoke/bin/python -m pip install --upgrade pip
+          .venv-smoke/bin/python -m pip install dist/*.whl
+          .venv-smoke/bin/relay --help
+          .venv-smoke/bin/relay --version

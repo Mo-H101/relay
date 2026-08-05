@@ -130,6 +130,16 @@ that still live in `.env`, run the migration command (§ runbook below).
 With keyring enabled, runtime resolution is keyring-first with the `.env`
 value as fallback.
 
+**At-rest requirement:** Relay has no encryption-at-rest subsystem of its
+own. Provider keys are protected at rest only by the OS keyring. If the
+keyring is unavailable (for example, a Windows service under a virtual
+account, or a headless box without a configured
+`RELAY_KEYRING_BACKEND`), provider keys fall back to plaintext `.env` —
+treat that file as a secret and protect it with disk encryption and
+service-account ACLs. See [security.md](security.md) for the full
+"At-rest protection of provider secrets" section and the Windows-specific
+behavior notes.
+
 ### 3. Enable persistence for learned state
 
 ```bash
