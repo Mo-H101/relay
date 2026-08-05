@@ -136,6 +136,91 @@ class TestProxyRequestKwargsMethod:
         assert external["proxy"] == "http://proxy:8080"
 
 
+class TestConnectivityProbe:
+    def _capture_get(self, monkeypatch, response, recorded):
+        def handler(url, **kwargs):
+            recorded["url"] = url
+            recorded["headers"] = kwargs.get("headers", {})
+            recorded["timeout"] = kwargs.get("timeout")
+            return response
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.get", handler
+        )
+
+    def test_success_with_key_sends_bearer_and_times_out_at_ten(
+        self, monkeypatch
+    ):
+        recorded = {}
+        self._capture_get(monkeypatch, FakeResponse(status_code=200), recorded)
+
+        ok, details, latency = OpenAICompatibleClient().connectivity_probe(
+            make_provider()
+        )
+
+        assert ok is True
+        assert details == "HTTP 200"
+        assert isinstance(latency, int)
+        assert recorded["url"] == "https://api.example.com/v1/models"
+        assert recorded["headers"]["Authorization"] == "Bearer sk-test"
+        assert recorded["timeout"] == 10
+
+    def test_no_key_sends_no_auth_header(self, monkeypatch):
+        recorded = {}
+        self._capture_get(monkeypatch, FakeResponse(status_code=200), recorded)
+
+        provider = Provider(
+            name="Test", base_url="https://api.example.com/v1", api_key=""
+        )
+
+        ok, details, _ = OpenAICompatibleClient().connectivity_probe(provider)
+
+        assert ok is True
+        assert "Authorization" not in recorded["headers"]
+
+    def test_http_error_status_is_failure(self, monkeypatch):
+        recorded = {}
+        self._capture_get(monkeypatch, FakeResponse(status_code=503), recorded)
+
+        ok, details, _ = OpenAICompatibleClient().connectivity_probe(
+            make_provider()
+        )
+
+        assert ok is False
+        assert details == "HTTP 503"
+
+    def test_connection_exception_returns_failure(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.ConnectError("connection refused")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.get", handler
+        )
+
+        ok, details, latency = OpenAICompatibleClient().connectivity_probe(
+            make_provider()
+        )
+
+        assert ok is False
+        assert "connection refused" in details
+        assert isinstance(latency, int)
+
+    def test_timeout_exception_returns_failure(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.TimeoutException("timed out")
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.get", handler
+        )
+
+        ok, details, _ = OpenAICompatibleClient().connectivity_probe(
+            make_provider()
+        )
+
+        assert ok is False
+        assert "timed out" in details
+
+
 class TestChat:
     def test_chat_returns_message_content(self, monkeypatch):
         recorded = {}

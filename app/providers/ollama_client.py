@@ -324,6 +324,30 @@ class OllamaClient:
         """
         return proxy_request_kwargs(provider, url)
 
+    def connectivity_probe(self, provider) -> tuple:
+        """
+        Probe provider connectivity using the keyless convention.
+
+        Returns ``(ok, details, latency_ms)`` for the health checker.
+        """
+        url = f"{provider.base_url.rstrip('/')}{provider.health_endpoint}"
+        start = time.perf_counter()
+
+        try:
+            response = httpx.get(
+                url,
+                timeout=10,
+                **proxy_request_kwargs(provider, url),
+            )
+            ok = response.status_code == 200
+            details = f"HTTP {response.status_code}"
+        except Exception as exc:
+            ok = False
+            details = str(exc)
+
+        latency = int((time.perf_counter() - start) * 1000)
+        return ok, details, latency
+
     def chat(
         self,
         provider,

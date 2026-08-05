@@ -967,6 +967,34 @@ class TestHealthCheck:
         assert report.status == "unavailable"
 
 
+class TestConnectivityProbe:
+    def test_probe_returns_tuple_with_x_api_key(self, monkeypatch):
+        recorded = {}
+
+        def get_handler(url, **kwargs):
+            recorded["url"] = url
+            recorded["headers"] = kwargs.get("headers", {})
+            return httpx.Response(
+                200, json={}, request=httpx.Request("GET", url)
+            )
+
+        monkeypatch.setattr(
+            "app.providers.anthropic_client.httpx.get", get_handler
+        )
+
+        provider = anthropic_defn().build_provider(api_key="sk-test")
+
+        ok, details, latency = AnthropicClient().connectivity_probe(provider)
+
+        assert ok is True
+        assert details == "HTTP 200"
+        assert isinstance(latency, int)
+        assert recorded["url"] == "https://api.anthropic.com/v1/models"
+        assert recorded["headers"]["x-api-key"] == "sk-test"
+        assert recorded["headers"]["anthropic-version"] == "2023-06-01"
+        assert "Authorization" not in recorded["headers"]
+
+
 class TestFailover:
     def test_chat_service_fails_over_from_anthropic(self, monkeypatch):
         service = ChatService()

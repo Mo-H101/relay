@@ -70,6 +70,76 @@ def set_connectivity(monkeypatch, checker, ok, details="ok", latency=5):
     )
 
 
+class TestConnectivityDispatch:
+    class _Resp:
+        status_code = 200
+
+    def test_client_probe_is_used_when_present(self, fake_registry):
+        calls = []
+
+        class ProbingClient:
+            def connectivity_probe(self, provider):
+                calls.append(provider.name)
+                return (True, "HTTP 200", 7)
+
+        fake_registry["Test"] = ProbingClient()
+        checker = HealthChecker()
+        provider = make_provider([])
+
+        ok, details, latency = checker._check_connectivity(provider)
+
+        assert (ok, details, latency) == (True, "HTTP 200", 7)
+        assert calls == ["Test"]
+
+    def test_fallback_used_for_unknown_client(self, monkeypatch):
+        captured = {}
+
+        def fake_get(url, **kwargs):
+            captured["url"] = url
+            captured["headers"] = kwargs.get("headers", {})
+            captured["timeout"] = kwargs.get("timeout")
+            return self._Resp()
+
+        monkeypatch.setattr("app.services.health_checker.httpx.get", fake_get)
+
+        provider = Provider(
+            name="Ghost", base_url="https://ghost.invalid", api_key="k"
+        )
+
+        ok, details, latency = HealthChecker()._check_connectivity(provider)
+
+        assert ok is True
+        assert details == "HTTP 200"
+        assert isinstance(latency, int)
+        assert captured["url"] == "https://ghost.invalid/models"
+        assert captured["headers"]["Authorization"] == "Bearer k"
+        assert captured["timeout"] == 10
+
+    def test_client_probe_matches_fallback_for_same_response(self, monkeypatch):
+        import app.services.health_checker as hc
+
+        from app.providers.openai_compat_client import OpenAICompatibleClient
+
+        calls = []
+
+        def shared_get(url, **kwargs):
+            calls.append(url)
+            return self._Resp()
+
+        monkeypatch.setattr(hc.httpx, "get", shared_get)
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.get", shared_get
+        )
+
+        provider = make_provider([])
+
+        fallback = HealthChecker()._check_connectivity(provider)
+        probe = OpenAICompatibleClient().connectivity_probe(provider)
+
+        assert probe == fallback
+        assert len(calls) == 2
+
+
 class TestCapabilities:
     def test_embedding_is_not_chat_testable(self):
         for model in [

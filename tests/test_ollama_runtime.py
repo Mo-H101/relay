@@ -64,6 +64,53 @@ def make_provider(base_url="http://localhost:11434"):
     return Provider(name="Ollama", base_url=base_url)
 
 
+class TestConnectivityProbe:
+    def test_success_is_keyless_and_hits_health_endpoint(self, monkeypatch):
+        recorded = {}
+
+        def handler(url, **kwargs):
+            recorded["url"] = url
+            recorded["headers"] = kwargs.get("headers", {})
+            recorded["timeout"] = kwargs.get("timeout")
+            return FakeResponse(status_code=200)
+
+        monkeypatch.setattr("app.providers.ollama_client.httpx.get", handler)
+
+        provider = make_provider()
+        provider.health_endpoint = "/api/tags"
+
+        ok, details, latency = OllamaClient().connectivity_probe(provider)
+
+        assert ok is True
+        assert details == "HTTP 200"
+        assert isinstance(latency, int)
+        assert recorded["url"] == "http://localhost:11434/api/tags"
+        assert recorded["headers"] == {}
+        assert recorded["timeout"] == 10
+
+    def test_http_error_status_is_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.ollama_client.httpx.get",
+            lambda *args, **kwargs: FakeResponse(status_code=500),
+        )
+
+        ok, details, _ = OllamaClient().connectivity_probe(make_provider())
+
+        assert ok is False
+        assert details == "HTTP 500"
+
+    def test_connection_exception_returns_failure(self, monkeypatch):
+        def handler(url, **kwargs):
+            raise httpx.ConnectError("server offline")
+
+        monkeypatch.setattr("app.providers.ollama_client.httpx.get", handler)
+
+        ok, details, _ = OllamaClient().connectivity_probe(make_provider())
+
+        assert ok is False
+        assert "server offline" in details
+
+
 def ollama_defn():
     return PROVIDER_REGISTRY["ollama"]
 

@@ -183,3 +183,31 @@ def test_runtime_provider_exposes_proxy_request_kwargs_method(provider_id):
         client.proxy_request_kwargs(provider, url)
         == proxy_request_kwargs(provider, url)
     )
+
+
+@pytest.mark.parametrize("provider_id", sorted(RUNTIME_READY))
+def test_runtime_provider_exposes_connectivity_probe(provider_id, monkeypatch):
+    defn = PROVIDER_REGISTRY[provider_id]
+    client = defn.client()
+    probe = client.connectivity_probe
+
+    assert callable(probe)
+
+    class _Resp:
+        status_code = 200
+
+    monkeypatch.setattr(
+        type(client).connectivity_probe.__globals__["httpx"],
+        "get",
+        lambda *args, **kwargs: _Resp(),
+    )
+
+    provider = defn.build_provider(
+        api_key="sk-test", base_url=defn.base_url_default
+    )
+
+    ok, details, latency = probe(provider)
+
+    assert ok is True
+    assert details == "HTTP 200"
+    assert isinstance(latency, int)
