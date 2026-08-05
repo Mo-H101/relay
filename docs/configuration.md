@@ -83,7 +83,8 @@ and "incomplete/failed setup"; it is independent of whether a `.env` exists.
 > honored as the runtime fallback and for installs that never enable the
 > keyring, but the tools no longer write them when `RELAY_KEYRING=true`
 > and the migrate command removes them from `.env`. Prefer the OS keyring
-> (below); the env vars are scheduled for removal in P6.
+> (below); the env vars remain the fallback for the foreseeable future
+> (removal is deferred beyond P6).
 
 ### Key storage and credential precedence
 
@@ -124,6 +125,13 @@ lifecycle.
 | Variable | Default | Reloadable | Meaning |
 | --- | --- | --- | --- |
 | `RELAY_API_KEY` | *(empty)* | yes | When set, every route except `/` and `/health` requires this key via `Authorization: Bearer <key>` or `X-Relay-API-Key: <key>`. |
+
+With `RELAY_AUTH_STORE=true`, per-client keys can be managed from the CLI
+or admin API: `relay keys add|list|remove|rotate|prune` and
+`GET/POST /admin/keys`. The `relay events` CLI and `GET /admin/events`
+tail the security event log (schema v5) written to `state_dir/platform.db`;
+rows are redacted at write time. See [security.md](security.md) for the
+rotation/prune runbooks and event-log contract.
 
 ## Task routing and classification
 
@@ -222,7 +230,7 @@ lifecycle.
 | `PERSISTENCE_ENABLED` | `false` | no | Persist learned state to SQLite. |
 | `PERSISTENCE_PATH` | `relay_state.db` | no | SQLite database path. |
 | `PERSISTENCE_FLUSH_INTERVAL_SECONDS` | `60` | no | Write-behind flush interval (min 1). |
-| `PERSISTENCE_RETENTION_DAYS` | `0` | yes | Retention for persisted failure history in days; `0` disables pruning. |
+| `PERSISTENCE_RETENTION_DAYS` | `0` | yes | Retention in days for persisted failure history and the security event log (`events` table); `0` disables pruning. |
 
 ## Recommended production profile
 

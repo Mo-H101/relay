@@ -523,6 +523,15 @@ class RelayMetrics:
             "Administrative key-management actions by action and outcome.",
             ("action", "outcome"),
         )
+        self.events_written = r.counter(
+            "relay_events_written_total",
+            "Security events durably written to the events table.",
+        )
+        self.events_failed = r.counter(
+            "relay_events_failed_total",
+            "Security events that could not be durably written "
+            "(audit degraded).",
+        )
 
         # Persistence
         self.persistence_enabled = r.gauge(

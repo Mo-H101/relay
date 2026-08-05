@@ -145,6 +145,11 @@ The database never contains prompts, responses, API keys, proxy
 credentials, or correlation ids. Ensure the directory is writable by the
 service account and backed up like any other database file.
 
+`PERSISTENCE_RETENTION_DAYS` also bounds the security event log (the
+`events` table in `state_dir/platform.db`): rows older than the window are
+pruned on the same retention tick (`0` disables pruning). See the
+[security model](security.md) for the event-log contract.
+
 ### 4. Enable feedback so routing learns
 
 ```bash
@@ -256,6 +261,55 @@ Safety:
 
 After migration the provider-key env vars can be removed; they are
 already deprecated and are resolved as a fallback only.
+
+## Relay key rotation and pruning runbook
+
+Operator access to Relay is authenticated by `rl_` keys stored as scrypt
+hashes in `relay_keys.db` (imported into `platform.db` by `relay
+migrate`). Rotate and prune them from the CLI or the admin API.
+
+```bash
+# Rotate one key: prints the new raw key exactly once, then revokes the
+# original. Non-interactive automation passes --yes.
+relay keys rotate <key_id> --yes
+
+# Dry-run: list terminal keys (revoked, or expired) that are past the
+# 30-day grace window. Nothing is changed.
+relay keys prune
+
+# Execute the prune (removes only terminal rows past the grace window).
+relay keys prune --yes
+
+# Tail the security event log (key.create / key.rotate / key.prune /
+# auth.failure / ...), newest first.
+relay events --limit 100
+```
+
+- `--older-than-days N` shortens/lengthens the prune grace window; active
+  rows are never touched.
+- Equivalent API surfaces: `POST /admin/keys/{id}/rotate`,
+  `GET /admin/keys` (entries carry `expires_soon`),
+  `GET /admin/events?action=&outcome=&limit=` (admin scope).
+- `relay migrate` prunes terminal keys automatically after import and
+  records `key.prune`; a purge failure never fails the migration.
+
+## Platform database and `relay migrate`
+
+Relay consolidates persistence in `state_dir/platform.db` (SQLite, schema
+v5): API keys, learned-state aggregates, model status, and the security
+event log. An existing installation imports the legacy stores
+(`relay_keys.db`, `relay_state.db`) in place, in-process and under a
+lock:
+
+```bash
+relay migrate --dry-run   # print the plan, change nothing
+relay migrate --yes       # import + verify + commit (auto-prunes terminal keys)
+relay migrate --rollback  # restore sources from backup, remove platform.db
+```
+
+The migration aborts safely on import or verification failure and rolls
+back from a backup; it never fails the run because the auto-prune found
+nothing or failed. Back up `state_dir/` before migrating.
 
 ## Graceful shutdown
 

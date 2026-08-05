@@ -6,6 +6,7 @@ Storage only: no auth, API, or provider runtime wiring is exercised here.
 
 import os
 import stat
+import time
 
 import pytest
 
@@ -183,6 +184,7 @@ def test_list_returns_metadata_only(store):
             "created_at",
             "last_used_at",
             "revoked_at",
+            "expires_soon",
         }
 
 
@@ -201,6 +203,25 @@ def test_scopes_default_and_custom(store):
 
     key_id, _ = store.create("scoped", scopes=["admin"])
     assert store.get_by_id(key_id)["scopes"] == ["admin"]
+
+
+def test_expires_soon_window(store):
+    now = time.time()
+
+    soon_id, _ = store.create("soon", expires_at=now + 3 * 86400)
+    later_id, _ = store.create("later", expires_at=now + 30 * 86400)
+    none_id, _ = store.create("none")
+    expired_id, _ = store.create("expired", expires_at=now - 1)
+
+    assert store.get_by_id(soon_id)["expires_soon"] is True
+    assert store.get_by_id(later_id)["expires_soon"] is False
+    assert store.get_by_id(none_id)["expires_soon"] is False
+    assert store.get_by_id(expired_id)["expires_soon"] is False
+
+    # Listing carries the same flag.
+    flags = {entry["label"]: entry["expires_soon"] for entry in store.list()}
+    assert flags["soon"] is True
+    assert flags["later"] is False
 
 
 def test_label_is_required(store):

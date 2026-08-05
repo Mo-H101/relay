@@ -25,6 +25,7 @@ _FULL_TABLE_SET = {
     "quality_aggregates",
     "decision_stats",
     "model_status",
+    "events",
 }
 
 
@@ -63,7 +64,7 @@ class TestOpenAndSchema:
 
     def test_migration_from_scratch_history(self, tmp_path):
         # A fresh, empty file starts at user_version 0 and runs the full
-        # history (v1 -> v4), including api_keys.
+        # history (v1 -> v5), including api_keys and events.
         path = str(tmp_path / "history.db")
 
         platform_conn = platform_store.open_connection(path)
@@ -76,8 +77,53 @@ class TestOpenAndSchema:
         }
         platform_conn.close()
 
-        assert version == platform_store.SCHEMA_VERSION
+        assert version == platform_store.SCHEMA_VERSION == 5
         assert _FULL_TABLE_SET <= tables
+
+    def test_v4_to_v5_additive_upgrade(self, tmp_path):
+        # Build an explicit v4 database (migrations 1..4 only), write a
+        # sentinel key, then let open_connection advance it to v5. The
+        # upgrade is additive: existing rows survive byte-identical.
+        path = str(tmp_path / "v4.db")
+        conn = sqlite3.connect(path)
+
+        for target in range(1, 5):
+            for statement in platform_store.MIGRATIONS[target]:
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {target}")
+
+        conn.execute(
+            "INSERT INTO api_keys (id, key_hash, key_salt, kdf, label,"
+            " scopes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "sentinel-key",
+                b"\x01" * 32,
+                b"\x02" * 16,
+                "argon2",
+                "kept",
+                '["chat"]',
+                1234.0,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        opened = platform_store.open_connection(path)
+        version = opened.execute("PRAGMA user_version").fetchone()[0]
+        tables = {
+            row[0]
+            for row in opened.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        label = opened.execute(
+            "SELECT label FROM api_keys WHERE id = 'sentinel-key'"
+        ).fetchone()[0]
+        opened.close()
+
+        assert version == 5
+        assert "events" in tables
+        assert label == "kept"
 
     def test_newer_schema_version_rejected(self, tmp_path):
         path = tmp_path / "newer.db"

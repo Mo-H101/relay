@@ -13,6 +13,8 @@ def _has_usable_provider() -> bool:
     keyless local provider is enabled. Driven by the provider registry so
     adding a provider is a registry entry, not a new branch here.
     """
+    from app.providers.factory import resolve_provider_key
+
     for defn in PROVIDER_REGISTRY.values():
         if not getattr(settings, defn.enabled_attr):
             continue
@@ -20,9 +22,7 @@ def _has_usable_provider() -> bool:
         if defn.kind == "local":
             return True
 
-        key = getattr(settings, defn.key_attr) if defn.key_attr else ""
-
-        if key:
+        if resolve_provider_key(defn):
             return True
 
     return False
@@ -113,7 +113,8 @@ def main(argv=None) -> None:
             "Run 'relay' (or 'relay tui') for the terminal interface, "
             "'relay serve' for the headless API server, 'relay setup' "
             "to (re)run the setup wizard, 'relay keys' to manage API "
-            "keys, 'relay provider keys' to manage provider keys, and "
+            "keys, 'relay provider keys' to manage provider keys, "
+            "'relay events' to tail the security audit log, and "
             "'relay migrate' to consolidate legacy state files into "
             "platform.db."
         ),
@@ -175,6 +176,15 @@ def main(argv=None) -> None:
 
     add_migrate_flags(migrate)
 
+    events = subparsers.add_parser(
+        "events",
+        help="Tail the durable security-event log (newest first).",
+    )
+
+    from app.cli.events import add_events_parser
+
+    add_events_parser(events)
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -195,6 +205,10 @@ def main(argv=None) -> None:
         from app.cli.migrate import _run_migrate
 
         _run_migrate(args, parser)
+    elif args.command == "events":
+        from app.cli.events import _run_events
+
+        _run_events(args, parser)
     elif args.command is None:
         if _config_configured():
             _cmd_tui()

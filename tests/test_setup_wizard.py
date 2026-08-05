@@ -218,6 +218,8 @@ def test_local_connectivity_failure_is_incomplete(isolated_state):
 
 
 def test_existing_key_kept_and_revalidated(isolated_state):
+    # The wizard offers an existing key (from its store / keyring, G6)
+    # and revalidates it instead of prompting for a fresh one.
     menu = [make_defn("openai", "OpenAI", make_client())]
     store = FakeStore(env={"FAKE_KEY": "old-key"})
     ui = ScriptedUI([1, "y", "n", "n", 2])

@@ -278,3 +278,108 @@ def test_ops_event_recorded_for_create(admin, store, client):
     assert len(events) == 1
     assert events[0].route == "keys/create"
     assert events[0].key_id == created["id"]
+
+
+# ---------------------------------------------- P6.2 audit surface
+
+
+def test_create_records_key_create_event(admin, store, client, isolated_event_log):
+    created = client.post(
+        "/admin/keys", headers=_AUTH, json={"label": "ci"}
+    ).json()
+
+    events = isolated_event_log.query(action="key.create")
+    assert len(events) == 1
+    assert events[0]["actor"] == "bootstrap"
+    assert events[0]["target"] == created["id"]
+    assert events[0]["detail"]["label"] == "ci"
+    assert created["key"] not in str(events[0])
+
+
+def test_admin_events_endpoint_returns_newest_first(
+    admin, store, client, isolated_event_log
+):
+    client.post("/admin/keys", headers=_AUTH, json={"label": "one"})
+    client.post("/admin/keys", headers=_AUTH, json={"label": "two"})
+
+    body = client.get("/admin/events", headers=_AUTH).json()
+    assert body["total"] >= 2
+    assert all(
+        "action" in e and "actor" in e and "detail" in e
+        for e in body["events"]
+    )
+    timestamps = [e["ts"] for e in body["events"]]
+    assert timestamps == sorted(timestamps, reverse=True)
+
+
+def test_admin_events_action_filter(admin, store, client, isolated_event_log):
+    client.post("/admin/keys", headers=_AUTH, json={"label": "one"})
+
+    body = client.get("/admin/events?action=key.create", headers=_AUTH).json()
+    assert body["total"] == 1
+    assert all(e["action"] == "key.create" for e in body["events"])
+
+    body = client.get("/admin/events?action=key.prune", headers=_AUTH).json()
+    assert body["total"] == 0
+    assert body["events"] == []
+
+
+def test_admin_events_invalid_outcome_is_400(admin, store, client):
+    response = client.get("/admin/events?outcome=bogus", headers=_AUTH)
+    assert response.status_code == 400
+    assert "outcome" in response.json()["detail"]
+
+
+def test_admin_events_requires_admin_scope(store, client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "")
+    monkeypatch.setattr(settings, "relay_auth_store", True)
+    _, raw_key = store.create("chat-only", scopes=["chat", "v1"])
+    response = client.get(
+        "/admin/events", headers={"Authorization": f"Bearer {raw_key}"}
+    )
+    assert response.status_code == 403
+
+
+def test_create_audit_failure_returns_500(admin, store, client, monkeypatch):
+    from app.services import event_log as event_log_module
+    from app.services.event_log import EventLog
+
+    broken = EventLog(str(store.path).rsplit(".db", 1)[0] + "-audit.db")
+    monkeypatch.setattr(broken, "_ensure_open", lambda: False)
+    monkeypatch.setattr(event_log_module, "event_log", lambda: broken)
+
+    response = client.post(
+        "/admin/keys", headers=_AUTH, json={"label": "ci"}
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Audit write failed."
+
+
+def test_revoke_audit_failure_returns_500(admin, store, client, monkeypatch):
+    from app.services import event_log as event_log_module
+    from app.services.event_log import EventLog
+
+    key_id, _ = store.create("ci")
+    broken = EventLog(str(store.path).rsplit(".db", 1)[0] + "-audit.db")
+    monkeypatch.setattr(broken, "_ensure_open", lambda: False)
+    monkeypatch.setattr(event_log_module, "event_log", lambda: broken)
+
+    response = client.delete(f"/admin/keys/{key_id}", headers=_AUTH)
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Audit write failed."
+
+
+def test_rotate_audit_failure_returns_500(admin, store, client, monkeypatch):
+    from app.services import event_log as event_log_module
+    from app.services.event_log import EventLog
+
+    key_id, _ = store.create("ci")
+    broken = EventLog(str(store.path).rsplit(".db", 1)[0] + "-audit.db")
+    monkeypatch.setattr(broken, "_ensure_open", lambda: False)
+    monkeypatch.setattr(event_log_module, "event_log", lambda: broken)
+
+    response = client.post(f"/admin/keys/{key_id}/rotate", headers=_AUTH)
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Audit write failed."

@@ -31,8 +31,9 @@ Relay distinguishes two kinds of credential:
   libsecret) under service name `relay`, keyed by provider id.
 - Without it, provider keys are written to `.env` for compatibility.
   The provider-key env vars (`NVIDIA_API_KEY`, `OPENAI_API_KEY`, …) are
-  **deprecated**: still honored as a fallback, no longer written by the
-  tools after migration, and scheduled for removal in P6.
+  **deprecated but still honored**: they remain the runtime fallback when
+  the keyring is disabled or holds no entry; removal is deferred beyond
+  the P6 scope.
 
 ## Credential precedence
 
@@ -104,14 +105,78 @@ API keys, proxy credentials, or correlation ids; the opaque `key_id`
   `revoked` (soft) → permanent `delete`. `last_used_at` is recorded on
   successful store-backed auth.
 - `relay keys add` prints the raw key exactly once. `relay keys remove`
-  revokes. `/admin/keys` covers the full operator surface (create, list,
-  inspect, revoke, permanent delete).
-- **Rotation**: `KeyStore.rotate` exists internally but is not yet
-  exposed by the CLI or `/admin/keys` (a P6 API candidate). Today,
-  rotate a Relay key by creating a new key and revoking the old one.
+  revokes. `relay keys rotate <key_id>` (or `POST /admin/keys/{id}/rotate`)
+  replaces a key with a fresh one: the new raw key is returned exactly
+  once, then the original is revoked in the same operation. Rotation
+  preserves the key's label and scopes. Non-interactive CLI runs require
+  `--yes`; a revoked key cannot be rotated (`409` from the API).
+- `/admin/keys` covers the full operator surface (create, list, inspect,
+  revoke, rotate, permanent delete). List entries carry `expires_soon` so
+  operators can spot keys at risk (within `_EXPIRY_WINDOW_DAYS` = 7 days of
+  expiry); the CLI prints an `exp` marker in `relay keys list`.
+- **Rotation runbook** (Relay keys): create the replacement (`relay keys
+  rotate <key_id>` or `/admin/keys/{id}/rotate`), migrate clients to the
+  new key, then keep the old key revoked-but-present until the grace window
+  passes. A short overlap is safe because both old and new keys are valid
+  during the swap. Purge the revoked rows once they are terminal and past
+  the grace window (`relay keys prune --yes`).
 - Provider-key rotation: `relay provider keys set <id>` writes the new
   value to the keyring (or `.env` with keyring off); the migration
-  command is idempotent and safe to re-run after a rotation.
+  command is idempotent and safe to re-run after a rotation. Writes are
+  refused non-interactively without `--yes`.
+
+## Pruning terminal keys
+
+`relay keys prune` deletes **terminal rows only**: keys that were revoked,
+or expired keys past their `expires_at`. Rows still active are never
+touched. A grace window keeps rows that became terminal recently so an
+operator can still inspect them.
+
+- `relay keys prune` — dry run by default: lists what would be removed
+  and changes nothing.
+- `--older-than-days N` — prune keys that have been terminal longer than
+  N days (default 30, matching the internal `_PRUNE_GRACE_DAYS`).
+- `--yes` — execute the prune; without it a non-interactive run is a dry
+  run.
+- `--json` — machine-readable output (dry-run or executed).
+- `relay migrate` runs the same prune automatically after import and
+  records a `key.prune` event; a purge failure never fails the migration.
+
+## Security event log
+
+Relay records a durable, append-only security event log in the `events`
+table of `state_dir/platform.db` (schema v5). Rows carry `ts`, `action`,
+`outcome`, `actor` (`cli`, `api`, `bootstrap`, …), `target` (an opaque key
+id), and a small `detail` map. Example actions: `key.create`, `key.revoke`,
+`key.rotate`, `key.prune`, `auth.failure`, `auth.success`,
+`provider_key.set`, `provider_key.migrate`, `migrate.run`.
+
+- Rows are **redacted at write time**: no raw keys, prompts, responses,
+  or correlation ids are ever stored, so the log is safe to tail and
+  export.
+- Read surfaces: `relay events [--action …] [--outcome …] [--limit N]
+  [--json]` (newest first) and `GET /admin/events?action=&outcome=&limit=`
+  (admin scope, bounded).
+- Write semantics: the hot path (auth) is **best-effort** — an event-log
+  failure is recorded in metrics and never breaks a request; admin and
+  operator paths are **fail-visible** so a broken audit log cannot hide a
+  failed security action.
+- Retention: `events` rows older than `PERSISTENCE_RETENTION_DAYS` are
+  pruned on the flusher's retention tick (default `0` = disabled).
+
+## Incident notes
+
+- If a Relay API key leaks, revoke it (`relay keys remove <id>` or
+  `/admin/keys`) and rotate a replacement (`relay keys rotate <id>`).
+  Store hashes cannot be recovered into raw keys, so revocation is the
+  only mitigation.
+- If a provider key leaks, rotate it at the provider and update Relay
+  with `relay provider keys set`.
+- Bootstrapping `RELAY_API_KEY`: rotate by editing `.env` and reloading.
+  Moving it into a vault-adjacent store is a P6 item.
+- Audit: use `relay events` or `/admin/events` to trace key lifecycle and
+  auth outcomes after an incident; the redaction contract guarantees the
+  log holds no recoverable secrets.
 
 ## Migrating provider keys out of `.env`
 
@@ -120,15 +185,6 @@ into the OS keyring, then removes it from `.env`. It never prints a
 secret, is dry-run safe, aborts before `.env` removal on a keyring write
 failure, and treats conflicts conservatively (skip unless `--force`).
 After migration, set `RELAY_KEYRING=true` so runtime resolution reads the
-keyring. See the [deployment runbook](deployment.md) for steps and
-rollback.
-
-## Incident notes
-
-- If a Relay API key leaks, revoke it (`relay keys remove <id>` or
-  `/admin/keys`) and create a replacement. Store hashes cannot be
-  recovered into raw keys, so revocation is the only mitigation.
-- If a provider key leaks, rotate it at the provider and update Relay
-  with `relay provider keys set`.
-- Bootstrapping `RELAY_API_KEY`: rotate by editing `.env` and reloading.
-  Moving it into a vault-adjacent store is a P6 item.
+keyring. A keyring-only install is detected as configured by the setup
+wizard, so first-run setup is not re-launched. See the [deployment
+runbook](deployment.md) for steps and rollback.

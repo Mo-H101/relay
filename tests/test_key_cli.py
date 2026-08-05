@@ -71,6 +71,50 @@ def test_keys_add_requires_positive_expiry(store, run_cli):
     assert exc.value.code == 2
 
 
+def test_keys_list_json_carries_expires_soon(store, run_cli):
+    import time as _time
+
+    store.create("soon", expires_at=_time.time() + 3 * 86400)
+    store.create("none")
+
+    out, _ = run_cli(["keys", "list", "--json"])
+    payload = json.loads(out)
+    flags = {entry["label"]: entry["expires_soon"] for entry in payload}
+    assert flags == {"soon": True, "none": False}
+
+
+def test_keys_list_marks_expiring_keys(store, run_cli):
+    import time as _time
+
+    store.create("soon", expires_at=_time.time() + 3 * 86400)
+    store.create("none")
+
+    out, _ = run_cli(["keys", "list"])
+    assert "exp" in out
+
+
+def test_keys_add_and_revoke_record_audit_events(
+    store, run_cli, isolated_event_log
+):
+    out, _ = run_cli(["keys", "add", "--label", "opencode"])
+    raw = _extract_added_key(out)
+    key_id = store.verify(raw)["id"]
+
+    run_cli(["keys", "remove", key_id, "--yes"])
+
+    create_events = isolated_event_log.query(action="key.create")
+    assert len(create_events) == 1
+    assert create_events[0]["target"] == key_id
+    assert create_events[0]["detail"]["label"] == "opencode"
+
+    revoke_events = isolated_event_log.query(action="key.revoke")
+    assert len(revoke_events) == 1
+    assert revoke_events[0]["target"] == key_id
+
+    # The raw key never lands in any event row.
+    assert raw not in repr(isolated_event_log.query())
+
+
 def test_provider_keys_unknown_provider(no_keyring, run_cli):
     with pytest.raises(SystemExit) as exc:
         run_cli(["provider", "keys", "set", "nope", "sk-x"])
@@ -217,7 +261,9 @@ def test_keys_add_json_includes_raw(store, run_cli):
 # ---------------------------------------------------- provider keys (env)
 
 def test_provider_keys_set_writes_env(no_keyring, run_cli, tmp_path):
-    out, _ = run_cli(["provider", "keys", "set", "nvidia", "sk-env-1234"])
+    out, _ = run_cli(
+        ["provider", "keys", "set", "nvidia", "sk-env-1234", "--yes"]
+    )
     assert "Stored key for nvidia" in out
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
@@ -226,8 +272,8 @@ def test_provider_keys_set_writes_env(no_keyring, run_cli, tmp_path):
 
 
 def test_provider_keys_remove_clears_env(no_keyring, run_cli, tmp_path):
-    run_cli(["provider", "keys", "set", "nvidia", "sk-env-1234"])
-    out, _ = run_cli(["provider", "keys", "remove", "nvidia"])
+    run_cli(["provider", "keys", "set", "nvidia", "sk-env-1234", "--yes"])
+    out, _ = run_cli(["provider", "keys", "remove", "nvidia", "--yes"])
     assert "Removed key for nvidia" in out
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
@@ -236,11 +282,23 @@ def test_provider_keys_remove_clears_env(no_keyring, run_cli, tmp_path):
 
 def test_provider_keys_set_stdin(no_keyring, run_cli, monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "stdin", io.StringIO("sk-stdin-5678\n"))
-    out, _ = run_cli(["provider", "keys", "set", "nvidia", "-"])
+    out, _ = run_cli(
+        ["provider", "keys", "set", "nvidia", "-", "--yes"]
+    )
     assert "Stored key for nvidia" in out
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "sk-stdin-5678" in env_text
+
+
+def test_provider_keys_set_refuses_noninteractive_without_yes(
+    no_keyring, run_cli, tmp_path
+):
+    with pytest.raises(SystemExit) as exc:
+        run_cli(["provider", "keys", "set", "nvidia", "sk-env-9999"])
+    assert exc.value.code == 1
+
+    assert not (tmp_path / ".env").exists()
 
 
 # ------------------------------------------------- provider keys (keyring)
@@ -275,15 +333,17 @@ def _enable_keyring(monkeypatch):
 def test_provider_keys_keyring_lifecycle(monkeypatch, run_cli, tmp_path):
     fake = _enable_keyring(monkeypatch)
 
-    out, _ = run_cli(["provider", "keys", "set", "openai", "sk-keyring-9876"])
+    out, _ = run_cli(
+        ["provider", "keys", "set", "openai", "sk-keyring-9876", "--yes"]
+    )
     assert "Stored key for openai" in out
     assert fake.get("openai") == "sk-keyring-9876"
 
-    out, _ = run_cli(["provider", "keys", "remove", "openai"])
+    out, _ = run_cli(["provider", "keys", "remove", "openai", "--yes"])
     assert "Removed key for openai" in out
     assert fake.get("openai") == ""
 
-    out, _ = run_cli(["provider", "keys", "remove", "openai"])
+    out, _ = run_cli(["provider", "keys", "remove", "openai", "--yes"])
     assert "Removed key for openai" in out
 
 

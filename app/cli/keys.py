@@ -16,13 +16,13 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from app.services.key_store import KeyStore
+from app.services.key_store import KeyStore, _PRUNE_GRACE_DAYS
 
 
 def add_keys_parser(parser) -> None:
     """
-    Attach the ``list``/``add``/``remove``/``test`` subparsers to a
-    ``relay keys`` parser.
+    Attach the ``list``/``add``/``remove``/``test``/``rotate``/``prune``
+    subparsers to a ``relay keys`` parser.
     """
     sub = parser.add_subparsers(dest="keys_command")
 
@@ -61,6 +61,50 @@ def add_keys_parser(parser) -> None:
         "--yes",
         action="store_true",
         help="Confirm revocation non-interactively.",
+    )
+
+    p = sub.add_parser(
+        "rotate",
+        help=(
+            "Replace a key with a fresh one. The new raw key is shown "
+            "exactly once; the previous key is revoked."
+        ),
+    )
+    p.add_argument("key_id", help="Full or shortened key id.")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm rotation non-interactively.",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON including the new raw key.",
+    )
+
+    p = sub.add_parser(
+        "prune",
+        help=(
+            "Delete terminal keys (revoked, or expired) older than the "
+            "grace window. Default is a dry run."
+        ),
+    )
+    p.add_argument(
+        "--older-than-days",
+        type=int,
+        default=_PRUNE_GRACE_DAYS,
+        help=f"Delete keys terminal for at least N days (default "
+             f"{_PRUNE_GRACE_DAYS}).",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually delete the listed keys (default is a dry run).",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON listing the candidates.",
     )
 
     p = sub.add_parser(
@@ -124,6 +168,7 @@ def _json_meta(meta: dict) -> dict:
         "label": meta["label"],
         "scopes": meta["scopes"],
         "expires_at": _iso(meta["expires_at"]),
+        "expires_soon": bool(meta.get("expires_soon")),
         "created_at": _iso(meta["created_at"]),
         "last_used_at": _iso(meta["last_used_at"]),
         "revoked_at": _iso(meta["revoked_at"]),
@@ -172,6 +217,10 @@ def _run_keys(args, parser) -> None:
         _cmd_keys_add(args, parser)
     elif args.keys_command == "remove":
         _cmd_keys_remove(args, parser)
+    elif args.keys_command == "rotate":
+        _cmd_keys_rotate(args, parser)
+    elif args.keys_command == "prune":
+        _cmd_keys_prune(args, parser)
     elif args.keys_command == "test":
         _cmd_keys_test(args, parser)
     elif args.keys_command == "provider":
@@ -194,11 +243,12 @@ def _cmd_keys_list(args) -> None:
         return
 
     for entry in entries:
+        marker = "exp" if entry.get("expires_soon") else "-"
         print(
             f"{_short(entry['id'])}  {entry['label']}  "
             f"{','.join(entry['scopes']) or '-'}  {_iso(entry['expires_at'])}  "
             f"{_iso(entry['created_at'])}  {_iso(entry['last_used_at'])}  "
-            f"{_iso(entry['revoked_at'])}"
+            f"{_iso(entry['revoked_at'])}  {marker}"
         )
 
 
@@ -224,6 +274,13 @@ def _cmd_keys_add(args, parser) -> None:
         key_id, raw_key = _store().create(label, scopes=scopes, expires_at=expires_at)
     except Exception as exc:  # noqa: BLE001 - surface short, never the value
         _fail("could not create key", exc)
+
+    _emit(
+        "key.create",
+        actor="cli",
+        target=key_id,
+        detail={"scope_count": len(scopes), "label": label},
+    )
 
     if args.json:
         print(
@@ -298,7 +355,164 @@ def _cmd_keys_remove(args, parser) -> None:
         return
 
     store.revoke(meta["id"])
+    _emit("key.revoke", actor="cli", target=meta["id"])
     print(f"Revoked {_short(meta['id'])}")
+
+
+def _cmd_keys_rotate(args, parser) -> None:
+    """
+    ``relay keys rotate``: create a replacement key and revoke the
+    original. The new raw key is printed exactly once; non-interactive
+    runs require ``--yes``.
+    """
+    key_id = args.key_id.strip()
+    store = _store()
+    meta = _resolve_key_id(store, key_id)
+
+    if meta is None:
+        _fail(f"unknown key {_short(key_id)}")
+
+    if meta["revoked_at"] is not None:
+        _fail(f"cannot rotate revoked key {_short(meta['id'])}")
+
+    if not args.yes:
+        if sys.stdin.isatty():
+            confirm = input(f"Rotate key {_short(meta['id'])}? [y/N] ")
+            if confirm.strip().lower() not in ("y", "yes"):
+                print("Cancelled.")
+                return
+        else:
+            print(
+                f"Refusing to rotate {_short(meta['id'])}: pass --yes to "
+                "confirm non-interactively.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+    try:
+        result = store.rotate(meta["id"])
+    except Exception as exc:  # noqa: BLE001 - surface short, never the value
+        _fail("could not rotate key", exc)
+
+    if result is None:
+        _fail(f"unknown key {_short(meta['id'])}")
+
+    new_id, raw_key = result
+    _emit(
+        "key.rotate",
+        actor="cli",
+        target=meta["id"],
+        detail={"new_key_id": new_id},
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "key_id": new_id,
+                    "label": meta["label"],
+                    "scopes": meta["scopes"],
+                    "expires_at": _iso(meta["expires_at"]),
+                    "api_key": raw_key,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    print(f"Key ID: {new_id}")
+    print(f"Label: {meta['label']}")
+    print(f"Scopes: {','.join(meta['scopes']) or '-'}")
+    print(f"Expires: {_iso(meta['expires_at'])}")
+    print("---")
+    print(f"API Key: {raw_key}")
+    print("Shown once — store it now. The previous key has been revoked.")
+
+
+def _terminal_before(meta: dict, cutoff_ts: float) -> bool:
+    """
+    True when ``meta`` describes a terminal row (revoked, or expired with
+    ``expires_at`` in the past) that became terminal before ``cutoff_ts``.
+    Mirrors the ``KeyStore.prune`` predicate for the dry-run listing.
+    """
+    revoked_at = meta.get("revoked_at")
+    if revoked_at is not None:
+        return revoked_at < cutoff_ts
+
+    expires_at = meta.get("expires_at")
+    if expires_at is not None and expires_at <= time.time():
+        return expires_at < cutoff_ts
+
+    return False
+
+
+def _cmd_keys_prune(args, parser) -> None:
+    """
+    ``relay keys prune``: delete terminal keys older than the grace
+    window. Default is a dry run listing the candidates; ``--yes`` runs
+    the delete. Active keys are never touched.
+    """
+    if args.older_than_days <= 0:
+        parser.error("--older-than-days must be a positive number of days")
+
+    store = _store()
+
+    try:
+        cutoff = time.time() - args.older_than_days * 86400
+        candidates = [
+            entry
+            for entry in store.list()
+            if _terminal_before(entry, cutoff)
+        ]
+    except Exception as exc:  # noqa: BLE001 - surface short, never the value
+        _fail("could not list keys", exc)
+
+    removed = scanned = 0
+    if args.yes:
+        try:
+            removed, scanned = store.prune(cutoff)
+        except Exception as exc:  # noqa: BLE001 - surface short, never the value
+            _fail("could not prune keys", exc)
+
+        _emit(
+            "key.prune",
+            actor="cli",
+            outcome="ok",
+            detail={"removed": removed, "scanned": scanned},
+        )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "dry_run": not args.yes,
+                    "older_than_days": args.older_than_days,
+                    "candidates": [_json_meta(entry) for entry in candidates],
+                    "removed": removed,
+                    "scanned": scanned,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    if not candidates:
+        print("No terminal keys to prune.")
+        return
+
+    print(
+        f"{len(candidates)} terminal key(s) older than "
+        f"{args.older_than_days} day(s):"
+    )
+
+    for entry in candidates:
+        print(f"  {_short(entry['id'])}  {entry['label']}")
+
+    if not args.yes:
+        print("Dry run: nothing changed. Pass --yes to prune.")
+        return
+
+    print(f"Removed {removed} terminal key(s).")
 
 
 def _cmd_keys_test(args, parser) -> None:
@@ -325,3 +539,36 @@ def _fail(message: str, exc: Exception | None = None) -> None:
         print(message, file=sys.stderr)
 
     raise SystemExit(1)
+
+
+def _emit(
+    action: str,
+    *,
+    actor: str = "cli",
+    target: str = "",
+    outcome: str = "ok",
+    detail: dict | None = None,
+) -> None:
+    """
+    Best-effort security-event write from the CLI. A failed audit write
+    never fails the command; it surfaces as a stderr warning so the
+    operator knows the action was not durably recorded.
+    """
+    from app.services.event_log import event_log
+
+    try:
+        recorded = event_log().emit(
+            action,
+            actor=actor,
+            target=target,
+            outcome=outcome,
+            detail=detail,
+        )
+    except Exception:  # noqa: BLE001 - audit failure must not crash the CLI
+        recorded = False
+
+    if not recorded:
+        print(
+            "warning: audit event not recorded",
+            file=sys.stderr,
+        )

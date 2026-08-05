@@ -160,7 +160,8 @@ def _deny(request: Request, reason: str, status_code: int = 401):
     """
     Record an auth failure and raise the matching response. The body and
     headers are identical for every failure so callers cannot distinguish
-    reasons from the response; the reason is visible only in metrics.
+    reasons from the response; the reason is visible only in metrics and
+    the durable audit log.
     """
     relay_metrics.record_auth(
         True,
@@ -168,11 +169,38 @@ def _deny(request: Request, reason: str, status_code: int = 401):
         "",
         failure_reason=reason,
     )
+    _audit(
+        "auth.failure",
+        outcome="denied" if reason == "forbidden" else "failed",
+        detail={"reason": reason},
+    )
     raise HTTPException(
         status_code=status_code,
         detail="Unauthorized" if status_code == 401 else "Forbidden",
         headers={"WWW-Authenticate": "Bearer"} if status_code == 401 else None,
     )
+
+
+def _event_log():
+    """
+    Resolve the process-wide event log for best-effort auth audit rows.
+    Tests monkeypatch this accessor to inject an isolated log.
+    """
+    from app.services import event_log as event_log_module
+
+    return event_log_module.event_log()
+
+
+def _audit(action: str, **kwargs) -> None:
+    """
+    Best-effort security-event write from the auth dependency. Never
+    raises and never blocks the request; a failure only increments
+    ``relay_events_failed_total`` (D8).
+    """
+    try:
+        _event_log().emit(action, **kwargs)
+    except Exception:  # noqa: BLE001 - audit must never break auth
+        pass
 
 
 _STORE_SINGLETON: KeyStore | None = None
@@ -215,6 +243,7 @@ def _grant_store(request: Request, meta: dict, scheme: str) -> None:
         _deny(request, "forbidden", status_code=403)
 
     relay_metrics.record_auth(True, True, scheme, key_id=meta["id"])
+    _audit("auth.success", actor=meta["id"], detail={"method": scheme})
 
 
 def require_api_key(request: Request) -> None:
@@ -237,6 +266,7 @@ def require_api_key(request: Request) -> None:
 
     if request.url.path in PUBLIC_PATHS:
         relay_metrics.record_auth(True, True, "public")
+        _audit("auth.success", detail={"method": "public"})
         return
 
     token = _extract_token(request)
@@ -256,6 +286,7 @@ def require_api_key(request: Request) -> None:
             auth_enabled=True,
         )
         relay_metrics.record_auth(True, True, scheme)
+        _audit("auth.success", actor="bootstrap", detail={"method": scheme})
         return
 
     if settings.relay_auth_store:
@@ -264,6 +295,11 @@ def require_api_key(request: Request) -> None:
         except KeyStoreError as exc:
             relay_metrics.record_auth(
                 True, False, "", failure_reason="store_unavailable"
+            )
+            _audit(
+                "auth.failure",
+                outcome="failed",
+                detail={"reason": "store_unavailable"},
             )
             raise HTTPException(
                 status_code=401,

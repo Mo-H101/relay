@@ -17,6 +17,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -26,6 +27,10 @@ from app.services import platform_store
 from app.services.platform_store import PlatformStoreError, SCHEMA_VERSION
 
 _MANIFEST_NAME = "migration-manifest.json"
+
+# P6.2 post-migrate purge window (D4): terminal key rows younger than
+# this many days are kept after import; older rows are removed.
+_PRUNE_GRACE_DAYS = 30
 
 # Columns imported 1:1 from the legacy stores. The platform schema replays
 # the source DDL verbatim, so selecting explicit columns is order-safe.
@@ -369,6 +374,64 @@ def _verify(platform, source_counts: dict) -> None:
                 )
 
 
+def _prune_after_migrate(layout: dict) -> dict:
+    """
+    Purge terminal key rows older than the grace window (D4).
+
+    Runs after import/verify and before the manifest commit; mirrors
+    ``KeyStore.prune`` so the predicate has a single source of truth.
+    Returns ``{"removed": ..., "scanned": ...}``.
+    """
+    from app.services.key_store import KeyStore, _PRUNE_GRACE_DAYS
+
+    try:
+        store = KeyStore(str(layout["platform_db"]))
+
+        try:
+            removed, scanned = store.prune(
+                time.time() - _PRUNE_GRACE_DAYS * 86400
+            )
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - a failed purge must not fail the run
+        return {"removed": 0, "scanned": 0}
+
+    return {"removed": removed, "scanned": scanned}
+
+
+def _emit_migrate_events(layout: dict, prune_info: dict) -> None:
+    """
+    Record the ``key.prune`` and ``migrate.run`` audit events in the
+    migrated database through the EventLog service (best-effort).
+    """
+    from app.services.event_log import EventLog
+
+    try:
+        log = EventLog(str(layout["platform_db"]))
+
+        try:
+            log.emit(
+                "key.prune",
+                actor="system",
+                outcome="ok",
+                detail={
+                    "removed": prune_info["removed"],
+                    "scanned": prune_info["scanned"],
+                    "source": "migrate",
+                },
+            )
+            log.emit(
+                "migrate.run",
+                actor="system",
+                outcome="ok",
+                detail={"platform_schema_version": SCHEMA_VERSION},
+            )
+        finally:
+            log.close()
+    except Exception:  # noqa: BLE001 - audit failure must not fail the run
+        pass
+
+
 # ============================
 # Manifest
 # ============================
@@ -606,6 +669,11 @@ def _do_run(layout: dict, specs: List[dict]) -> None:
         _remove_platform_db(layout["platform_db"])
         print(f"restored sources from {layout['backups_dir'] / ts}", file=sys.stderr)
         raise SystemExit(1)
+
+    # 4b. Post-import housekeeping (D4): purge terminal keys older than
+    #     the grace window, then record audit events in the migrated DB.
+    prune_info = _prune_after_migrate(layout)
+    _emit_migrate_events(layout, prune_info)
 
     # 5. Commit the manifest.
     _write_manifest(layout, specs, source_counts, status="ok")

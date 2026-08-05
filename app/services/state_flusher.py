@@ -40,12 +40,14 @@ class StateFlusher:
         retention_days: int = 0,
         quality_store=None,
         decision_engine=None,
+        event_log_store=None,
     ) -> None:
         self._health_store = health_store
         self._telemetry = telemetry
         self._state_store = state_store
         self._quality_store = quality_store
         self._decision_engine = decision_engine
+        self._event_log_store = event_log_store
         self._interval_seconds = max(1, int(interval_seconds))
         self._retention_days = int(retention_days)
         self._stop = threading.Event()
@@ -83,6 +85,7 @@ class StateFlusher:
 
             if self._retention_days > 0:
                 self._state_store.prune_retention(self._retention_days)
+                self._prune_events(self._retention_days)
         except Exception as exc:
             self._consecutive_flush_failures += 1
             if self._consecutive_flush_failures >= 5:
@@ -162,3 +165,22 @@ class StateFlusher:
                 self.flush()
             except Exception:
                 _logger.exception("state flush failed")
+
+    def _prune_events(self, days: int) -> None:
+        """
+        Prune the durable event log to the retention window (D7).
+
+        Best-effort: a prune failure degrades to the audit-failure
+        counter instead of failing the flush.
+        """
+        if self._event_log_store is not None:
+            log = self._event_log_store
+        else:
+            from app.services import event_log as event_log_module
+
+            log = event_log_module.event_log()
+
+        try:
+            log.prune_retention(days)
+        except Exception:
+            relay_metrics.events_failed.inc()

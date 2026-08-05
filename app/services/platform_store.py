@@ -7,8 +7,8 @@ and ``StateStore``:
 * the default path ``state_dir/platform.db``,
 * the combined schema migration history (``MIGRATIONS`` +
   ``PRAGMA user_version``) replaying the legacy ``relay_keys.db`` (v1)
-  and ``relay_state.db`` (v1-v3) steps plus the new ``model_status``
-  table (v4),
+  and ``relay_state.db`` (v1-v3) steps plus the ``model_status``
+  table (v4) and the durable ``events`` audit table (v5),
 * an in-process migration lock so concurrent opens of the same file
   cannot race a migration,
 * user-only file permissions on the database plus its ``-wal``/``-shm``
@@ -38,9 +38,9 @@ from typing import List, Optional
 from app.core.config import IS_SOURCE_CHECKOUT, PROJECT_ROOT, state_dir
 
 # Combined schema version: api_keys (v1), the legacy state tables (v2),
-# the v2/v3 state additions (v3), and model_status (v4). See
-# docs/platform-db-schema.md for the full DDL and privacy contract.
-SCHEMA_VERSION = 4
+# the v2/v3 state additions (v3), model_status (v4), and events (v5).
+# See docs/platform-db-schema.md for the full DDL and privacy contract.
+SCHEMA_VERSION = 5
 
 MIGRATIONS: dict = {
     1: [
@@ -149,6 +149,22 @@ MIGRATIONS: dict = {
             updated_at REAL,
             PRIMARY KEY (provider, model)
         )
+        """,
+    ],
+    5: [
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts      REAL NOT NULL,
+            actor   TEXT NOT NULL,       -- "bootstrap" | opaque key_id | "cli" | "system"
+            action  TEXT NOT NULL,       -- bounded vocabulary (see D2)
+            target  TEXT NOT NULL,       -- opaque id / provider id / path label
+            outcome TEXT NOT NULL,       -- "ok" | "failed" | "denied"
+            detail  TEXT NOT NULL        -- JSON; redacted, no secrets
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts)
         """,
     ],
 }

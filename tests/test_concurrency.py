@@ -154,6 +154,53 @@ class FakeRelay:
         self.decision_engine = FakeRefreshable()
 
 
+class TestEventPruneVsKeyUse:
+    def test_retention_prune_and_mark_used_no_lock_escalation(self, tmp_path):
+        """
+        P6.2: the flusher's events-table retention prune runs on the same
+        WAL file as auth's ``mark_used`` writes. Concurrent connections
+        must complete without SQLITE_BUSY / lock escalation.
+        """
+        from app.services.event_log import EventLog
+        from app.services.key_store import KeyStore
+
+        db = str(tmp_path / "platform.db")
+        log = EventLog(db)
+        store = KeyStore(db)
+        key_id, raw = store.create("ci")
+        log.emit("auth.success", actor=key_id, target=key_id)
+
+        errors = []
+
+        def pruner():
+            try:
+                for _ in range(20):
+                    log.prune_retention(30)
+            except Exception as exc:
+                errors.append(exc)
+
+        def user():
+            try:
+                for _ in range(20):
+                    store.mark_used(key_id)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=pruner) for _ in range(2)]
+        threads += [threading.Thread(target=user) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        log.close()
+        store.close()
+
+        assert errors == []
+        assert store.get_by_id(key_id)["last_used_at"] is not None
+        assert log.count() == 1
+
+
 class TestReloadWhileActive:
     def test_reload_does_not_tear_when_requests_are_running(self):
         original = settings.request_timeout

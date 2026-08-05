@@ -252,6 +252,89 @@ def test_store_open_failure_fails_closed(monkeypatch, client):
     assert response.json() == {"detail": "Unauthorized"}
 
 
+# ------------------------------------------- auth events (P6.2, D8)
+
+def test_store_outage_auth_failure_event_best_effort(
+    monkeypatch, client, isolated_event_log
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "")
+    monkeypatch.setattr(settings, "relay_auth_store", True)
+
+    def _broken_store():
+        raise KeyStoreError("db unavailable")
+
+    monkeypatch.setattr("app.security.auth._key_store", _broken_store)
+
+    response = client.get(
+        "/providers", headers={"Authorization": "Bearer rl_anything"}
+    )
+    assert response.status_code == 401
+
+    events = isolated_event_log.query(action="auth.failure")
+    assert len(events) == 1
+    assert events[0]["outcome"] == "failed"
+    assert events[0]["detail"]["reason"] == "store_unavailable"
+
+
+def test_store_outage_broken_audit_log_does_not_break_auth(
+    monkeypatch, client, tmp_path
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "")
+    monkeypatch.setattr(settings, "relay_auth_store", True)
+
+    def _broken_store():
+        raise KeyStoreError("db unavailable")
+
+    monkeypatch.setattr("app.security.auth._key_store", _broken_store)
+
+    # A real EventLog whose store is unavailable: emit() fails, bumps
+    # relay_events_failed_total, and the auth hot path must not break.
+    from app.services import event_log as event_log_module
+    from app.services.event_log import EventLog
+
+    broken = EventLog(str(tmp_path / "audit.db"))
+    monkeypatch.setattr(broken, "_ensure_open", lambda: False)
+    monkeypatch.setattr(event_log_module, "event_log", lambda: broken)
+
+    response = client.get(
+        "/providers", headers={"Authorization": "Bearer rl_anything"}
+    )
+    assert response.status_code == 401
+    assert relay_metrics.events_failed.value() >= 1
+
+
+def test_auth_success_event_for_store_key(store_auth, client, isolated_event_log):
+    _, raw_key = _create_key(store_auth)
+    response = client.get(
+        "/providers", headers={"Authorization": f"Bearer {raw_key}"}
+    )
+    assert response.status_code == 200
+
+    events = isolated_event_log.query(action="auth.success")
+    assert len(events) == 1
+    assert events[0]["actor"] not in ("bootstrap", "")
+    assert events[0]["detail"]["method"] in ("bearer", "x-relay-api-key")
+
+
+def test_auth_success_event_for_bootstrap(
+    store_auth, client, monkeypatch, isolated_event_log
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "bootstrap-secret")
+    response = client.get(
+        "/providers", headers={"Authorization": "Bearer bootstrap-secret"}
+    )
+    assert response.status_code == 200
+
+    events = isolated_event_log.query(action="auth.success")
+    assert any(e["actor"] == "bootstrap" for e in events)
+
+
 def test_failure_bodies_are_identical(store_auth, client):
     key_id, revoked_raw = _create_key(store_auth)
     store_auth.revoke(key_id)

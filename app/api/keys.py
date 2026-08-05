@@ -36,6 +36,25 @@ def _store():
     return auth_module._key_store()
 
 
+def _log():
+    """
+    Resolve the shared event log through the service module so tests can
+    inject an isolated log with one monkeypatch.
+    """
+    from app.services import event_log as event_log_module
+
+    return event_log_module.event_log()
+
+
+def _actor_for(request: Request) -> str:
+    """
+    Opaque actor label for audit rows: the store key id that satisfied
+    the request, or ``"bootstrap"`` for bootstrap-key requests. Never the
+    raw key.
+    """
+    return request.scope.get("relay_key_id") or "bootstrap"
+
+
 def _meta_public(meta: dict) -> dict:
     """
     Serialize one key's metadata for API responses. Opaque fields only;
@@ -46,10 +65,23 @@ def _meta_public(meta: dict) -> dict:
         "label": meta["label"],
         "scopes": meta["scopes"],
         "expires_at": meta["expires_at"],
+        "expires_soon": bool(meta.get("expires_soon")),
         "created_at": meta["created_at"],
         "last_used_at": meta["last_used_at"],
         "revoked_at": meta["revoked_at"],
     }
+
+
+def _audit_failure() -> JSONResponse:
+    """
+    Response for an admin mutation whose synchronous audit write failed.
+    The action may already have happened; the 500 forces the operator to
+    investigate rather than believe an un-recorded action succeeded.
+    """
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Audit write failed."},
+    )
 
 
 def _store_unavailable() -> JSONResponse:
@@ -139,6 +171,18 @@ async def create_key(request: Request):
     relay_metrics.record_key_action("create", "ok")
     ops_store.record_key_action("create", key_id=key_id)
 
+    try:
+        _log().emit(
+            "key.create",
+            actor=_actor_for(request),
+            target=key_id,
+            outcome="ok",
+            detail={"scope_count": len(scopes), "label": label},
+            raise_on_error=True,
+        )
+    except Exception:  # noqa: BLE001 - audit failure surfaces as 500
+        return _audit_failure()
+
     return {
         "id": key_id,
         "label": label,
@@ -190,6 +234,7 @@ def get_key(key_id: str):
 
 @router.delete("/admin/keys/{key_id}")
 def delete_key(
+    request: Request,
     key_id: str,
     permanent: bool = Query(
         False,
@@ -217,7 +262,83 @@ def delete_key(
     relay_metrics.record_key_action("delete", "ok")
     ops_store.record_key_action("delete", key_id=key_id)
 
+    action = "key.delete" if permanent else "key.revoke"
+
+    try:
+        _log().emit(
+            action,
+            actor=_actor_for(request),
+            target=key_id,
+            outcome="ok",
+            raise_on_error=True,
+        )
+    except Exception:  # noqa: BLE001 - audit failure surfaces as 500
+        return _audit_failure()
+
     if permanent:
         return {"deleted": True}
 
     return {"revoked": True}
+
+
+@router.post("/admin/keys/{key_id}/rotate")
+def rotate_key(request: Request, key_id: str):
+    """
+    Rotate a key: create a replacement and revoke the original. Returns
+    the new raw key exactly once. A ``key.rotate`` event is written
+    synchronously; an audit failure surfaces as 500.
+    """
+    try:
+        meta = _store().get_by_id(key_id)
+    except KeyStoreError:
+        return _store_unavailable()
+
+    if meta is None:
+        relay_metrics.record_key_action("rotate", "missing")
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Key not found."},
+        )
+
+    if meta["revoked_at"] is not None:
+        relay_metrics.record_key_action("rotate", "denied")
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "Key already revoked."},
+        )
+
+    try:
+        result = _store().rotate(key_id)
+    except KeyStoreError:
+        return _store_unavailable()
+
+    if result is None:
+        relay_metrics.record_key_action("rotate", "missing")
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Key not found."},
+        )
+
+    new_id, raw_key = result
+    relay_metrics.record_key_action("rotate", "ok")
+
+    try:
+        _log().emit(
+            "key.rotate",
+            actor=_actor_for(request),
+            target=key_id,
+            outcome="ok",
+            detail={"new_key_id": new_id},
+            raise_on_error=True,
+        )
+    except Exception:  # noqa: BLE001 - audit failure surfaces as 500
+        return _audit_failure()
+
+    return {
+        "id": new_id,
+        "label": meta["label"],
+        "scopes": meta["scopes"],
+        "expires_at": meta["expires_at"],
+        "created_at": time.time(),
+        "key": raw_key,
+    }

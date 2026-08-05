@@ -84,12 +84,22 @@ def add_provider_keys_parser(parser) -> None:
         help="Key value; '-' reads it from stdin; omit for a hidden "
              "prompt on interactive terminals.",
     )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm non-interactively (required when stdin is not a TTY).",
+    )
 
     p = sub.add_parser(
         "remove",
         help="Clear a provider key. Idempotent; never echoed.",
     )
     p.add_argument("provider_id", help="Provider id (e.g. 'nvidia').")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm non-interactively (required when stdin is not a TTY).",
+    )
 
     add_migrate_parser(sub)
 
@@ -213,11 +223,15 @@ def _cmd_provider_keys_set(args, parser) -> None:
 
     value = _resolve_key_value(args, parser, defn)
 
+    _confirm_write(args, parser, f"Store {mask_key(value)} for {defn.id}?")
+
     try:
         config_store.set_provider_config(defn, api_key=value)
     except Exception as exc:  # noqa: BLE001 - surface short, never the value
+        _emit("provider_key.set", target=defn.id, outcome="failed")
         _fail("could not store provider key", exc)
 
+    _emit("provider_key.set", target=defn.id, outcome="ok")
     print(f"Stored key for {defn.id}")
 
 
@@ -226,12 +240,41 @@ def _cmd_provider_keys_remove(args, parser) -> None:
     defn = _provider_or_fail(args.provider_id)
     _require_key_capable(defn, parser)
 
+    _confirm_write(args, parser, f"Remove the stored key for {defn.id}?")
+
     try:
         config_store.set_provider_config(defn, api_key="")
     except Exception as exc:  # noqa: BLE001 - surface short, never the value
+        _emit("provider_key.remove", target=defn.id, outcome="failed")
         _fail("could not remove provider key", exc)
 
+    _emit("provider_key.remove", target=defn.id, outcome="ok")
     print(f"Removed key for {defn.id}")
+
+
+def _confirm_write(args, parser, prompt: str) -> None:
+    """
+    Guard parity with ``relay migrate`` (Decision G): interactive
+    terminals confirm with a y/N prompt; non-interactive runs require
+    ``--yes`` and are refused otherwise.
+    """
+    if args.yes:
+        return
+
+    if sys.stdin.isatty():
+        confirm = input(f"{prompt} [y/N] ")
+
+        if confirm.strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            raise SystemExit(0)
+
+        return
+
+    print(
+        "Refusing to run non-interactively: pass --yes to confirm.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def _cmd_provider_keys_migrate(args, parser) -> None:
@@ -345,6 +388,12 @@ def _cmd_provider_keys_migrate(args, parser) -> None:
             _fail("could not write provider key to the keyring", exc)
 
         moved.append((defn, status, env_value))
+        _emit(
+            "provider_key.migrate",
+            target=defn.id,
+            outcome="ok",
+            detail={"source": "env", "destination": "keyring"},
+        )
 
     # Cleanup phase: only after every write succeeded.
     for defn, _status, _env_value in moved:
@@ -390,3 +439,36 @@ def _fail(message: str, exc: Exception | None = None) -> None:
         print(message, file=sys.stderr)
 
     raise SystemExit(1)
+
+
+def _emit(
+    action: str,
+    *,
+    actor: str = "cli",
+    target: str = "",
+    outcome: str = "ok",
+    detail: dict | None = None,
+) -> None:
+    """
+    Best-effort security-event write from the CLI. A failed audit write
+    never fails the command; it surfaces as a stderr warning so the
+    operator knows the action was not durably recorded.
+    """
+    from app.services.event_log import event_log
+
+    try:
+        recorded = event_log().emit(
+            action,
+            actor=actor,
+            target=target,
+            outcome=outcome,
+            detail=detail,
+        )
+    except Exception:  # noqa: BLE001 - audit failure must not crash the CLI
+        recorded = False
+
+    if not recorded:
+        print(
+            "warning: audit event not recorded",
+            file=sys.stderr,
+        )

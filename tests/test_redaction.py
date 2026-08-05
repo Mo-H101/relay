@@ -110,3 +110,17 @@ def test_redact_dict_does_not_mutate_input():
     redact_dict(payload)
     assert payload["api_key"] == "sk-abcdefghij"
     assert payload["list"][0]["secret"] == "x"
+
+
+def test_event_log_detail_redacted_before_storage(isolated_event_log):
+    token = "rl_" + "e" * 43
+    isolated_event_log.emit(
+        "key.create",
+        actor="cli",
+        target="k-1",
+        detail={"label": "ci", "note": f"token={token}"},
+    )
+    rendered = repr(isolated_event_log.query())
+    assert token not in rendered
+    assert "rl_" not in rendered
+    assert "ci" in rendered

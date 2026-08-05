@@ -259,6 +259,7 @@ class TestRun:
                 "quality_aggregates",
                 "decision_stats",
                 "model_status",
+                "events",
             )
         }
         status = conn.execute(
@@ -274,6 +275,7 @@ class TestRun:
             "quality_aggregates": 1,
             "decision_stats": 1,
             "model_status": 1,
+            "events": 2,  # key.prune (no terminal rows) + migrate.run
         }
         assert status == "degraded"
 
@@ -382,6 +384,7 @@ class TestRun:
                 "quality_aggregates",
                 "decision_stats",
                 "model_status",
+                "events",
             )
         }
         conn.close()
@@ -394,6 +397,7 @@ class TestRun:
             "quality_aggregates": 0,
             "decision_stats": 0,
             "model_status": 0,
+            "events": 2,
         }
 
         manifest = _manifest(data_dir)
@@ -472,6 +476,110 @@ class TestSafety:
         combined = dry_out + run_out + run_err
         assert _ENV_PROVIDER_KEY not in combined
         assert "rl_" not in combined
+
+
+class TestP6Point2:
+    def test_migrate_prunes_terminal_keys_and_records_events(
+        self, tmp_path, capsys
+    ):
+        data_dir = tmp_path / "data"
+        _build_legacy(data_dir)
+
+        # Add an old-revoked terminal key next to the active legacy key.
+        now = __import__("time").time()
+        kconn = sqlite3.connect(data_dir / "relay_keys.db")
+        kconn.execute(
+            "INSERT INTO api_keys ("
+            " id, key_hash, key_salt, kdf, label, scopes, expires_at,"
+            " created_at, last_used_at, revoked_at)"
+            " VALUES ('kid-stale', x'00', x'01', 'scrypt|16384|8|1', 'stale',"
+            " '[\"chat\"]', NULL, 50.0, NULL, ?)",
+            (now - 100 * 86400,),
+        )
+        kconn.commit()
+        kconn.close()
+
+        _run(_args(yes=True, data_dir=str(data_dir)))
+
+        conn = sqlite3.connect(data_dir / "platform.db")
+        labels = {
+            row[0]
+            for row in conn.execute("SELECT label FROM api_keys")
+        }
+        actions = {
+            row[0]
+            for row in conn.execute("SELECT action FROM events")
+        }
+        prune_detail = conn.execute(
+            "SELECT detail FROM events WHERE action = 'key.prune'"
+        ).fetchone()[0]
+        run_detail = conn.execute(
+            "SELECT detail FROM events WHERE action = 'migrate.run'"
+        ).fetchone()[0]
+        conn.close()
+
+        # Auto-purge ran in execute mode only (D4): stale gone, active kept.
+        assert labels == {"opencode"}
+        assert actions == {"key.prune", "migrate.run"}
+        assert json.loads(prune_detail) == {
+            "removed": 1,
+            "scanned": 2,
+            "source": "migrate",
+        }
+        assert json.loads(run_detail)["platform_schema_version"] == 5
+
+    def test_v4_created_database_opens_cleanly_under_v5(
+        self, tmp_path, capsys
+    ):
+        data_dir = tmp_path / "data"
+        _build_legacy(data_dir)
+        _run(_args(yes=True, data_dir=str(data_dir)))
+
+        # Simulate a P6.1-era v4 platform.db: drop events, step back.
+        platform_path = data_dir / "platform.db"
+        conn = sqlite3.connect(platform_path)
+        conn.execute("DROP TABLE events")
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+        conn.close()
+
+        opened = platform_store.open_connection(str(platform_path))
+        version = opened.execute("PRAGMA user_version").fetchone()[0]
+        tables = {
+            row[0]
+            for row in opened.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        opened.close()
+
+        assert version == 5
+        assert "events" in tables
+
+    def test_purge_failure_never_fails_the_run(self, tmp_path, monkeypatch, capsys):
+        data_dir = tmp_path / "data"
+        _build_legacy(data_dir)
+
+        class _LockedStore:
+            def __init__(self, path):
+                pass
+
+            def prune(self, cutoff):
+                raise RuntimeError("keys locked")
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            "app.services.key_store.KeyStore", _LockedStore
+        )
+
+        _run(_args(yes=True, data_dir=str(data_dir)))
+
+        out = capsys.readouterr().out
+        assert "Migrated into" in out
+        assert (data_dir / "platform.db").exists()
+        assert _manifest(data_dir)["status"] == "ok"
 
 
 class TestRollback:

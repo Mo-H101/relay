@@ -203,3 +203,26 @@ def test_secret_grep_over_rendered_diagnostics_fixture():
     assert "rl_" + "e" * 43 not in rendered
     assert "sk-abcdefghijklmnopqrstuvwxyz" not in rendered
     assert "nvapi-" + "b" * 32 not in rendered
+
+
+# ----------------------------------------------- events (P6.2) privacy
+
+def test_events_table_never_holds_durable_secrets(tmp_path, isolated_event_log):
+    import sqlite3
+
+    token = "rl_" + "a" * 43
+    isolated_event_log.emit(
+        "key.create",
+        actor="cli",
+        target="k-1",
+        detail={"label": "ci", "note": f"token={token}"},
+    )
+
+    db_bytes = (tmp_path / "events.db").read_bytes()
+    assert token.encode("utf-8") not in db_bytes
+
+    conn = sqlite3.connect(tmp_path / "events.db")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+    conn.close()
+
+    assert not {"prompt", "response", "message"} & columns

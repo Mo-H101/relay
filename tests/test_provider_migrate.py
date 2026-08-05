@@ -168,6 +168,46 @@ def test_migrate_dry_run_mutates_nothing(fake_keyring, env_file, keyring_on, run
     assert "nv-key-9999" not in out
 
 
+# ------------------------------------------------- P6.2 audit events
+
+def test_provider_key_mutations_record_audit_events(
+    fake_keyring, env_file, keyring_on, run_cli, isolated_event_log
+):
+    run_cli(["provider", "keys", "set", "openai", "sk-audit-1234", "--yes"])
+
+    set_events = isolated_event_log.query(action="provider_key.set")
+    assert len(set_events) == 1
+    assert set_events[0]["target"] == "openai"
+    assert set_events[0]["outcome"] == "ok"
+
+    run_cli(["provider", "keys", "remove", "openai", "--yes"])
+
+    remove_events = isolated_event_log.query(action="provider_key.remove")
+    assert len(remove_events) == 1
+    assert remove_events[0]["target"] == "openai"
+    assert remove_events[0]["outcome"] == "ok"
+
+    # The raw key never appears in any event row.
+    assert "sk-audit-1234" not in repr(isolated_event_log.query())
+
+
+def test_provider_key_migrate_records_audit_events(
+    fake_keyring, env_file, keyring_on, run_cli, isolated_event_log
+):
+    _set_env(env_file, "NVIDIA_API_KEY", "nv-key-audit")
+
+    run_cli(["provider", "keys", "migrate", "--yes"])
+
+    migrate_events = isolated_event_log.query(action="provider_key.migrate")
+    assert len(migrate_events) == 1
+    assert migrate_events[0]["target"] == "nvidia"
+    assert migrate_events[0]["detail"] == {
+        "source": "env",
+        "destination": "keyring",
+    }
+    assert "nv-key-audit" not in repr(migrate_events)
+
+
 # ---------------------------------------------------- idempotent / conflict
 
 def test_migrate_rerun_is_noop(fake_keyring, env_file, keyring_on, run_cli):

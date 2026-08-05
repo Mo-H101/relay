@@ -49,6 +49,15 @@ SALT_LEN = 16
 RAW_PREFIX = "rl_"
 RAW_KEY_CHARS = 43
 
+# P6.2 prune grace window (D4): terminal rows (revoked, or expired with
+# ``expires_at`` in the past) become prune candidates only after this many
+# days; ``relay keys prune`` defaults to it.
+_PRUNE_GRACE_DAYS = 30
+
+# P6.2 expiring-soon window (D6): a key whose ``expires_at`` lands within
+# this many days is flagged ``expires_soon`` in its metadata.
+_EXPIRY_WINDOW_DAYS = 7
+
 _BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 _SELECT_COLUMNS = (
@@ -264,6 +273,32 @@ class KeyStore:
 
         return cursor.rowcount > 0
 
+    def prune(self, cutoff_ts: float) -> tuple:
+        """
+        Delete terminal key rows that became terminal before ``cutoff_ts``.
+
+        Terminal means revoked, or expired (``expires_at`` in the past).
+        Rows still valid are never touched. Returns ``(removed, scanned)``
+        where ``scanned`` is the number of rows examined.
+        """
+        self._ensure_open()
+
+        with self._lock:
+            scanned = self._conn.execute(
+                "SELECT count(*) FROM api_keys"
+            ).fetchone()[0]
+
+            with self._conn:
+                cursor = self._conn.execute(
+                    "DELETE FROM api_keys"
+                    " WHERE (revoked_at IS NOT NULL AND revoked_at < ?)"
+                    "    OR (expires_at IS NOT NULL AND expires_at <= ?)",
+                    (cutoff_ts, cutoff_ts),
+                )
+                removed = cursor.rowcount
+
+        return removed, scanned
+
     def mark_used(self, key_id: str) -> None:
         """
         Record the last successful use time for a key. No-op for unknown
@@ -405,15 +440,29 @@ class KeyStore:
 
     @staticmethod
     def _row_to_meta(row) -> dict:
+        expires_at = row[6]
         return {
             "id": row[0],
             "label": row[4],
             "scopes": KeyStore._decode_scopes(row[5]),
-            "expires_at": row[6],
+            "expires_at": expires_at,
             "created_at": row[7],
             "last_used_at": row[8],
             "revoked_at": row[9],
+            "expires_soon": KeyStore._expires_soon(expires_at),
         }
+
+    @staticmethod
+    def _expires_soon(expires_at: Optional[float]) -> bool:
+        """
+        True when ``expires_at`` lands within the expiring-soon window.
+        False for no-expiry keys and for keys already past expiry.
+        """
+        if expires_at is None:
+            return False
+
+        now = time.time()
+        return now < expires_at <= now + _EXPIRY_WINDOW_DAYS * 86400
 
     @staticmethod
     def _decode_scopes(text: str) -> list:

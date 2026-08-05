@@ -116,6 +116,7 @@ class Relay:
             self.state_store = None
             return
 
+        self._audit_store("store.open")
         self._load_state()
 
         if self.state_store is None:
@@ -155,7 +156,25 @@ class Relay:
             )
             self.persistence_init_error = str(exc)
             self.state_store.close()
+            self._audit_store("store.close", outcome="failed")
             self.state_store = None
+
+    def _audit_store(self, action: str, outcome: str = "ok") -> None:
+        """
+        Best-effort ``store.open``/``store.close`` audit event. Never
+        raises and never changes the init path.
+        """
+        from app.services import event_log as event_log_module
+
+        try:
+            event_log_module.event_log().emit(
+                action,
+                actor="system",
+                target="state_store",
+                outcome=outcome,
+            )
+        except Exception:  # noqa: BLE001 - audit must never break startup
+            pass
 
     def _load_providers(self):
         for defn in PROVIDER_REGISTRY.values():

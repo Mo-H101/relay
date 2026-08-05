@@ -14,6 +14,7 @@ may have a ``.env`` without a completed setup, or vice versa.
 """
 
 import json
+import os
 import time
 from typing import Literal
 
@@ -81,6 +82,17 @@ def write_setup_state(
         json.dumps(payload, indent=2),
         encoding="utf-8",
     )
+
+    # User-only permissions on POSIX (permission review): the file holds
+    # no secrets, but the write is atomic and the mode should match the
+    # rest of the state surface. chmod the temp file so the replacement
+    # inherits it.
+    if os.name != "nt":
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+
     tmp.replace(path)
 
 

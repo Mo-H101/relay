@@ -198,7 +198,26 @@ def _catalog_and_scan(
 
 
 def _configure_cloud(ui, defn, client, provider, store) -> bool:
-    current_key = store.get_env(defn.key_env) if defn.key_env else ""
+    from app.core.config import settings
+    from app.services.provider_key_store import provider_key_store
+
+    # Keyring-aware existing-key detection (G6): a keyring-only install
+    # (post `relay provider keys migrate`) is seen as configured, so the
+    # wizard offers the stored key instead of prompting for a fresh one.
+    # A keyring entry wins; otherwise the wizard's own store (the .env
+    # source of truth) supplies the existing key, exactly as before.
+    current_key = ""
+
+    if defn.key_env:
+        if settings.relay_keyring_enabled:
+            try:
+                current_key = provider_key_store.get(defn.id)
+            except Exception:
+                current_key = ""
+
+        if not current_key:
+            get_env = getattr(store, "get_env", None)
+            current_key = get_env(defn.key_env) if get_env else ""
 
     outcome = resolve_cloud_key(ui, defn, client, provider, current_key)
 
