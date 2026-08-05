@@ -296,6 +296,47 @@ class KeyStore:
         self.revoke(key_id)
         return new_id, raw_key
 
+    def classify(self, token: str) -> dict:
+        """
+        Classify a raw key against every stored row (P5 Phase 3).
+
+        Read-only: never records ``last_used_at`` and never mutates state.
+        Returns ``{"status": ..., "meta": ...}`` where ``status`` is one
+        of ``ok`` / ``invalid`` / ``expired`` / ``revoked`` and ``meta``
+        is the matched key's metadata (or None). The same constant-time
+        scrypt + digest loop as ``verify`` scans all rows, not just active
+        ones, so a revoked or expired key still resolves to its row.
+        """
+        if not token:
+            return {"status": "invalid", "meta": None}
+
+        now = time.time()
+        self._ensure_open()
+
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_SELECT_COLUMNS} FROM api_keys"
+            ).fetchall()
+
+        for row in rows:
+            _, (n, r, p) = _parse_kdf(row[3])
+            digest = _scrypt(token, row[2], n, r, p)
+
+            if not _constant_time_eq(digest, row[1]):
+                continue
+
+            meta = self._row_to_meta(row)
+
+            if row[9] is not None:
+                return {"status": "revoked", "meta": meta}
+
+            if row[6] is not None and row[6] <= now:
+                return {"status": "expired", "meta": meta}
+
+            return {"status": "ok", "meta": meta}
+
+        return {"status": "invalid", "meta": None}
+
     def verify(self, token: str) -> Optional[dict]:
         """
         Verify a raw key against active (not revoked, not expired) rows.

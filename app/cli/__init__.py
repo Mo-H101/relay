@@ -111,8 +111,9 @@ def main(argv=None) -> None:
         description=(
             "Relay — zero-friction AI gateway platform.\n\n"
             "Run 'relay' (or 'relay tui') for the terminal interface, "
-            "'relay serve' for the headless API server, and 'relay setup' "
-            "to (re)run the setup wizard."
+            "'relay serve' for the headless API server, 'relay setup' "
+            "to (re)run the setup wizard, 'relay keys' to manage API "
+            "keys, and 'relay provider keys' to manage provider keys."
         ),
     )
 
@@ -139,6 +140,29 @@ def main(argv=None) -> None:
              "behavior).",
     )
 
+    keys = subparsers.add_parser(
+        "keys",
+        help="Manage Relay API keys (create, list, revoke, test).",
+    )
+
+    from app.cli.keys import add_keys_parser
+
+    add_keys_parser(keys)
+
+    provider = subparsers.add_parser(
+        "provider",
+        help="Manage provider configuration.",
+    )
+    provider_keys = provider.add_subparsers(dest="provider_command")
+    pk = provider_keys.add_parser(
+        "keys",
+        help="Manage upstream provider API keys.",
+    )
+
+    from app.cli.provider_keys import add_provider_keys_parser
+
+    add_provider_keys_parser(pk)
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -147,6 +171,14 @@ def main(argv=None) -> None:
         _cmd_tui()
     elif args.command == "serve":
         _cmd_serve()
+    elif args.command == "keys":
+        from app.cli.keys import _run_keys
+
+        _run_keys(args, parser)
+    elif args.command == "provider":
+        from app.cli.provider_keys import _run_provider_keys
+
+        _run_provider_keys(args, parser)
     elif args.command is None:
         if _config_configured():
             _cmd_tui()
