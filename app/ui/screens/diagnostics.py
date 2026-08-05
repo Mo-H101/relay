@@ -111,7 +111,7 @@ class DiagnosticsScreen(Screen):
             "Age", "Kind", "Method", "Route", "Status", "Latency", "Provider", "Model"
         )
 
-        for event in self._facade.ops_tail(limit=200):
+        for row_index, event in enumerate(self._facade.ops_tail(limit=200)):
             latency = f"{event.latency_ms:.0f}ms" if event.latency_ms else ""
             table.add_row(
                 f"{event.age_seconds}s",
@@ -122,7 +122,7 @@ class DiagnosticsScreen(Screen):
                 latency,
                 event.provider or "-",
                 event.model or "-",
-                key=event,
+                key=f"ops-{row_index}",
             )
 
     def _refresh_log_table(self) -> None:
@@ -132,13 +132,13 @@ class DiagnosticsScreen(Screen):
 
         result = self._facade.log_tail(limit=30)
 
-        for entry in result.get("entries", []):
+        for row_index, entry in enumerate(result.get("entries", [])):
             table.add_row(
                 entry.ts[:23],
                 entry.level,
                 entry.event,
                 entry.data,
-                key=entry,
+                key=f"log-{row_index}",
             )
 
         if not result.get("entries"):

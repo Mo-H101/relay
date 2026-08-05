@@ -48,6 +48,30 @@ def test_ops_tail_newest_first():
     ops_store.clear()
 
 
+@pytest.mark.asyncio
+async def test_ops_table_renders_duplicate_same_second_events():
+    ops_store.clear()
+    ops_store.record_http("GET", "/health", 200, 5.0)
+    ops_store.record_http("GET", "/health", 200, 5.0)
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("7")
+        await pilot.pause()
+        table = app.screen.query_one("#ops-table")
+        assert table is not None
+        assert table.row_count == 2
+        await pilot.press("q")
+        await pilot.pause()
+
+    ops_store.clear()
+
+
 def test_log_tail_unconfigured():
     result = _facade().log_tail()
     assert result["available"] is False
