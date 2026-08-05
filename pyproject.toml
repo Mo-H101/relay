@@ -17,6 +17,7 @@ dependencies = [
     "rich==15.0.0",
     "textual==8.2.8",
     "platformdirs==4.11.0",
+    "keyring==25.7.0",
 ]
 
 [project.scripts]
