@@ -78,6 +78,36 @@ and "incomplete/failed setup"; it is independent of whether a `.env` exists.
 | `LMSTUDIO_API_KEY` | Key for keyed local servers; usually empty (reloadable, secret). |
 | `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY` | Reserved for future providers; parsed but unused. |
 
+> **Deprecated** (P5): the cloud provider-key env vars (`NVIDIA_API_KEY`,
+> `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) are still
+> honored as the runtime fallback and for installs that never enable the
+> keyring, but the tools no longer write them when `RELAY_KEYRING=true`
+> and the migrate command removes them from `.env`. Prefer the OS keyring
+> (below); the env vars are scheduled for removal in P6.
+
+### Key storage and credential precedence
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RELAY_KEYRING` | `false` | When true, provider keys resolve keyring-first and config writes for `api_key` go to the OS keyring instead of `.env`. Read at startup (not reloadable). |
+| `RELAY_KEYRING_BACKEND` | *(keyring default)* | Dotted `module.Class` path overriding the keyring backend (needed for headless servers). Read per call, so changes apply without restart. |
+| `RELAY_AUTH_STORE` | `false` | When true, the auth dependency also accepts keys stored in `relay_keys.db` (scrypt-hashed) with scope enforcement. Read per request. |
+
+Resolution order is fixed:
+
+1. **Bootstrap `RELAY_API_KEY` wins** over every store-backed key when
+   both are set (Phase 4 "bootstrap always wins" contract).
+2. **Provider keys**: keyring-stored key first when `RELAY_KEYRING=true`
+   and an entry exists; otherwise the `.env`/settings value; otherwise
+   empty. A keyring outage degrades to the `.env` fallback.
+3. Store-backed Relay keys require `RELAY_AUTH_STORE=true`; a store
+   outage fails closed (`401`).
+
+`relay_keys.db` stores only scrypt hashes (raw keys are shown once at
+creation and never persisted). The `.env` file is written user-only
+(`0600`) on POSIX. See [security.md](security.md) for the full model and
+lifecycle.
+
 ### Local providers
 
 | Variable | Default | Reloadable | Meaning |

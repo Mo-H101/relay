@@ -8,7 +8,7 @@ name and by known secret shapes, so even unexpected leakage of a key or
 an ``Authorization`` header cannot survive into an export.
 
 Security contract enforced by tests:
-- fake API keys (``sk-…``, ``nvapi-…``) never appear;
+- fake API keys (``sk-…``, ``nvapi-…``, ``rl_…``) never appear;
 - ``Authorization`` header values never appear;
 - request/prompt/message content never appears (it is never captured in
   the first place; the layer is the last line of defense).
@@ -35,12 +35,13 @@ SENSITIVE_KEYS = (
 )
 
 # Known secret value shapes, matched anywhere in the text. The value
-# patterns (bearer/sk/nvapi) only replace the token text, keeping any
+# patterns (bearer/sk/nvapi/rl) only replace the token text, keeping any
 # surrounding quotes so JSON exports stay parseable. The header pattern
 # then masks the whole ``authorization`` / ``x-relay-api-key`` value,
 # re-emitting a quoted placeholder when the value was quoted.
 _SK_KEY = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b")
 _NVAPI_KEY = re.compile(r"\bnvapi-[A-Za-z0-9_\-]{8,}\b")
+_RL_KEY = re.compile(r"\brl_[A-Za-z0-9]{43}\b")
 _BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=+\-]{4,}\b")
 _AUTH_HEADER = re.compile(
     r"(?i)(['\"]?\b(?:authorization|x-relay-api-key)\b['\"]?\s*[:=]\s*)"
@@ -71,6 +72,7 @@ def redact_text(text: str) -> str:
     text = _BEARER.sub(_REDACTED, text)
     text = _SK_KEY.sub(_REDACTED, text)
     text = _NVAPI_KEY.sub(_REDACTED, text)
+    text = _RL_KEY.sub(_REDACTED, text)
     text = _AUTH_HEADER.sub(_mask_auth_header, text)
     return text
 

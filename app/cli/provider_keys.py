@@ -14,14 +14,50 @@ import getpass
 import json
 import sys
 
+from app.core.config import settings
 from app.providers.registry import PROVIDER_REGISTRY
 from app.services import config_store
 from app.setup.key_validation import mask_key
 
 
+def add_migrate_parser(sub) -> None:
+    """
+    Attach the ``migrate`` subparser. Shared by ``relay provider keys``
+    (canonical home) and the ``relay keys provider`` alias so both
+    spellings accept the same flags.
+    """
+    p = sub.add_parser(
+        "migrate",
+        help=(
+            "Move cloud-provider keys from .env into the OS keyring. "
+            "Never prints secrets."
+        ),
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan and exit without changing anything.",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite a conflicting keyring entry with the .env value.",
+    )
+    p.add_argument(
+        "--provider",
+        default=None,
+        help="Restrict the migration to one provider id (e.g. 'nvidia').",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm non-interactively (required when stdin is not a TTY).",
+    )
+
+
 def add_provider_keys_parser(parser) -> None:
     """
-    Attach the ``list``/``set``/``remove`` subparsers to a
+    Attach the ``list``/``set``/``remove``/``migrate`` subparsers to a
     ``relay provider keys`` parser.
     """
     sub = parser.add_subparsers(dest="provider_keys_command")
@@ -55,6 +91,8 @@ def add_provider_keys_parser(parser) -> None:
     )
     p.add_argument("provider_id", help="Provider id (e.g. 'nvidia').")
 
+    add_migrate_parser(sub)
+
 
 def _run_provider_keys(args, parser) -> None:
     """Dispatch one ``relay provider keys`` subcommand."""
@@ -68,6 +106,8 @@ def _run_provider_keys(args, parser) -> None:
         _cmd_provider_keys_set(args, parser)
     elif args.provider_keys_command == "remove":
         _cmd_provider_keys_remove(args, parser)
+    elif args.provider_keys_command == "migrate":
+        _cmd_provider_keys_migrate(args, parser)
     else:
         parser.print_help()
 
@@ -192,6 +232,154 @@ def _cmd_provider_keys_remove(args, parser) -> None:
         _fail("could not remove provider key", exc)
 
     print(f"Removed key for {defn.id}")
+
+
+def _cmd_provider_keys_migrate(args, parser) -> None:
+    """
+    ``relay provider keys migrate``: move cloud-provider keys from ``.env``
+    into the OS keyring.
+
+    Writes land first and ``.env`` entries are removed only after every
+    write succeeds, so a keyring failure aborts with ``.env`` untouched.
+    Values never leave ``get_env -> set`` in raw form; all display uses
+    ``mask_key``.
+    """
+    from app.services.provider_key_store import provider_key_store
+
+    if args.provider:
+        if PROVIDER_REGISTRY.get(args.provider) is None:
+            parser.error(f"unknown provider '{args.provider}'")
+
+    providers = [
+        defn
+        for defn in PROVIDER_REGISTRY.values()
+        if defn.kind == "cloud"
+        and defn.key_attr
+        and defn.key_env
+        and (args.provider is None or defn.id == args.provider)
+    ]
+
+    if not providers:
+        print("No cloud providers with a keyed API to migrate.")
+        return
+
+    if not getattr(settings, "relay_keyring_enabled", False):
+        print(
+            "warning: RELAY_KEYRING is not true; set it in .env before "
+            "relying on migrated keys.",
+            file=sys.stderr,
+        )
+
+    plan = []
+
+    for defn in providers:
+        env_value = config_store.get_env(defn.key_env)
+
+        if not env_value:
+            continue
+
+        keyring_value = provider_key_store.get(defn.id)
+
+        if keyring_value == env_value:
+            status = "already"
+        elif keyring_value:
+            status = "conflict"
+        else:
+            status = "migrate"
+
+        plan.append((defn, status, env_value, keyring_value))
+
+    if args.dry_run:
+        for defn, status, env_value, keyring_value in plan:
+            if status == "migrate":
+                print(
+                    f"{defn.id:<10} migrate    env->keyring "
+                    "(already stored: no | conflict: no)"
+                )
+            elif status == "already":
+                print(
+                    f"{defn.id:<10} already    env->keyring "
+                    "(already stored: yes)"
+                )
+            else:
+                print(
+                    f"{defn.id:<10} conflict   env={mask_key(env_value)} "
+                    f"keyring={mask_key(keyring_value)} "
+                    "(--force to overwrite)"
+                )
+        return
+
+    if not args.yes:
+        if sys.stdin.isatty():
+            confirm = input(
+                f"Move {len(plan)} provider key(s) from .env into the "
+                "OS keyring? [y/N] "
+            )
+            if confirm.strip().lower() not in ("y", "yes"):
+                print("Cancelled.")
+                return
+        else:
+            print(
+                "Refusing to run non-interactively: pass --yes to confirm "
+                "the migration.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+    # Write phase: every pending key into the keyring first. A failure
+    # here aborts before any .env key is removed.
+    moved = []
+    skipped_conflicts = []
+
+    for defn, status, env_value, keyring_value in plan:
+        if status == "conflict" and not args.force:
+            skipped_conflicts.append((defn, env_value, keyring_value))
+            continue
+
+        if status == "already":
+            continue
+
+        try:
+            provider_key_store.set(defn.id, env_value)
+        except Exception as exc:  # noqa: BLE001 - never surface the value
+            _fail("could not write provider key to the keyring", exc)
+
+        moved.append((defn, status, env_value))
+
+    # Cleanup phase: only after every write succeeded.
+    for defn, _status, _env_value in moved:
+        try:
+            config_store.unset_env(defn.key_env)
+        except Exception as exc:  # noqa: BLE001 - surface short
+            _fail("could not remove provider key from .env", exc)
+
+    for defn, status, _env_value in moved:
+        label = "migrated" if status == "migrate" else "overwritten"
+        print(f"{defn.id:<10} {label}    env->keyring")
+
+    for defn, env_value, keyring_value in skipped_conflicts:
+        print(
+            f"{defn.id}: conflict: env={mask_key(env_value)} "
+            f"keyring={mask_key(keyring_value)}; use --force to overwrite",
+            file=sys.stderr,
+        )
+
+    if skipped_conflicts:
+        print(
+            f"{len(moved)} provider(s) migrated, "
+            f"{len(skipped_conflicts)} conflict(s) skipped; .env untouched "
+            "for the conflicts.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    if moved:
+        print(
+            f"Migrated {len(moved)} provider key(s) from .env into the "
+            "OS keyring."
+        )
+    else:
+        print("Nothing to migrate.")
 
 
 def _fail(message: str, exc: Exception | None = None) -> None:

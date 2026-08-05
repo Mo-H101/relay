@@ -52,6 +52,7 @@ http://localhost:8000/redoc (ReDoc).
 
 - [Architecture](docs/architecture.md) — components, layering, request flow.
 - [Configuration](docs/configuration.md) — every environment variable.
+- [Security](docs/security.md) — key model, precedence, permissions, redaction, lifecycle.
 - [Routing & decisions](docs/routing-decisions.md) — how a provider/model is chosen.
 - [Deployment](docs/deployment.md) — production hardening, persistence, auth, proxies.
 - [Troubleshooting](docs/troubleshooting.md) — common problems and diagnostics.
@@ -86,6 +87,26 @@ http://localhost:8000/redoc (ReDoc).
 `*` The documentation routes are gated by the same API-key dependency as
 every other route, so they are only reachable without a key when
 `RELAY_API_KEY` is unset.
+
+### Client API keys
+
+Create a per-client key and point your tooling at Relay with it:
+
+```bash
+relay keys add --label opencode          # prints the raw key exactly once
+```
+
+Then configure the client (OpenAI SDK, Cline, OpenCode, …):
+
+```bash
+base_url=http://relay-host:8000/v1
+api_key=<rl_... returned by `relay keys add`>
+```
+
+`relay keys list` shows metadata only, `relay keys remove <id>` revokes,
+and `relay keys test` verifies a key without echoing it. Store-backed keys
+are accepted when `RELAY_AUTH_STORE=true`; a store outage fails closed
+(`401`). See [docs/security.md](docs/security.md) for the full key model.
 
 ### Async Streaming (P3)
 

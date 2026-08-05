@@ -238,6 +238,40 @@ def test_file_permissions_user_only(store, tmp_path):
     assert mode == 0o600
 
 
+def test_sidecar_permissions_user_only(store, tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX permission check")
+
+    store.create("sidecar-perm")
+
+    for suffix in ("", "-wal", "-shm"):
+        path = tmp_path / f"relay_keys.db{suffix}"
+
+        if not path.exists():
+            continue
+
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        assert mode == 0o600, suffix
+
+
+def test_corrupt_backup_permissions_user_only(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX permission check")
+
+    path = tmp_path / "relay_keys.db"
+    path.write_bytes(b"this is not a sqlite database at all")
+
+    store = KeyStore(path)
+    store.create("after-corruption")
+    store.close()
+
+    backups = list(tmp_path.glob("relay_keys.db.corrupt-*.bak"))
+    assert len(backups) == 1
+
+    mode = stat.S_IMODE(os.stat(backups[0]).st_mode)
+    assert mode == 0o600
+
+
 def test_memory_counts(store):
     key_id, _ = store.create("opencode")
     store.create("scoped", scopes=["admin"])

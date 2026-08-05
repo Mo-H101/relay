@@ -22,9 +22,19 @@ from app.services.provider_key_store import provider_key_store
 def set_env(key: str, value: str) -> None:
     """
     Write a single value into the active ``.env`` file.
+
+    On POSIX the file is tightened to user-only (``0600``) after the write
+    so provider keys never sit at a umask-broad mode; Windows relies on the
+    user-profile ACL instead.
     """
     env_file.parent.mkdir(parents=True, exist_ok=True)
     set_key(str(env_file), key, value, quote_mode="always")
+
+    if os.name != "nt":
+        try:
+            os.chmod(str(env_file), 0o600)
+        except OSError:
+            pass
 
 
 def unset_env(key: str) -> None:

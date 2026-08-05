@@ -23,7 +23,7 @@ import hmac
 
 from fastapi import HTTPException, Request
 
-from app.core.config import settings
+from app.core.config import settings, state_dir
 from app.services.key_store import KeyStore, KeyStoreError
 from app.services.metrics import relay_metrics
 
@@ -186,6 +186,7 @@ def _key_store() -> KeyStore:
     global _STORE_SINGLETON
 
     if _STORE_SINGLETON is None:
+        state_dir.mkdir(parents=True, exist_ok=True)
         _STORE_SINGLETON = KeyStore()
 
     return _STORE_SINGLETON

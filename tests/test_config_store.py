@@ -2,6 +2,8 @@
 Config store (P1): single-writer .env persistence, no key echo.
 """
 
+import pytest
+
 from app.core.config import settings
 from app.providers.registry import PROVIDER_REGISTRY
 from app.services import config_store
@@ -19,6 +21,21 @@ def test_set_env_writes_quoted_value(monkeypatch, tmp_path):
     config_store.set_env("FOO", "bar")
 
     assert "'bar'" in env_file.read_text(encoding="utf-8")
+
+
+def test_env_file_user_only_after_write(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    if os.name == "nt":
+        pytest.skip("POSIX permission check")
+
+    env_file = _patch_env(monkeypatch, tmp_path)
+
+    config_store.set_env("NVIDIA_API_KEY", "sk-secret")
+
+    mode = stat.S_IMODE(os.stat(env_file).st_mode)
+    assert mode == 0o600
 
 
 def test_get_env_reads_process_environment(monkeypatch):

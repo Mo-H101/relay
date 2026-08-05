@@ -511,12 +511,30 @@ class KeyStore:
         except OSError:
             pass
 
+        # WAL sidecars inherit the database mode and would leak through
+        # the same directory listing; tighten them alongside the main file.
+        for suffix in ("-wal", "-shm"):
+            try:
+                side = f"{self._path}{suffix}"
+
+                if os.path.exists(side):
+                    os.chmod(side, 0o600)
+            except OSError:
+                pass
+
     def _backup_corrupt(self) -> None:
         backup_path = f"{self._path}.corrupt-{int(time.time())}.bak"
 
         try:
             if os.path.exists(self._path):
                 shutil.copy2(self._path, backup_path)
+
+                if os.name != "nt":
+                    try:
+                        os.chmod(backup_path, 0o600)
+                    except OSError:
+                        pass
+
                 os.remove(self._path)
         except OSError:
             return

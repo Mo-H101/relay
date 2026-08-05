@@ -75,6 +75,17 @@ def add_keys_parser(parser) -> None:
              "prompt on interactive terminals.",
     )
 
+    # Alias: ``relay keys provider migrate`` dispatches to the same
+    # handler as ``relay provider keys migrate`` (canonical home).
+    from app.cli.provider_keys import add_migrate_parser
+
+    provider_alias = sub.add_parser(
+        "provider",
+        help="Manage upstream provider API keys (alias for "
+             "'relay provider keys').",
+    )
+    add_migrate_parser(provider_alias.add_subparsers(dest="keys_provider_command"))
+
 
 def _store() -> KeyStore:
     """
@@ -163,6 +174,13 @@ def _run_keys(args, parser) -> None:
         _cmd_keys_remove(args, parser)
     elif args.keys_command == "test":
         _cmd_keys_test(args, parser)
+    elif args.keys_command == "provider":
+        from app.cli.provider_keys import _cmd_provider_keys_migrate
+
+        if args.keys_provider_command == "migrate":
+            _cmd_provider_keys_migrate(args, parser)
+        else:
+            parser.print_help()
     else:
         parser.print_help()
 

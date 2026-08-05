@@ -102,7 +102,35 @@ registered as real endpoints so they inherit the same guard. When the key
 is empty (default), authentication is off — do not run an exposed Relay
 with an empty key.
 
-### 2. Enable persistence for learned state
+Optionally add store-backed keys (scrypt-hashed in `relay_keys.db`) for
+per-client credentials with scope enforcement:
+
+```bash
+RELAY_AUTH_STORE=true
+relay keys add --label opencode
+```
+
+The bootstrap key always wins; see [security.md](security.md) for the
+precedence contract.
+
+### 2. Keep provider keys in the OS keyring
+
+On desktops the OS credential store is available automatically. On
+headless servers pick an encrypted backend and set `RELAY_KEYRING_BACKEND`
+to a dotted `module.Class` path:
+
+```bash
+RELAY_KEYRING=true
+# RELAY_KEYRING_BACKEND=keyrings.alt.file.PlaintextKeyring   # example
+relay provider keys set nvidia <key>
+```
+
+Keys written after `RELAY_KEYRING=true` go to the keyring. To move keys
+that still live in `.env`, run the migration command (§ runbook below).
+With keyring enabled, runtime resolution is keyring-first with the `.env`
+value as fallback.
+
+### 3. Enable persistence for learned state
 
 ```bash
 PERSISTENCE_ENABLED=true
@@ -117,7 +145,7 @@ The database never contains prompts, responses, API keys, proxy
 credentials, or correlation ids. Ensure the directory is writable by the
 service account and backed up like any other database file.
 
-### 3. Enable feedback so routing learns
+### 4. Enable feedback so routing learns
 
 ```bash
 HEALTH_FEEDBACK_ENABLED=true
@@ -128,19 +156,19 @@ Health feedback and telemetry are recorded from real request outcomes and
 are what let routing react to provider outages. Without them, routing
 stays static (priority + health probes only).
 
-### 4. Proxies
+### 5. Proxies
 
 If Relay sits behind a corporate proxy, outbound provider calls honor
 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` when `PROXY_ENABLED=true`.
 Proxy credentials are never logged or exposed. Set `PROXY_ENABLED=false`
 to disable proxy support entirely.
 
-### 5. Logs
+### 6. Logs
 
 `LOG_LEVEL` (default `INFO`) and optional `LOG_FILE` control logging.
 Log records never include prompts, responses, or secrets.
 
-### 6. Health refresh
+### 7. Health refresh
 
 For fast detection of provider outages, enable the background health
 refresher:
@@ -185,6 +213,49 @@ chat model) on an interval.
 place, including provider `enabled`/`api_key`/`model_priority` and the
 persistence retention window. Use `?dry_run=true` to preview. Validation
 errors return `400`; mid-apply failures roll back and return `500`.
+
+## Provider key migration runbook
+
+Move cloud-provider keys out of `.env` into the OS keyring with one
+command (canonical form; `relay keys provider migrate` is an alias):
+
+```bash
+# 1. Preview the plan — never prints secrets
+relay provider keys migrate --dry-run
+
+# 2. Run it (non-interactive automation passes --yes)
+relay provider keys migrate --yes
+
+# 3. Make sure runtime reads the keyring after the flip
+#    Add to .env: RELAY_KEYRING=true
+```
+
+Behavior:
+
+- **Env only** → moved to the keyring, then removed from `.env`.
+- **Keyring == env** → reported `already`, left alone (idempotent re-run
+  is a no-op).
+- **Keyring != env** → reported as a conflict with masked tails; skipped
+  unless `--force` (which overwrites the keyring entry with the `.env`
+  value). Without `--force` the command exits non-zero on any conflict.
+- **Keyring only** → skipped (nothing to migrate).
+- Output never contains raw key material; only `********abcd` tails.
+
+Safety:
+
+- Writes land **first**; `.env` entries are removed only after **all**
+  writes succeed. A keyring outage aborts with `.env` untouched and
+  providers keep working via the `.env` fallback.
+- A mid-run failure is not a broken state: each provider resolves
+  independently (keyring entries for migrated providers + env fallback
+  for the rest).
+- **Rollback one provider**: `relay provider keys set <id> <value>`
+  restores the `.env` value, or remove the keyring entry and re-set.
+- **Full undo**: `relay provider keys remove <id>` for each provider,
+  then `relay provider keys set <id>` to write `.env` again.
+
+After migration the provider-key env vars can be removed; they are
+already deprecated and are resolved as a fallback only.
 
 ## Graceful shutdown
 
