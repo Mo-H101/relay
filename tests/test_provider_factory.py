@@ -17,7 +17,7 @@ from app.providers.factory import build_runtime_provider
 from app.providers.lmstudio import create_provider as create_lmstudio_provider
 from app.providers.nvidia import create_provider as create_nvidia_provider
 from app.providers.openai import create_provider as create_openai_provider
-from app.providers.registry import PROVIDER_REGISTRY
+from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 
 
 @pytest.fixture(autouse=True)
@@ -164,3 +164,22 @@ def test_identity_falls_back_to_name():
     )
 
     assert modern.identity() == "nvidia"
+
+
+@pytest.mark.parametrize("provider_id", sorted(RUNTIME_READY))
+def test_runtime_provider_exposes_proxy_request_kwargs_method(provider_id):
+    from app.providers.openai_compat_client import proxy_request_kwargs
+
+    defn = PROVIDER_REGISTRY[provider_id]
+    client = defn.client()
+    provider = defn.build_provider(
+        api_key="sk-test", base_url=defn.base_url_default
+    )
+    url = "https://provider.invalid/v1/chat/completions"
+
+    assert hasattr(client, "proxy_request_kwargs")
+    assert callable(client.proxy_request_kwargs)
+    assert (
+        client.proxy_request_kwargs(provider, url)
+        == proxy_request_kwargs(provider, url)
+    )

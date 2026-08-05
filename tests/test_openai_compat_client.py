@@ -9,7 +9,10 @@ from app.providers.exceptions import (
 )
 from app.providers.nvidia_client import NvidiaClient
 from app.providers.openai_client import OpenAIClient
-from app.providers.openai_compat_client import OpenAICompatibleClient
+from app.providers.openai_compat_client import (
+    OpenAICompatibleClient,
+    proxy_request_kwargs,
+)
 
 
 class FakeResponse:
@@ -61,6 +64,76 @@ class TestSharedClientInheritance:
         assert issubclass(OpenAIClient, OpenAICompatibleClient)
         assert NvidiaClient().name == "NVIDIA"
         assert OpenAIClient().name == "OpenAI"
+
+
+class TestProxyRequestKwargsMethod:
+    def test_method_matches_module_function(self):
+        provider = make_provider()
+        url = "https://api.example.com/v1/chat/completions"
+
+        kwargs = OpenAICompatibleClient().proxy_request_kwargs(provider, url)
+
+        assert kwargs == proxy_request_kwargs(provider, url)
+
+    def test_forced_proxy_through_method(self):
+        provider = Provider(
+            name="Test",
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            proxy="http://proxy.internal:8080",
+        )
+        url = "https://api.example.com/v1/chat/completions"
+
+        kwargs = OpenAICompatibleClient().proxy_request_kwargs(provider, url)
+
+        assert kwargs["proxy"] == "http://proxy.internal:8080"
+        assert kwargs["trust_env"] is False
+
+    def test_empty_proxy_bypasses_through_method(self, monkeypatch):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "proxy_enabled", True)
+        monkeypatch.setattr(settings, "https_proxy", "http://global:8080")
+        provider = Provider(
+            name="Test",
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            proxy="",
+        )
+        url = "https://api.example.com/v1/chat/completions"
+
+        kwargs = OpenAICompatibleClient().proxy_request_kwargs(provider, url)
+
+        assert kwargs["proxy"] is None
+        assert kwargs["trust_env"] is False
+
+    def test_no_proxy_matches_exact_and_suffix_hosts_through_method(
+        self, monkeypatch
+    ):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "proxy_enabled", True)
+        monkeypatch.setattr(settings, "http_proxy", "http://proxy:8080")
+        monkeypatch.setattr(settings, "https_proxy", "http://proxy:8080")
+        monkeypatch.setattr(
+            settings, "no_proxy", "internal.invalid, .corp.example"
+        )
+        client = OpenAICompatibleClient()
+        provider = make_provider()
+
+        internal = client.proxy_request_kwargs(
+            provider, "https://api.internal.invalid/x"
+        )
+        corp = client.proxy_request_kwargs(
+            provider, "https://db.corp.example/x"
+        )
+        external = client.proxy_request_kwargs(
+            provider, "https://api.example.com/x"
+        )
+
+        assert internal["proxy"] is None
+        assert corp["proxy"] is None
+        assert external["proxy"] == "http://proxy:8080"
 
 
 class TestChat:

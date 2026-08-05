@@ -212,6 +212,12 @@ class OpenAICompatibleClient:
     def __init__(self, name: str = "OpenAI compatible") -> None:
         self.name = name
 
+    def proxy_request_kwargs(self, provider: Provider, url: str) -> dict:
+        """
+        Compute httpx proxy kwargs, matching the OpenAI-compatible client.
+        """
+        return proxy_request_kwargs(provider, url)
+
     def chat(
         self,
         provider: Provider,
