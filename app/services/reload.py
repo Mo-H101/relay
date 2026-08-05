@@ -27,7 +27,7 @@ from dotenv import dotenv_values
 
 from app.core.config import PROJECT_ROOT, Settings, settings
 from app.providers.base import apply_model_priority
-from app.providers.factory import build_runtime_provider
+from app.providers.factory import build_runtime_provider, resolve_provider_key
 from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 
 # Settings read dynamically at request time and safe to reload in place.
@@ -202,23 +202,45 @@ def _restore(snapshot: list) -> None:
             pass
 
 
-def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -> None:
+def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -> list:
     """
     Enable/disable providers, refresh API keys (with model discovery), and
     reorder models by priority. Mutates Provider objects in place and
     never swaps the provider list wholesale. Side-effect failures are
     non-fatal: the old models are kept.
+
+    Returns the field names applied outside the env diff (keyring-driven
+    key changes), so the caller can keep the reload report truthful. With
+    keyring disabled this is always an empty list.
     """
+    additionally_applied: list = []
+    keyring_enabled = bool(getattr(env, "relay_keyring_enabled", False))
+
     for spec in _PROVIDER_SPECS:
         prefix = spec["prefix"]
         provider = relay.provider_manager.get(spec["id"])
 
         enabled_changed = f"{prefix}_enabled" in applied_set
-        key_changed = f"{prefix}_api_key" in applied_set
+        env_key_changed = f"{prefix}_api_key" in applied_set
         priority_changed = f"{prefix}_model_priority" in applied_set
+
+        if not (enabled_changed or env_key_changed or priority_changed):
+            if not keyring_enabled or provider is None:
+                continue
+
+        # Effective key: keyring-first with the validated env as fallback.
+        # A keyring entry change is only observable when the running
+        # provider's effective key differs from the resolved one.
+        new_key = resolve_provider_key(spec["defn"], env)
+        key_changed = env_key_changed or (
+            keyring_enabled and new_key != provider.api_key
+        )
 
         if not (enabled_changed or key_changed or priority_changed):
             continue
+
+        if key_changed and not env_key_changed and keyring_enabled:
+            additionally_applied.append(f"{prefix}_api_key")
 
         new_enabled = bool(getattr(env, f"{prefix}_enabled"))
 
@@ -237,7 +259,7 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
         provider.enabled = new_enabled
 
         if key_changed:
-            provider.api_key = getattr(env, f"{prefix}_api_key")
+            provider.api_key = new_key
 
             if new_enabled and (
                 provider.has_api_key() or not provider.requires_api_key
@@ -259,6 +281,8 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
             provider.priority_models = [
                 model for model in priority if model in provider.models
             ]
+
+    return additionally_applied
 
 
 def reload_config(
@@ -327,7 +351,18 @@ def reload_config(
             for field in applied:
                 setattr(settings, field, getattr(env, field))
 
-            _apply_provider_side_effects(relay, env, set(applied), failures)
+            keyring_applied = _apply_provider_side_effects(
+                relay, env, set(applied), failures
+            )
+
+            # Keep the report truthful when a key was applied from the
+            # keyring even though its env field did not change.
+            for field in keyring_applied:
+                if field not in applied:
+                    applied.append(field)
+
+                while field in unchanged:
+                    unchanged.remove(field)
 
             relay.routing.refresh()
             relay.health_store.refresh_thresholds()

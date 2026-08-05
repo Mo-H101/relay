@@ -363,6 +363,17 @@ class Settings:
             "NVIDIA",
         )
 
+        # Keyring (P5 Phase 2): keyring-first provider-key resolution.
+        # Opt-in and non-reloadable (read at startup only). When enabled,
+        # runtime provider keys resolve keyring-first with the .env value
+        # as fallback, and config writes for api_key go to the keyring
+        # instead of .env. RELAY_KEYRING_BACKEND mirrors the keyring
+        # store's dynamic per-call read for introspection.
+        self.relay_keyring_enabled = (
+            os.getenv("RELAY_KEYRING", "false").lower() == "true"
+        )
+        self.relay_keyring_backend = os.getenv("RELAY_KEYRING_BACKEND", "")
+
         # =========================
         # Observability
         # =========================

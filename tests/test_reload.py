@@ -554,3 +554,198 @@ class TestDotenvOverlay:
         assert result["reloaded"] is True
         assert "request_timeout" in result["applied"]
         assert settings.request_timeout == 77
+
+
+class TestKeyringResolution:
+    """
+    P5 Phase 2: with RELAY_KEYRING enabled, reload applies the keyring-first
+    resolved key (env fallback otherwise). With the flag unset (existing env
+    objects), behavior is unchanged — covered by the suites above.
+    """
+
+    def _register_nvidia(self, relay, **kwargs):
+        fields = dict(
+            id="nvidia",
+            name="NVIDIA",
+            base_url="https://nvidia.invalid",
+            api_key="old-key",
+            enabled=True,
+            models=["m1"],
+        )
+        fields.update(kwargs)
+        relay.provider_manager.register(Provider(**fields))
+
+    def test_keyring_key_applied_when_env_unchanged(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.factory.provider_key_store",
+            _StaticKeyring("keyring-secret"),
+        )
+        monkeypatch.setattr(
+            "app.providers.nvidia_client.NvidiaClient.list_models",
+            lambda self, provider: ["m1"],
+        )
+
+        relay = FakeRelay()
+        self._register_nvidia(relay)
+
+        env = SimpleNamespace(
+            relay_keyring_enabled=True,
+            nvidia_enabled=True,
+            nvidia_api_key=settings.nvidia_api_key,
+            nvidia_model_priority=[],
+        )
+
+        result = reload_config(relay, env=env)
+
+        assert result["reloaded"] is True
+        assert "nvidia_api_key" in result["applied"]
+        assert "nvidia_api_key" not in result["unchanged"]
+        provider = relay.provider_manager.providers["nvidia"]
+        assert provider.api_key == "keyring-secret"
+
+    def test_env_fallback_when_keyring_entry_absent(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.factory.provider_key_store",
+            _StaticKeyring(""),
+        )
+        monkeypatch.setattr(
+            "app.providers.nvidia_client.NvidiaClient.list_models",
+            lambda self, provider: ["m1"],
+        )
+
+        relay = FakeRelay()
+        self._register_nvidia(relay)
+
+        env = SimpleNamespace(
+            relay_keyring_enabled=True,
+            nvidia_enabled=True,
+            nvidia_api_key="env-secret",
+            nvidia_model_priority=[],
+        )
+
+        result = reload_config(relay, env=env)
+
+        assert "nvidia_api_key" in result["applied"]
+        provider = relay.provider_manager.providers["nvidia"]
+        assert provider.api_key == "env-secret"
+
+    def test_keyring_entry_removed_reverts_to_env(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.factory.provider_key_store",
+            _StaticKeyring(""),
+        )
+        monkeypatch.setattr(
+            "app.providers.nvidia_client.NvidiaClient.list_models",
+            lambda self, provider: [],
+        )
+
+        relay = FakeRelay()
+        self._register_nvidia(relay, api_key="keyring-old")
+
+        env = SimpleNamespace(
+            relay_keyring_enabled=True,
+            nvidia_enabled=True,
+            nvidia_api_key="env-secret",
+            nvidia_model_priority=[],
+        )
+
+        result = reload_config(relay, env=env)
+
+        assert "nvidia_api_key" in result["applied"]
+        provider = relay.provider_manager.providers["nvidia"]
+        assert provider.api_key == "env-secret"
+
+    def test_keyring_apply_rolls_back_on_later_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.factory.provider_key_store",
+            _StaticKeyring("keyring-secret"),
+        )
+        monkeypatch.setattr(
+            "app.providers.nvidia_client.NvidiaClient.list_models",
+            lambda self, provider: ["m1"],
+        )
+
+        relay = FakeRelay()
+        self._register_nvidia(relay)
+
+        def boom():
+            raise RuntimeError("refresh exploded")
+
+        monkeypatch.setattr(relay.routing, "refresh", boom)
+
+        env = SimpleNamespace(
+            relay_keyring_enabled=True,
+            nvidia_enabled=True,
+            nvidia_api_key=settings.nvidia_api_key,
+            nvidia_model_priority=[],
+        )
+
+        result = reload_config(relay, env=env)
+
+        assert result["reloaded"] is False
+        assert result["error_kind"] == "apply"
+        provider = relay.provider_manager.providers["nvidia"]
+        assert provider.api_key == "old-key"
+
+    def test_dry_run_does_not_apply_keyring_key(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.factory.provider_key_store",
+            _StaticKeyring("keyring-secret"),
+        )
+
+        relay = FakeRelay()
+        self._register_nvidia(relay)
+
+        env = SimpleNamespace(
+            relay_keyring_enabled=True,
+            nvidia_enabled=True,
+            nvidia_api_key=settings.nvidia_api_key,
+            nvidia_model_priority=[],
+        )
+
+        result = reload_config(relay, dry_run=True, env=env)
+
+        assert result["reloaded"] is True
+        assert result["dry_run"] is True
+        assert "nvidia_api_key" in result["unchanged"]
+        provider = relay.provider_manager.providers["nvidia"]
+        assert provider.api_key == "old-key"
+
+    def test_report_never_contains_keyring_or_env_values(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.providers.factory.provider_key_store",
+            _StaticKeyring("keyring-secret"),
+        )
+        monkeypatch.setattr(
+            "app.providers.nvidia_client.NvidiaClient.list_models",
+            lambda self, provider: [],
+        )
+
+        relay = FakeRelay()
+        self._register_nvidia(relay)
+
+        env = SimpleNamespace(
+            relay_keyring_enabled=True,
+            nvidia_enabled=True,
+            nvidia_api_key="env-secret",
+            nvidia_model_priority=[],
+        )
+
+        result = reload_config(relay, env=env)
+
+        serialized = json.dumps(result)
+        assert "env-secret" not in serialized
+        assert "keyring-secret" not in serialized
+
+
+class _StaticKeyring:
+    """
+    Stub keyring returning a fixed value; keeps keyring-path reload tests
+    hermetic and off the real OS credential store.
+    """
+
+    def __init__(self, value):
+        self.value = value
+
+    def get(self, provider_id):
+        return self.value

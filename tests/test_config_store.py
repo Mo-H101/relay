@@ -2,6 +2,7 @@
 Config store (P1): single-writer .env persistence, no key echo.
 """
 
+from app.core.config import settings
 from app.providers.registry import PROVIDER_REGISTRY
 from app.services import config_store
 
@@ -111,3 +112,96 @@ def test_wizard_never_echoes_keys_via_store(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr()
     assert "super-secret-key-1234" not in out.out
     assert "super-secret-key-1234" not in out.err
+
+
+class _KeyringSpy:
+    def __init__(self):
+        self.set_calls = []
+        self.remove_calls = []
+
+    def set(self, provider_id, value):
+        self.set_calls.append((provider_id, value))
+
+    def remove(self, provider_id):
+        self.remove_calls.append(provider_id)
+
+
+def test_keyring_enabled_writes_key_to_keyring_not_env(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+    spy = _KeyringSpy()
+    monkeypatch.setattr(config_store, "provider_key_store", spy)
+    defn = PROVIDER_REGISTRY["openai"]
+
+    config_store.set_provider_config(
+        defn,
+        enabled=True,
+        api_key="sk-secret",
+        priority_models=["gpt-4o"],
+    )
+
+    assert spy.set_calls == [("openai", "sk-secret")]
+    assert spy.remove_calls == []
+
+    text = env_file.read_text(encoding="utf-8")
+    assert defn.key_env not in text
+    assert f"{defn.enabled_env}='true'" in text
+    assert f"{defn.priority_env}='gpt-4o'" in text
+
+
+def test_keyring_enabled_empty_string_removes_key(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+    spy = _KeyringSpy()
+    monkeypatch.setattr(config_store, "provider_key_store", spy)
+    defn = PROVIDER_REGISTRY["openai"]
+
+    config_store.set_provider_config(defn, api_key="")
+
+    assert spy.set_calls == []
+    assert spy.remove_calls == ["openai"]
+
+    # Keyring-enabled key writes never create or touch the .env file.
+    assert not env_file.exists()
+
+
+def test_keyring_enabled_keyless_provider_untouched(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+
+    class _ExplodingSpy:
+        def set(self, provider_id, value):
+            raise AssertionError("keyless provider must not touch keyring")
+
+        def remove(self, provider_id):
+            raise AssertionError("keyless provider must not touch keyring")
+
+    monkeypatch.setattr(config_store, "provider_key_store", _ExplodingSpy())
+    defn = PROVIDER_REGISTRY["ollama"]
+
+    config_store.set_provider_config(defn, enabled=True, api_key="nope")
+
+    text = env_file.read_text(encoding="utf-8")
+    assert f"{defn.enabled_env}='true'" in text
+
+
+def test_keyring_disabled_writes_env_and_never_keyring(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "relay_keyring_enabled", False)
+
+    class _ExplodingSpy:
+        def set(self, provider_id, value):
+            raise AssertionError("keyring consulted while disabled")
+
+        def remove(self, provider_id):
+            raise AssertionError("keyring consulted while disabled")
+
+    monkeypatch.setattr(config_store, "provider_key_store", _ExplodingSpy())
+    defn = PROVIDER_REGISTRY["openai"]
+
+    config_store.set_provider_config(
+        defn, enabled=True, api_key="sk-secret"
+    )
+
+    text = env_file.read_text(encoding="utf-8")
+    assert f"{defn.key_env}='sk-secret'" in text

@@ -12,6 +12,7 @@ resolution, and the priority reconciliation (D2: openai runtime priority
 import pytest
 
 from app.core.config import settings
+from app.providers import factory as factory_module
 from app.providers.base import Provider
 from app.providers.factory import build_runtime_provider
 from app.providers.lmstudio import create_provider as create_lmstudio_provider
@@ -211,3 +212,132 @@ def test_runtime_provider_exposes_connectivity_probe(provider_id, monkeypatch):
     assert ok is True
     assert details == "HTTP 200"
     assert isinstance(latency, int)
+
+
+class _StaticKeyring:
+    """
+    Stub keyring returning a fixed value; used to keep keyring-path tests
+    hermetic and off the real OS credential store.
+    """
+
+    def __init__(self, value):
+        self.value = value
+
+    def get(self, provider_id):
+        return self.value
+
+
+class TestProviderKeyResolution:
+    def test_resolve_disabled_keyring_uses_env_only(self, monkeypatch):
+        monkeypatch.setattr(settings, "relay_keyring_enabled", False)
+        monkeypatch.setattr(settings, "nvidia_api_key", "env-secret")
+
+        class _Stub:
+            def get(self, provider_id):
+                raise AssertionError("keyring consulted while disabled")
+
+        monkeypatch.setattr(factory_module, "provider_key_store", _Stub())
+
+        resolved = factory_module.resolve_provider_key(
+            PROVIDER_REGISTRY["nvidia"]
+        )
+
+        assert resolved == "env-secret"
+
+    def test_resolve_keyring_entry_wins_over_env(self, monkeypatch):
+        monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+        monkeypatch.setattr(settings, "nvidia_api_key", "env-secret")
+
+        def get(self, provider_id):
+            assert provider_id == "nvidia"
+            return "keyring-secret"
+
+        monkeypatch.setattr(
+            factory_module,
+            "provider_key_store",
+            _StaticKeyring("keyring-secret"),
+        )
+
+        resolved = factory_module.resolve_provider_key(
+            PROVIDER_REGISTRY["nvidia"]
+        )
+
+        assert resolved == "keyring-secret"
+
+    def test_resolve_keyring_absent_falls_back_to_env(self, monkeypatch):
+        monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+        monkeypatch.setattr(settings, "nvidia_api_key", "env-secret")
+        monkeypatch.setattr(factory_module, "provider_key_store", _StaticKeyring(""))
+
+        resolved = factory_module.resolve_provider_key(
+            PROVIDER_REGISTRY["nvidia"]
+        )
+
+        assert resolved == "env-secret"
+
+    def test_resolve_keyring_unavailable_falls_back_to_env(self, monkeypatch):
+        monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+        monkeypatch.setattr(settings, "nvidia_api_key", "env-secret")
+
+        class _Stub:
+            def get(self, provider_id):
+                raise RuntimeError("keyring unavailable")
+
+        monkeypatch.setattr(factory_module, "provider_key_store", _Stub())
+
+        resolved = factory_module.resolve_provider_key(
+            PROVIDER_REGISTRY["nvidia"]
+        )
+
+        assert resolved == "env-secret"
+
+    def test_resolve_keyless_provider_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+
+        class _Stub:
+            def get(self, provider_id):
+                raise AssertionError("keyless provider must not touch keyring")
+
+        monkeypatch.setattr(factory_module, "provider_key_store", _Stub())
+
+        assert (
+            factory_module.resolve_provider_key(PROVIDER_REGISTRY["ollama"]) == ""
+        )
+
+    def test_build_runtime_provider_uses_resolved_key(self, monkeypatch):
+        from app.providers.nvidia_client import NvidiaClient
+
+        monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+        monkeypatch.setattr(settings, "nvidia_api_key", "env-secret")
+        monkeypatch.setattr(
+            factory_module, "provider_key_store", _StaticKeyring("keyring-secret")
+        )
+        monkeypatch.setattr(
+            NvidiaClient,
+            "list_models",
+            lambda self, provider: ["a", "b"],
+        )
+
+        provider = build_runtime_provider(PROVIDER_REGISTRY["nvidia"])
+
+        assert provider.api_key == "keyring-secret"
+        assert provider.models == ["a", "b"]
+
+    def test_build_local_provider_uses_keyring_entry(self, monkeypatch):
+        from app.providers.lmstudio_client import LMStudioClient
+
+        monkeypatch.setattr(settings, "relay_keyring_enabled", True)
+        monkeypatch.setattr(settings, "lmstudio_api_key", "")
+        monkeypatch.setattr(
+            factory_module, "provider_key_store", _StaticKeyring("lmstudio-vault")
+        )
+        monkeypatch.setattr(
+            LMStudioClient,
+            "list_models",
+            lambda self, provider: ["llama-1"],
+        )
+
+        provider = build_runtime_provider(PROVIDER_REGISTRY["lmstudio"])
+
+        assert provider.api_key == "lmstudio-vault"
+        assert provider.models == ["llama-1"]

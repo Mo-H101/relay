@@ -14,8 +14,9 @@ import os
 
 from dotenv import dotenv_values, set_key, unset_key
 
-from app.core.config import env_file
+from app.core.config import env_file, settings
 from app.providers.registry import ProviderDefinition
+from app.services.provider_key_store import provider_key_store
 
 
 def set_env(key: str, value: str) -> None:
@@ -67,7 +68,16 @@ def set_provider_config(
         set_env(defn.enabled_env, "true" if enabled else "false")
 
     if api_key is not None and defn.key_env:
-        set_env(defn.key_env, api_key)
+        if settings.relay_keyring_enabled:
+            # Keyring-first writes (P5 Phase 2): keys go to the OS vault,
+            # never to .env. A key write failure raises (no plaintext
+            # fallback). Non-key fields are still written to .env below.
+            if api_key:
+                provider_key_store.set(defn.id, api_key)
+            else:
+                provider_key_store.remove(defn.id)
+        else:
+            set_env(defn.key_env, api_key)
 
     if base_url is not None and defn.base_url_env:
         set_env(defn.base_url_env, base_url)

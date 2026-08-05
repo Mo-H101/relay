@@ -16,6 +16,7 @@ crashing startup; model priority is applied from settings.
 from app.core.config import settings
 from app.providers.base import Provider, apply_model_priority
 from app.providers.registry import ProviderDefinition
+from app.services.provider_key_store import provider_key_store
 
 
 def _settings_value(attr: str | None, default):
@@ -29,6 +30,34 @@ def _settings_value(attr: str | None, default):
     return getattr(settings, attr, default) or default
 
 
+def resolve_provider_key(defn: ProviderDefinition, source=None) -> str:
+    """
+    Resolve the effective API key for a provider (P5 Phase 2).
+
+    Precedence: keyring-stored key for ``defn.id`` when keyring is enabled
+    and an entry exists; otherwise the settings/env value; otherwise empty
+    string. ``source`` selects the Settings instance to read the fallback
+    from (defaults to the global ``settings``) so reload can pass a fresh
+    validated Settings while factory uses the singleton. With keyring
+    disabled this returns exactly the settings value.
+    """
+    src = source if source is not None else settings
+
+    if not defn.key_attr:
+        return ""
+
+    if getattr(src, "relay_keyring_enabled", False):
+        try:
+            stored = provider_key_store.get(defn.id)
+        except Exception:
+            stored = ""
+
+        if stored:
+            return stored
+
+    return getattr(src, defn.key_attr, "") or ""
+
+
 def build_runtime_provider(defn: ProviderDefinition) -> Provider:
     """
     Create and return the provider described by ``defn`` using the active
@@ -38,7 +67,7 @@ def build_runtime_provider(defn: ProviderDefinition) -> Provider:
     base_url = _settings_value(defn.base_url_attr, None) or defn.base_url_default
 
     provider = defn.build_provider(
-        api_key=_settings_value(defn.key_attr, ""),
+        api_key=resolve_provider_key(defn),
         base_url=base_url,
     )
 
