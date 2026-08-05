@@ -92,6 +92,7 @@ _SIMPLE_FIELDS = (
     "https_proxy",
     "no_proxy",
     "proxy_enabled",
+    "relay_auth_store",
 )
 
 # Secrets: reported by field name only.

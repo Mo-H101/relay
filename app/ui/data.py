@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.relay import relay
 from app.providers.availability import GLYPH
 from app.providers.registry import PROVIDER_MENU, PROVIDER_REGISTRY
+from app.security.auth import auth_configured
 from app.services import config_store as config_store_module
 from app.services import setup_state
 from app.services.capabilities import is_chat_testable
@@ -745,7 +746,7 @@ class ServiceFacade:
         return client_tracking.activity()
 
     def auth_status(self) -> AuthStatus:
-        enabled = bool((settings.relay_api_key or "").strip())
+        enabled = auth_configured()
 
         return AuthStatus(
             enabled=enabled,

@@ -10,8 +10,7 @@ never inspects payloads, and never raises. Unmatched routes are labeled
 
 import time
 
-from app.core.config import settings
-from app.security.auth import auth_scheme
+from app.security.auth import auth_configured, auth_scheme
 from app.services.client_detection import classify_client
 from app.services.client_tracking import client_tracking
 from app.services.metrics import relay_metrics
@@ -96,6 +95,7 @@ class MetricsMiddleware:
                     route=route_path,
                     status=status or 500,
                     latency_ms=duration * 1000.0,
+                    key_id=scope.get("relay_key_id", ""),
                 )
                 self._record_client(scope, route_path, status or 500)
             except Exception:
@@ -114,7 +114,7 @@ class MetricsMiddleware:
             path=route_path,
             authorization=headers.get("authorization", ""),
             x_api_key=headers.get("x-relay-api-key", ""),
-            auth_enabled=bool((settings.relay_api_key or "").strip()),
+            auth_enabled=auth_configured(),
         )
         client_tracking.record(
             bucket,

@@ -23,7 +23,7 @@ class OpsEvent:
     """
 
     ts: float
-    kind: str  # "http" or "chat"
+    kind: str  # "http", "chat", or "key_admin"
     method: str = ""
     route: str = ""
     status: int | None = None
@@ -35,6 +35,7 @@ class OpsEvent:
     success: bool = True
     fallback: bool = False
     attempts: int = 0
+    key_id: str = ""
 
 
 class RequestStatsStore:
@@ -78,9 +79,12 @@ class RequestStatsStore:
         route: str,
         status: int,
         latency_ms: float,
+        key_id: str = "",
     ) -> None:
         """
-        Record a completed HTTP request event.
+        Record a completed HTTP request event. ``key_id`` is the opaque
+        KeyStore key id that authenticated the request (empty for
+        bootstrap-key or unauthenticated requests).
         """
         self._append(
             OpsEvent(
@@ -90,6 +94,27 @@ class RequestStatsStore:
                 route=route,
                 status=status,
                 latency_ms=max(0.0, latency_ms),
+                key_id=key_id,
+            )
+        )
+
+    def record_key_action(
+        self,
+        action: str,
+        key_id: str = "",
+        outcome: str = "ok",
+    ) -> None:
+        """
+        Record an administrative key-management action (P5 Phase 4).
+        Metadata only: the key id is opaque and never the raw key.
+        """
+        self._append(
+            OpsEvent(
+                ts=time.monotonic(),
+                kind="key_admin",
+                route=f"keys/{action}",
+                status=0 if outcome == "ok" else 1,
+                key_id=key_id,
             )
         )
 
@@ -153,9 +178,12 @@ class RequestStatsStore:
         Returns an all-zero/None shape when the window is empty.
         """
         events = self.events()
+        request_events = [
+            event for event in events if event.kind in ("http", "chat")
+        ]
 
-        latencies = sorted(event.latency_ms for event in events)
-        requests = len(events)
+        latencies = sorted(event.latency_ms for event in request_events)
+        requests = len(request_events)
 
         successes = 0
         stream_events = []
@@ -165,7 +193,7 @@ class RequestStatsStore:
         chat_attempts = 0
         chat_fallbacks = 0
 
-        for event in events:
+        for event in request_events:
             if event.kind == "chat":
                 chats += 1
                 chat_attempts += event.attempts

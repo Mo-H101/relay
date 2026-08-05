@@ -13,6 +13,7 @@ from app.api.chat import router as chat_router
 from app.api.diagnostics import router as diagnostics_router
 from app.api.openai import router as openai_router
 from app.api.admin import router as admin_router
+from app.api.keys import router as keys_router
 from app.api.feedback import router as feedback_router
 from app.security.auth import require_api_key
 from app.api.middleware import MetricsMiddleware
@@ -68,6 +69,7 @@ app.include_router(diagnostics_router)
 app.include_router(openai_router)
 app.include_router(metrics_router)
 app.include_router(admin_router)
+app.include_router(keys_router)
 app.include_router(feedback_router)
 
 

@@ -416,6 +416,17 @@ class Settings:
         # or the X-Relay-API-Key header.
         self.relay_api_key = os.getenv("RELAY_API_KEY", "")
 
+        # Store-backed API-key authentication (P5 Phase 4): when enabled,
+        # the auth dependency also accepts keys from the KeyStore
+        # (relay_keys.db) with scope enforcement, after the bootstrap key
+        # above. Read per request like RELAY_API_KEY, so flipping it takes
+        # effect without a restart. Off by default, preserving the
+        # bootstrap-only behavior. Fails closed: with this on, non-public
+        # requests require a valid key.
+        self.relay_auth_store = (
+            os.getenv("RELAY_AUTH_STORE", "false").lower() == "true"
+        )
+
         # =========================
         # Terminal UI
         # =========================

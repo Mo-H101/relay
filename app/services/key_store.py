@@ -262,6 +262,26 @@ class KeyStore:
 
         return cursor.rowcount > 0
 
+    def delete(self, key_id: str) -> bool:
+        """
+        Permanently remove a key row (P5 Phase 4).
+
+        Hard delete regardless of revocation state. Returns True when a
+        row was removed; False when the key was unknown. Intended for
+        administrative cleanup only; the normal lifecycle path is
+        ``revoke``.
+        """
+        self._ensure_open()
+
+        with self._lock:
+            with self._conn:
+                cursor = self._conn.execute(
+                    "DELETE FROM api_keys WHERE id = ?",
+                    (key_id,),
+                )
+
+        return cursor.rowcount > 0
+
     def mark_used(self, key_id: str) -> None:
         """
         Record the last successful use time for a key. No-op for unknown

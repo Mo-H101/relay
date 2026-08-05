@@ -513,6 +513,16 @@ class RelayMetrics:
             "relay_auth_enabled",
             "Whether API-key authentication is enabled.",
         )
+        self.auth_by_key = r.counter(
+            "relay_auth_by_key_total",
+            "Successful authentications per store key (P5 Phase 4).",
+            ("key_id",),
+        )
+        self.key_admin_actions = r.counter(
+            "relay_key_admin_actions_total",
+            "Administrative key-management actions by action and outcome.",
+            ("action", "outcome"),
+        )
 
         # Persistence
         self.persistence_enabled = r.gauge(
@@ -585,16 +595,33 @@ class RelayMetrics:
         granted: bool,
         method: str,
         failure_reason: str = "invalid",
+        key_id: Optional[str] = None,
     ) -> None:
         """
         Record an authentication decision from the auth dependency.
+        ``key_id`` is the KeyStore key that satisfied the request (P5
+        Phase 4); it is never present for bootstrap-key authentication.
         """
         self.auth_enabled.set(1 if enabled else 0)
 
         if granted:
             self.auth_success.inc(method=method)
+            if key_id:
+                self.auth_by_key.inc(key_id=key_id)
         else:
             self.auth_failures.inc(reason=failure_reason)
+
+    def record_key_action(
+        self,
+        action: str,
+        outcome: str,
+    ) -> None:
+        """
+        Record an administrative key-management action from the admin
+        key API. ``key_id`` is not recorded in metrics (it is an opaque
+        identifier only); key-level detail is emitted via ops events.
+        """
+        self.key_admin_actions.inc(action=action, outcome=outcome)
 
     def record_provider(
         self,
