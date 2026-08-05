@@ -429,23 +429,6 @@ def _cmd_keys_rotate(args, parser) -> None:
     print("Shown once — store it now. The previous key has been revoked.")
 
 
-def _terminal_before(meta: dict, cutoff_ts: float) -> bool:
-    """
-    True when ``meta`` describes a terminal row (revoked, or expired with
-    ``expires_at`` in the past) that became terminal before ``cutoff_ts``.
-    Mirrors the ``KeyStore.prune`` predicate for the dry-run listing.
-    """
-    revoked_at = meta.get("revoked_at")
-    if revoked_at is not None:
-        return revoked_at < cutoff_ts
-
-    expires_at = meta.get("expires_at")
-    if expires_at is not None and expires_at <= time.time():
-        return expires_at < cutoff_ts
-
-    return False
-
-
 def _cmd_keys_prune(args, parser) -> None:
     """
     ``relay keys prune``: delete terminal keys older than the grace
@@ -459,11 +442,7 @@ def _cmd_keys_prune(args, parser) -> None:
 
     try:
         cutoff = time.time() - args.older_than_days * 86400
-        candidates = [
-            entry
-            for entry in store.list()
-            if _terminal_before(entry, cutoff)
-        ]
+        candidates = store.list_terminal(cutoff)
     except Exception as exc:  # noqa: BLE001 - surface short, never the value
         _fail("could not list keys", exc)
 

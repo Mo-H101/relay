@@ -663,7 +663,7 @@ QUALITY_FEEDBACK_ENABLED=true
 DECISION_ENGINE_ENABLED=true
 DECISION_EXPLANATIONS_ENABLED=true
 PERSISTENCE_ENABLED=true
-PERSISTENCE_PATH=./relay_state.db
+PERSISTENCE_PATH=./.relay/platform.db
 ```
 
 2. Restart Relay. Send a handful of chats (a few succeed, force one
@@ -671,11 +671,12 @@ PERSISTENCE_PATH=./relay_state.db
 3. `curl http://127.0.0.1:8000/diagnostics` — record the "before" snapshot.
 4. Stop Relay with **`Ctrl+C`** (graceful SIGINT), watch the shutdown log.
 5. Restart Relay. `curl http://127.0.0.1:8000/diagnostics` again.
-6. Confirm `relay_state.db` exists at the project root.
+6. Confirm `platform.db` exists in the state directory (default
+   `./.relay/platform.db`).
 
 **Expected behavior**
 
-- A `relay_state.db` file (plus `-wal`/`-shm`) appears.
+- A `platform.db` file (plus `-wal`/`-shm` sidecars) appears.
 - Graceful shutdown runs a final flush (log shows it).
 - After restart, learned state (health/telemetry/quality) is retained:
   `/diagnostics` before/after are substantially the same.
@@ -684,7 +685,7 @@ PERSISTENCE_PATH=./relay_state.db
 **Signs of a bug**
 
 - State is reset on every restart (persistence not working).
-- No `relay_state.db` created despite `PERSISTENCE_ENABLED=true`.
+- No `platform.db` created despite `PERSISTENCE_ENABLED=true`.
 - Startup logs "persistence unavailable; continuing without it" (open or
   load failure — record the reason).
 - Corrupt DB handling: if you delete/corrupt the DB, Relay should
@@ -698,7 +699,7 @@ PERSISTENCE_PATH=./relay_state.db
 
 - `/diagnostics` before and after restart.
 - Shutdown log block.
-- `dir` of the project root showing `relay_state.db*`.
+- `dir` of the project root / state dir showing `platform.db*`.
 - Any "persistence unavailable" warning.
 
 ---
@@ -788,7 +789,7 @@ report which ones confused you and what the docs should have said.
    not a Relay bug — but is the error message self-explanatory?
 8. **`uvicorn --workers N` / gunicorn multi-worker.** The state DB is
    **single-process/single-writer**. Multi-worker setup corrupts
-   `relay_state.db`. A new user following generic FastAPI deployment
+   `platform.db`. A new user following generic FastAPI deployment
    advice will hit this. Is it warned about loudly enough?
 9. **`HEALTH_REFRESH_ENABLED=true` on a machine that can't reach every
    provider endpoint.** The background prober then reports everything

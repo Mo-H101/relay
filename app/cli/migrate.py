@@ -82,9 +82,11 @@ def add_migrate_flags(parser) -> None:
         help="Restore sources from a backup and remove platform.db.",
     )
     parser.add_argument(
+        "--state-dir",
         "--data-dir",
+        dest="data_dir",
         default=None,
-        help="Override the state/data directory (tests, custom layouts).",
+        help="Override the state directory (tests, custom layouts).",
     )
 
 
@@ -94,9 +96,10 @@ def add_migrate_flags(parser) -> None:
 
 def _resolve_layout(data_dir_override: Optional[str]) -> dict:
     """
-    Resolve the migration layout. ``--data-dir`` uses an installed-style
-    layout rooted at the override (all legacy files inside it), which is
-    what tests exercise; otherwise the real config layout applies.
+    Resolve the migration layout. ``--state-dir`` (alias ``--data-dir``)
+    uses an installed-style layout rooted at the override (all legacy
+    files inside it), which is what tests exercise; otherwise the real
+    config layout applies.
     """
     if data_dir_override:
         data = Path(data_dir_override)

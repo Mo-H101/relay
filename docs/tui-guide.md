@@ -86,8 +86,8 @@ The Configuration panel is a live settings form split into three groups:
 - **Restart-required (read-only).** Server bind (`RELAY_HOST`,
   `RELAY_PORT`), persistence, logging, and the LM Studio URL cannot
   change without a restart and are shown read-only with a warning.
-- **Informational (read-only).** `DEFAULT_PROVIDER` is shown without a
-  silent behavior change.
+- **Informational (read-only).** The preferred provider (highest runtime
+  priority) is shown without a silent behavior change.
 
 API keys are **never** shown here — they are managed on the Providers
 screen, password-masked and validated before anything is persisted.

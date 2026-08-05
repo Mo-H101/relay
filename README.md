@@ -174,7 +174,7 @@ QUALITY_FEEDBACK_ENABLED=true
 DECISION_ENGINE_ENABLED=true
 DECISION_EXPLANATIONS_ENABLED=true
 PERSISTENCE_ENABLED=true
-PERSISTENCE_PATH=./relay_state.db
+PERSISTENCE_PATH=./.relay/platform.db
 ```
 
 The flags form a dependency chain: telemetry feeds adaptive learning and

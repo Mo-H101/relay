@@ -13,9 +13,7 @@ from app.providers.exceptions import (
     ProviderTimeout,
 )
 from app.services.metrics import relay_metrics
-
-
-_MAX_ERROR_BODY = 200
+from app.services.redaction import redact_provider_error
 
 
 def _safe_provider_body(provider: Provider, status_code: int, body: str) -> str:
@@ -26,26 +24,37 @@ def _safe_provider_body(provider: Provider, status_code: int, body: str) -> str:
     request prompt or response back to the relay. The API key is stripped
     when present, non-printable control characters are removed, and the
     text is truncated to a fixed bound so it never flows verbatim into
-    error responses or logs.
+    error responses or logs. Delegates to the shared redaction layer
+    (P6.3 dedupe of ``availability.safe_error_body``).
     """
-    if not body:
-        return f"status {status_code}"
-
-    text = body
-
-    if provider is not None and provider.has_api_key():
-        text = text.replace(provider.api_key, "[REDACTED]")
-
-    text = "".join(
-        ch
-        for ch in text
-        if ch == "\n" or ch == "\t" or ch.isprintable()
+    api_key = (
+        provider.api_key
+        if provider is not None and provider.has_api_key()
+        else None
     )
+    return redact_provider_error(api_key, status_code, body)
 
-    if len(text) > _MAX_ERROR_BODY:
-        text = text[:_MAX_ERROR_BODY].rstrip() + "..."
 
-    return text
+def _text_content(content) -> str:
+    """
+    Extract plain text from an OpenAI message content (string or parts).
+
+    Shared by the Anthropic and Gemini clients when translating an OpenAI
+    payload to their native wire format (P6.3 dedupe).
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and part.get("type") == "text":
+                parts.append(part.get("text") or "")
+        return "".join(parts)
+    return ""
 
 
 def _stream_error_text(response: httpx.Response) -> str:

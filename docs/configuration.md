@@ -34,7 +34,7 @@ handle are detected and degrade to the same guidance. See
 | `RELAY_PORT` | `8000` | Port the `relay` command binds the server to. |
 | `RELAY_TUI_NO_EMBED` | `false` | When true, `relay`/`relay tui` runs the terminal interface without starting an embedded API server (for setups managed by a service manager). |
 | `RELAY_ENV_FILE` | *(resolved)* | Explicit path to the `.env` file. |
-| `RELAY_STATE_DIR` | `<env dir>/.relay` | Directory holding setup state (`state.json`) and the future platform database. |
+| `RELAY_STATE_DIR` | `<env dir>/.relay` | Directory holding setup state (`state.json`) and the `platform.db` database. |
 
 Setup state distinguishes "installed but not configured", "setup completed",
 and "incomplete/failed setup"; it is independent of whether a `.env` exists.
@@ -92,7 +92,7 @@ and "incomplete/failed setup"; it is independent of whether a `.env` exists.
 | --- | --- | --- |
 | `RELAY_KEYRING` | `false` | When true, provider keys resolve keyring-first and config writes for `api_key` go to the OS keyring instead of `.env`. Read at startup (not reloadable). |
 | `RELAY_KEYRING_BACKEND` | *(keyring default)* | Dotted `module.Class` path overriding the keyring backend (needed for headless servers). Read per call, so changes apply without restart. |
-| `RELAY_AUTH_STORE` | `false` | When true, the auth dependency also accepts keys stored in `relay_keys.db` (scrypt-hashed) with scope enforcement. Read per request. |
+| `RELAY_AUTH_STORE` | `false` | When true, the auth dependency also accepts keys stored in `platform.db` (scrypt-hashed) with scope enforcement. Read per request. |
 
 Resolution order is fixed:
 
@@ -104,10 +104,18 @@ Resolution order is fixed:
 3. Store-backed Relay keys require `RELAY_AUTH_STORE=true`; a store
    outage fails closed (`401`).
 
-`relay_keys.db` stores only scrypt hashes (raw keys are shown once at
-creation and never persisted). The `.env` file is written user-only
-(`0600`) on POSIX. See [security.md](security.md) for the full model and
-lifecycle.
+`platform.db` (at `state_dir/platform.db`) stores only scrypt hashes of
+Relay keys (raw keys are shown once at creation and never persisted), the
+consolidated learned state, and the security event log. The `.env` file is
+written user-only (`0600`) on POSIX. See [security.md](security.md) for
+the full model and lifecycle.
+
+The legacy stores (`relay_keys.db` and `relay_state.db` at the project root
+or in `state_dir`) are **read-only migration sources**: `relay migrate`
+imports them into `platform.db` and never deletes them (rollback contract),
+so the startup guard that blocks creating a fresh `platform.db` over
+unmigrated legacy data is permanent for the supported lifetime of pre-P6.1
+layouts.
 
 ### Local providers
 
@@ -117,8 +125,8 @@ lifecycle.
 | `LMSTUDIO_PRIORITY` | `1` | no | Priority of the LM Studio provider. |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | no | Reserved; parsed but unused. |
 
-`DEFAULT_PROVIDER` (default `NVIDIA`) is parsed but intentionally unused
-(reserved for future routing intelligence).
+The preferred provider is resolved at runtime from provider priority order,
+not from configuration.
 
 ## API authentication
 
@@ -228,7 +236,7 @@ rotation/prune runbooks and event-log contract.
 | Variable | Default | Reloadable | Meaning |
 | --- | --- | --- | --- |
 | `PERSISTENCE_ENABLED` | `false` | no | Persist learned state to SQLite. |
-| `PERSISTENCE_PATH` | `relay_state.db` | no | SQLite database path. |
+| `PERSISTENCE_PATH` | `state_dir/platform.db` | no | SQLite database path. |
 | `PERSISTENCE_FLUSH_INTERVAL_SECONDS` | `60` | no | Write-behind flush interval (min 1). |
 | `PERSISTENCE_RETENTION_DAYS` | `0` | yes | Retention in days for persisted failure history and the security event log (`events` table); `0` disables pruning. |
 
@@ -273,7 +281,7 @@ QUALITY_FEEDBACK_ENABLED=true
 DECISION_ENGINE_ENABLED=true
 DECISION_EXPLANATIONS_ENABLED=true
 PERSISTENCE_ENABLED=true
-PERSISTENCE_PATH=/var/lib/relay/relay_state.db
+PERSISTENCE_PATH=/var/lib/relay/platform.db
 ```
 
 `HEALTH_REFRESH_ENABLED` and `HEALTH_DEEP_REFRESH_ENABLED` are intentionally

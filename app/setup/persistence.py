@@ -37,7 +37,7 @@ def read_all(path: Optional[Path] = None) -> dict:
     """
     Return the full snapshot document with safe defaults. ``path`` is
     optional (defaults to the configured state directory), which lets the
-    migration read an alternative availability file (P6.1 ``--data-dir``).
+    migration read an alternative availability file (P6.1 ``--state-dir``).
     """
     if path is None:
         path = _path()

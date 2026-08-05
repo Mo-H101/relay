@@ -13,6 +13,7 @@ import pytest
 
 from app.core.config import settings
 from app.providers import factory as factory_module
+from app.providers import registry as registry_module
 from app.providers.base import Provider
 from app.providers.factory import build_runtime_provider
 from app.providers.lmstudio import create_provider as create_lmstudio_provider
@@ -64,6 +65,42 @@ def test_wrappers_match_registry_factory():
         assert wrapped.priority == direct.priority
         assert wrapped.requires_api_key == direct.requires_api_key
         assert wrapped.health_endpoint == direct.health_endpoint
+
+
+def test_runtime_registry_path_is_independent_of_shims():
+    """
+    The registry/factory runtime path resolves providers straight to the
+    ``*_client`` modules and never references the legacy shim facades
+    (``app.providers.nvidia|openai|lmstudio``), so those shims are removable
+    without touching runtime wiring. This guards the deprecation note added
+    to each shim in P6.3.
+    """
+    import inspect
+
+    runtime_source = (
+        inspect.getsource(registry_module)
+        + inspect.getsource(factory_module)
+        + inspect.getsource(Provider)
+    )
+
+    for shim in (
+        "providers.nvidia import",
+        "providers.openai import",
+        "providers.lmstudio import",
+    ):
+        assert shim not in runtime_source
+
+    for pid, expected in (
+        ("nvidia", "app.providers.nvidia_client"),
+        ("openai", "app.providers.openai_client"),
+        ("lmstudio", "app.providers.lmstudio_client"),
+    ):
+        defn = PROVIDER_REGISTRY[pid]
+        assert defn.client_class.__module__ == expected
+        provider = defn.build_provider(base_url="http://127.0.0.1:1")
+        assert isinstance(provider, Provider)
+        assert provider.id == pid
+        assert provider.identity() == pid
 
 
 def test_openai_priority_regression():

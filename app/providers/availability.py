@@ -12,6 +12,7 @@ health checker so both surfaces agree on the mapping.
 """
 
 from app.providers.base import ModelProbe
+from app.services.redaction import redact_provider_error
 
 AVAILABLE = "available"
 OVERLOADED = "overloaded"
@@ -25,8 +26,6 @@ GLYPH = {
 
 # Status codes that mean "the model exists but is currently busy".
 _DEGRADED_CODES = (429, 529)
-
-_MAX_ERROR_BODY = 200
 
 
 def classify_probe(probe: ModelProbe) -> str:
@@ -55,23 +54,12 @@ def safe_error_body(
 
     Provider bodies may echo request content or the API key back. The key
     is stripped, control characters removed, and the text truncated so it
-    never flows verbatim into wizard output, logs, or errors.
+    never flows verbatim into wizard output, logs, or errors. Delegates to
+    the shared redaction layer (P6.3 dedupe of ``_safe_provider_body``).
     """
-    if not body:
-        return f"status {status_code}"
-
-    text = body
-
-    if provider is not None and provider.has_api_key():
-        text = text.replace(provider.api_key, "[REDACTED]")
-
-    text = "".join(
-        ch
-        for ch in text
-        if ch == "\n" or ch == "\t" or ch.isprintable()
+    api_key = (
+        provider.api_key
+        if provider is not None and provider.has_api_key()
+        else None
     )
-
-    if len(text) > _MAX_ERROR_BODY:
-        text = text[:_MAX_ERROR_BODY].rstrip() + "..."
-
-    return text
+    return redact_provider_error(api_key, status_code, body)

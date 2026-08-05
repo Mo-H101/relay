@@ -43,9 +43,6 @@ def test_config_form_classification():
     assert fields["RELAY_HOST"].restart_required
     assert not fields["RELAY_HOST"].editable
 
-    assert fields["DEFAULT_PROVIDER"].informational
-    assert not fields["DEFAULT_PROVIDER"].editable
-
     assert fields["RETRY_BACKOFF_BASE_SECONDS"].editable
     assert fields["RETRY_BACKOFF_BASE_SECONDS"].reloadable
     assert not fields["RETRY_BACKOFF_BASE_SECONDS"].restart_required
@@ -181,11 +178,13 @@ def test_save_config_restart_required_rejected_without_writing():
         assert not facade._store.env_writes
 
 
-def test_save_config_informational_rejected():
+def test_save_config_unknown_or_secret_field_rejected():
+    # Secret envs never appear in the form and are rejected on save; the
+    # legacy informational field (DEFAULT_PROVIDER) was retired in P6.3.
     facade = _facade()
-    report = facade.save_config({"DEFAULT_PROVIDER": "openai"})
+    report = facade.save_config({"RELAY_API_KEY": "a-secret"})
     assert report["saved"] is False
-    assert "DEFAULT_PROVIDER" in report["error"]
+    assert "RELAY_API_KEY" in report["error"]
 
 
 def test_save_config_no_changes_is_noop():

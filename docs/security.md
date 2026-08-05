@@ -10,19 +10,19 @@ Relay distinguishes two kinds of credential:
 
 | Credential | Format | Purpose | Storage |
 | --- | --- | --- | --- |
-| Relay API key | `rl_` + 43 base62 chars (~256 bits) | Authenticates **clients** to the Relay API (`/v1`, `/chat`, `/admin`, …) | Scrypt hashes in `relay_keys.db`; raw key shown once at creation |
+| Relay API key | `rl_` + 43 base62 chars (~256 bits) | Authenticates **clients** to the Relay API (`/v1`, `/chat`, `/admin`, …) | Scrypt hashes in `platform.db`; raw key shown once at creation |
 | Provider key | provider-native (`sk-…`, `nvapi-…`, …) | Authenticates Relay to an **upstream** provider | OS keyring (recommended) or `.env` (compatibility fallback) |
 
 ### Relay API keys
 
 - The raw key is generated, returned exactly once (by `relay keys add`),
-  and **never persisted**. `relay_keys.db` stores only scrypt
+  and **never persisted**. `platform.db` stores only scrypt
   `key_hash`/`key_salt`/`kdf` columns. Verification iterates rows with
   constant-time digest comparison so the database cannot reveal which key
   matched through timing.
 - `RELAY_API_KEY` is the **bootstrap** key: it lives in `.env` by design
   and is read on every request so it can be rotated by editing `.env` and
-  reloading. It is not stored in `relay_keys.db`.
+  reloading. It is not stored in `platform.db`.
 
 ### Provider keys
 
@@ -55,7 +55,7 @@ silently disable authentication. All auth failures return an identical
 
 ## Permissions
 
-- `relay_keys.db` and its SQLite `-wal`/`-shm` sidecars are created
+- `platform.db` and its SQLite `-wal`/`-shm` sidecars are created
   user-only (`0600`) on POSIX. `.corrupt-*.bak` backups are tightened to
   `0600` as well. Windows relies on the user-profile ACL.
 - `.env` is tightened to `0600` after every write on POSIX so provider

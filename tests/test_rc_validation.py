@@ -168,7 +168,7 @@ def prod_profile(monkeypatch, tmp_path):
     monkeypatch.setattr(
         settings,
         "persistence_path",
-        str(tmp_path / "relay_state.db"),
+        str(tmp_path / "platform.db"),
     )
     monkeypatch.setattr(settings, "persistence_flush_interval_seconds", 1)
     monkeypatch.setattr(settings, "max_retries", 1)
@@ -187,7 +187,7 @@ def prod_components(prod_profile, nvidia_mock, openai_mock, monkeypatch):
     relays = []
 
     def _build(nvidia_models=None, openai_models=None):
-        def nvidia_factory():
+        def nvidia_provider():
             return Provider(
                 name="NVIDIA",
                 base_url=nvidia_mock.base_url,
@@ -197,7 +197,7 @@ def prod_components(prod_profile, nvidia_mock, openai_mock, monkeypatch):
                 proxy="",
             )
 
-        def openai_factory():
+        def openai_provider():
             return Provider(
                 name="OpenAI",
                 base_url=openai_mock.base_url,
@@ -207,14 +207,17 @@ def prod_components(prod_profile, nvidia_mock, openai_mock, monkeypatch):
                 proxy="",
             )
 
+        # Registry-driven loading builds providers from real settings; the
+        # production profile injects scripted loopback providers instead, so
+        # the registry build is bypassed and the mocks are registered directly
+        # (P6.3, matching the test_openai_sdk_compat registry/manager pattern).
         monkeypatch.setattr(
-            relay_module, "create_nvidia_provider", nvidia_factory
-        )
-        monkeypatch.setattr(
-            relay_module, "create_openai_provider", openai_factory
+            relay_module.Relay, "_load_providers", lambda self: None
         )
 
         relay_obj = relay_module.Relay()
+        relay_obj.provider_manager.register(nvidia_provider())
+        relay_obj.provider_manager.register(openai_provider())
         _wire_relay(relay_obj, monkeypatch)
         relays.append(relay_obj)
         return relay_obj

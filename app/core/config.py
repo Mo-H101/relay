@@ -352,14 +352,6 @@ class Settings:
         # Relay
         # =========================
 
-        # Intentionally deferred: reserved for future routing intelligence
-        # (e.g. default provider selection when routing is enabled). Keep
-        # the setting parsed but unused until that feature is implemented.
-        self.default_provider = os.getenv(
-            "DEFAULT_PROVIDER",
-            "NVIDIA",
-        )
-
         # Keyring (P5 Phase 2): keyring-first provider-key resolution.
         # Opt-in and non-reloadable (read at startup only). When enabled,
         # runtime provider keys resolve keyring-first with the .env value

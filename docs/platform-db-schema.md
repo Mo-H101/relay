@@ -109,10 +109,11 @@ copied aside as `platform.db.corrupt-<ts>.bak` and reopened fresh.
 
 ## `relay migrate`
 
-`relay migrate [--dry-run] [--yes] [--rollback <timestamp|last>] [--data-dir <dir>]`
+`relay migrate [--dry-run] [--yes] [--rollback <timestamp|last>] [--state-dir <dir>]`
 
 1. Resolve the layout (`state_dir`, legacy `relay_state.db` location,
-   `env_file`; `--data-dir` overrides for tests).
+   `env_file`; `--state-dir` overrides for tests, `--data-dir` is an
+   accepted alias).
 2. `--dry-run`: print source paths, tables, and expected row counts;
    change nothing.
 3. Re-run detection: a manifest with unchanged source digests → "already

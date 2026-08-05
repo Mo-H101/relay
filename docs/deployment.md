@@ -48,7 +48,7 @@ the full validation matrix and current results.
 ```bash
 RELAY_API_KEY=<long-random-value>
 PERSISTENCE_ENABLED=true
-PERSISTENCE_PATH=/var/lib/relay/relay_state.db
+PERSISTENCE_PATH=/var/lib/relay/platform.db
 HEALTH_FEEDBACK_ENABLED=true
 TELEMETRY_ENABLED=true
 HEALTH_AWARE_ROUTING=true
@@ -102,7 +102,7 @@ registered as real endpoints so they inherit the same guard. When the key
 is empty (default), authentication is off — do not run an exposed Relay
 with an empty key.
 
-Optionally add store-backed keys (scrypt-hashed in `relay_keys.db`) for
+Optionally add store-backed keys (scrypt-hashed in `platform.db`) for
 per-client credentials with scope enforcement:
 
 ```bash
@@ -134,7 +134,7 @@ value as fallback.
 
 ```bash
 PERSISTENCE_ENABLED=true
-PERSISTENCE_PATH=/var/lib/relay/relay_state.db   # default: ./relay_state.db
+PERSISTENCE_PATH=/var/lib/relay/platform.db   # default: <state_dir>/platform.db
 PERSISTENCE_FLUSH_INTERVAL_SECONDS=60
 PERSISTENCE_RETENTION_DAYS=30                    # 0 disables pruning
 ```
@@ -265,8 +265,8 @@ already deprecated and are resolved as a fallback only.
 ## Relay key rotation and pruning runbook
 
 Operator access to Relay is authenticated by `rl_` keys stored as scrypt
-hashes in `relay_keys.db` (imported into `platform.db` by `relay
-migrate`). Rotate and prune them from the CLI or the admin API.
+hashes in `platform.db` (the legacy `relay_keys.db` content was imported by
+`relay migrate`). Rotate and prune them from the CLI or the admin API.
 
 ```bash
 # Rotate one key: prints the new raw key exactly once, then revokes the

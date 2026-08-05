@@ -27,28 +27,10 @@ from app.providers.openai_compat_client import (
     _retry_after_seconds,
     _stream_error_text,
     _stream_error_text_async,
+    _text_content,
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
-
-
-def _text_content(content) -> str:
-    """
-    Extract plain text from an OpenAI message content (string or parts).
-    """
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict) and part.get("type") == "text":
-                parts.append(part.get("text") or "")
-        return "".join(parts)
-    return ""
 
 
 def _image_source(url: str) -> dict | None:

@@ -50,6 +50,10 @@ _AUTH_HEADER = re.compile(
 
 _REDACTED = "<redacted>"
 
+# Bound for provider error bodies surfaced in error responses and logs.
+# Kept small so an untrusted provider body can never flow verbatim anywhere.
+_MAX_PROVIDER_ERROR_BODY = 200
+
 
 def _mask_auth_header(match: re.Match) -> str:
     """
@@ -74,6 +78,45 @@ def redact_text(text: str) -> str:
     text = _NVAPI_KEY.sub(_REDACTED, text)
     text = _RL_KEY.sub(_REDACTED, text)
     text = _AUTH_HEADER.sub(_mask_auth_header, text)
+    return text
+
+
+def redact_provider_error(
+    api_key: str | None,
+    status_code: int,
+    body: str,
+) -> str:
+    """
+    Build a bounded, redacted message from an untrusted provider body.
+
+    Provider error bodies are treated as untrusted: they may echo the
+    request prompt or the provider's own API key back to the relay. The
+    provider's API key is masked when present, non-printable control
+    characters are removed, and the text is truncated to a fixed bound so
+    it never flows verbatim into error responses or logs. An empty body
+    degrades to ``status <code>``.
+
+    ``api_key`` is the provider's plain key value (or None). The shared
+    redaction layer is the single implementation for every wire client and
+    the availability scans (P6.3 dedupe).
+    """
+    if not body:
+        return f"status {status_code}"
+
+    text = body
+
+    if api_key:
+        text = text.replace(api_key, "[REDACTED]")
+
+    text = "".join(
+        ch
+        for ch in text
+        if ch == "\n" or ch == "\t" or ch.isprintable()
+    )
+
+    if len(text) > _MAX_PROVIDER_ERROR_BODY:
+        text = text[:_MAX_PROVIDER_ERROR_BODY].rstrip() + "..."
+
     return text
 
 

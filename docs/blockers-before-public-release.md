@@ -79,7 +79,7 @@ The public release profile must set:
 ```bash
 RELAY_API_KEY=<long-random-value>
 PERSISTENCE_ENABLED=true
-PERSISTENCE_PATH=/var/lib/relay/relay_state.db
+PERSISTENCE_PATH=/var/lib/relay/platform.db
 ```
 
 Otherwise an exposed instance is unauthenticated and learns nothing

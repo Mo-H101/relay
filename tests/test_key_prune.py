@@ -192,13 +192,14 @@ def test_cli_prune_records_event(cli_store, run_cli, isolated_event_log):
 
 def test_prune_locked_store_errors_cleanly(cli_store, run_cli):
     # A broken/locked store surfaces as a short error (exit 1), never a
-    # traceback and never a partial delete.
+    # traceback and never a partial delete. The dry-run reads through
+    # ``list_terminal`` (the prune predicate), so that is what is patched.
     key_id = _add_old_revoked(cli_store)
 
     def _locked():
         raise RuntimeError("database is locked")
 
-    cli_store.list = _locked
+    cli_store.list_terminal = _locked
 
     with pytest.raises(SystemExit) as exc:
         run_cli(["keys", "prune", "--yes"])

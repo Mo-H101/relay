@@ -29,7 +29,7 @@ class DashboardScreen(Screen):
         with Horizontal(classes="tile-row"):
             yield StatTile("Server", id="tile-server")
             yield StatTile("Setup", id="tile-setup")
-            yield StatTile("Default provider", id="tile-provider")
+            yield StatTile("Preferred provider", id="tile-provider")
             yield StatTile("Providers", id="tile-providers")
         with Horizontal(classes="tile-row"):
             yield StatTile("Models", id="tile-models")

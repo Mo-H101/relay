@@ -254,7 +254,6 @@ _CONFIG_ROWS = (
     ("LOG_LEVEL", "log_level", "text", "restart", False, False, True, False, "Log level", "Logging verbosity. Restart required."),
     ("LOG_FILE", "log_file", "text", "restart", False, False, True, False, "Log file", "JSON log file path. Restart required."),
     ("LMSTUDIO_BASE_URL", "lmstudio_base_url", "text", "restart", False, False, True, False, "LM Studio URL", "LM Studio server base URL. Restart required."),
-    ("DEFAULT_PROVIDER", "default_provider", "text", "info", False, False, False, True, "Default provider", "Informational only; no silent behavior change."),
 )
 
 _EDITABLE_FIELDS = frozenset(row[0] for row in _CONFIG_ROWS if row[4])
@@ -322,7 +321,15 @@ class ServiceFacade:
         return settings.relay_name
 
     def default_provider(self) -> str:
-        return settings.default_provider
+        """
+        Runtime top-priority enabled provider (the one chat selects first).
+
+        ``DEFAULT_PROVIDER`` was retired in P6.3 (informational-only, no
+        behavior); this tile now reports runtime truth instead of a dead
+        setting.
+        """
+        ranked = self._relay.provider_manager.ranked()
+        return ranked[0].name if ranked else "-"
 
     def persistence_enabled(self) -> bool:
         return settings.persistence_enabled

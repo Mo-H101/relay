@@ -299,6 +299,29 @@ class KeyStore:
 
         return removed, scanned
 
+    def list_terminal(self, cutoff_ts: float) -> List[dict]:
+        """
+        Return metadata for every key ``prune`` would delete at
+        ``cutoff_ts``, oldest created first.
+
+        Uses the exact ``prune`` predicate (P6.3 dedupe of the CLI's
+        Python mirror, which previously drifted at the expiry boundary:
+        the SQL predicate removes keys whose ``expires_at`` equals the
+        cutoff).
+        """
+        self._ensure_open()
+
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_SELECT_COLUMNS} FROM api_keys"
+                " WHERE (revoked_at IS NOT NULL AND revoked_at < ?)"
+                "    OR (expires_at IS NOT NULL AND expires_at <= ?)"
+                " ORDER BY created_at",
+                (cutoff_ts, cutoff_ts),
+            ).fetchall()
+
+        return [self._row_to_meta(row) for row in rows]
+
     def mark_used(self, key_id: str) -> None:
         """
         Record the last successful use time for a key. No-op for unknown
