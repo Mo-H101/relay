@@ -7,7 +7,7 @@ Depends on: `docs/platform-architecture-report.md`,
 `docs/platform-missing-components-report.md` (§1 validation matrix).
 Sequence rationale: `docs/platform-recommended-order.md`.
 
-Regression gate for every phase: existing **821 tests stay green**; `/v1`
+Regression gate for every phase: existing **2360 tests stay green**; `/v1`
 wire behavior, `RELAY_API_KEY` bootstrap, `.env` compat, and
 `python -m app.cli` / `python -m uvicorn app.main:app` entry points keep
 working.

@@ -75,10 +75,13 @@ FORBIDDEN_KEYS = frozenset(
     {
         "prompt",
         "prompts",
+        "prompt_text",
         "message",
         "messages",
+        "user_message",
         "response",
         "responses",
+        "model_response",
         "content",
         "api_key",
         "api-key",
@@ -88,6 +91,7 @@ FORBIDDEN_KEYS = frozenset(
         "proxy_url",
         "password",
         "secret",
+        "secret_value",
         "user_identity",
         "identity",
     }

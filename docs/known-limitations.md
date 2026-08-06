@@ -84,3 +84,36 @@ leaked is fixed and covered by
   `docs/blockers-before-public-release.md`.
 - `RELAY_API_KEY` is empty by default, which **disables authentication**.
   Do not expose an instance without setting it.
+
+## 7. Single-process storage model; no horizontal scale
+
+`platform.db` (SQLite, schema v8) is **single-process / single-writer**.
+Running more than one Relay process against the same database file (for
+example `gunicorn -w N` or `uvicorn --workers N`) is **unsupported**: every
+process gets its own writer to the same file, which is a documented
+corruption risk, plus split-brain routing and per-process counters.
+
+- Mitigation: run exactly one Relay process per database file; scale by
+  running isolated instances with separate `PERSISTENCE_PATH` values and
+  client-side routing.
+- Continuity tables (schema v7/v8) are written only on the
+  `ContinuityFlusher` thread of the single process; the coordinator is
+  bounded at 512 in-memory states and the flusher queue at 10,000 rows, so
+  write pressure stays bounded at large conversation counts.
+- Operators may run `PRAGMA wal_checkpoint(TRUNCATE)` during maintenance
+  to shrink the WAL; this is documented, not automated.
+
+## 8. Continuity resume protocol (opt-in, bounded replays)
+
+Project continuity is **off by default** and additive when enabled
+(`CONTINUITY_ENABLED=true`). Opt-in conversations are resumed with a
+**single-use resume token**; replay attempts are capped by
+`MAX_RESUME_REPLAYS` (default 3) and tracked durably in `resume_replays`
+(schema v8) so the cap survives restarts. The resume path **fails closed**
+(a denial, not an error) when the replay tracker cannot be persisted.
+
+- Clients that do not send `X-Relay-Conversation-Id` /
+  `X-Relay-Project-Id` see no continuity behavior and no storage.
+- The durable replay tracker only covers the resume path: it is not a
+  general rate limiter on `validate_resume` (see
+  `docs/v1-release-hardening-plan.md` §5.1).

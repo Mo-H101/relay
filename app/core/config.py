@@ -288,12 +288,6 @@ class Settings:
         )
 
         # =========================
-        # OpenRouter
-        # =========================
-
-        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
-
-        # =========================
         # Google Gemini
         # =========================
 
@@ -308,12 +302,6 @@ class Settings:
         self.gemini_model_priority = _csv(
             os.getenv("GEMINI_MODEL_PRIORITY", "")
         )
-
-        # =========================
-        # Groq
-        # =========================
-
-        self.groq_api_key = os.getenv("GROQ_API_KEY", "")
 
         # =========================
         # Local Providers

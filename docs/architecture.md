@@ -29,7 +29,11 @@ api routers  ->  Relay facade  ->  services  ->  providers (clients)
   correlation id but never prompts, responses, or provider internals.
 - `app/services/*` (29 services) hold all business logic: routing,
   scoring, health, telemetry, quality, decisions, persistence, reload,
-  ops, metrics, failure classification.
+  ops, metrics, failure classification. The P9 project-continuity services
+  live here too and sit under the facade: `ConversationStore`,
+  `ContinuityFlusher`, `ContextManager`, `HandoffCoordinator`,
+  `ContinuityRecovery`, and the summary/verifier pair
+  (`summarizer.py`, `summary_verifier.py`).
 - `app/providers/*` model backends. `Provider` is a plain data holder;
   clients (NVIDIA, OpenAI, LM Studio) share `OpenAICompatibleClient`
   which speaks the OpenAI REST protocol over `httpx`. Exceptions are
@@ -115,6 +119,9 @@ SSE chunks, and records telemetry/health once the stream finishes.
   - `StateFlusher` write-behind flushes learned state to SQLite when
     `PERSISTENCE_ENABLED`, and performs a final flush on shutdown so no
     learned intelligence is lost.
+  - `ContinuityFlusher` (when `CONTINUITY_ENABLED`) write-behind flushes
+    conversation metadata/turns/summaries to the same SQLite file on its
+    own thread and prunes by retention.
 - The ops window and metrics are in-memory only and never touch SQLite.
 
 ## Persistence
@@ -127,6 +134,49 @@ database never contains prompts, responses, API keys, proxy credentials,
 or correlation ids; `app/services/memory_contract.py` encodes these
 rules and tests enforce them. A corrupted database is backed up and
 persistence is disabled gracefully rather than failing startup.
+
+The project-continuity tables (schema v7/v8) share the same SQLite file
+and are written **only when `CONTINUITY_ENABLED=true`**: `ConversationStore`
+owns the schema (conversations, turns, summaries, compactions,
+`project_state`, and the v8 `resume_replays` replay tracker), the
+`ContinuityFlusher` thread is the only writer, and rows are metadata and
+derived state only — raw prompts, raw responses, and generated content are
+never stored. See [platform-db-schema.md](platform-db-schema.md).
+
+## Project continuity (P9)
+
+Continuity gives opt-in clients ("no progress lost = committed turns"): a
+conversation that is interrupted by a provider switch or a Relay restart
+can be resumed without re-executing acknowledged work.
+
+- **Gate:** the whole layer is inert when `CONTINUITY_ENABLED=false`
+  (default). Enabling it is additive — clients opt a conversation in by
+  sending `X-Relay-Conversation-Id` / `X-Relay-Project-Id`.
+- **Two provider-facing flows** on the chat hot path:
+  1. **Envelope injection** — before the request is sent, the
+     `HandoffCoordinator` hydrates a context envelope (bounded recent turns
+     plus a derived summary when the budget requires it) from
+     `ConversationStore` and injects it into the provider payload
+     (`handoff.py:167-188`). This is the live path; preflight compaction is
+     done here, so the request never fails on context overflow.
+  2. **Optional LLM summarizer** — when `CONTINUITY_SUMMARIZER_MODEL` is
+     set, `summarizer.py:191-209` derives a redacted summary of compacted
+     turns; otherwise summaries are extractive and local. The summarizer
+     calls a provider through the same relay surface and any failure
+     degrades to the extractive path.
+- **Crash recovery:** `ContinuityRecovery` + `validate_resume` turn a
+  crash-window interruption into a resumable state: the server replays the
+  durable per-conversation `seq` and rejects any token whose replay cap is
+  exhausted. Resume tokens are stored one-way hashed; replay attempts are
+  tracked in `resume_replays` (v8) so the cap survives restarts, and the
+  path fails closed if that table cannot be persisted.
+- **Switch caps:** `MAX_SWITCHES_PER_TURN` / `MAX_SWITCHES_PER_WINDOW`
+  stop a provider-switch storm; exhaustion records `continuity.denied` and
+  emits `relay:model_switched` SSE for operators.
+- **SQLite boundary:** continuity writes happen only on the
+  `ContinuityFlusher` thread; hot-path reads are bounded (single-row
+  `last_turn` + `resume_envelope` hydration), so the single-writer process
+  model is unchanged.
 
 ## Metrics and observability
 

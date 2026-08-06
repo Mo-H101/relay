@@ -35,7 +35,10 @@ def _version():
 # ------------------------------------------------------------------ metadata
 
 def test_version_is_pep440():
-    assert re.fullmatch(r"\d+\.\d+\.\d+(?:[.-].+)?", _version())
+    assert re.fullmatch(
+        r"\d+\.\d+\.\d+(?:[.-]?(?:a|b|rc|dev|post)\d+)?",
+        _version(),
+    )
 
 
 def test_pyproject_declares_relay_console_script():

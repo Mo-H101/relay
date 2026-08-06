@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.services.decision_engine import DecisionStats
 from app.services.failure_classifier import FailureKind
 from app.services.health_store import HealthStore
@@ -75,6 +77,45 @@ class TestContainsNeverCaptured:
         assert contains_never_captured(
             {"attempts": [{"provider": "A", "response": "hi"}]}
         )
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "prompt",
+            "prompts",
+            "prompt_text",
+            "message",
+            "messages",
+            "user_message",
+            "response",
+            "responses",
+            "model_response",
+            "content",
+            "api_key",
+            "api-key",
+            "apikey",
+            "authorization",
+            "proxy",
+            "proxy_url",
+            "password",
+            "secret",
+            "secret_value",
+            "user_identity",
+            "identity",
+        ],
+    )
+    def test_documented_variants_are_never_captured(self, key):
+        assert contains_never_captured({key: "x"})
+        assert contains_never_captured({"outer": {"inner": {key: "x"}}})
+
+    def test_variant_keys_are_all_registered(self):
+        for variant in (
+            "prompt_text",
+            "user_message",
+            "secret_value",
+            "model_response",
+        ):
+            assert variant in FORBIDDEN_KEYS
 
     def test_forbidden_key_is_case_insensitive(self):
         assert contains_never_captured({"Message": "hello"})

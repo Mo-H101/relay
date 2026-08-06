@@ -404,10 +404,6 @@ _RAW_SPECS = (
     _provider("ANTHROPIC_MODEL_PRIORITY", "anthropic_model_priority", "csv",
               [], "Anthropic model priority order.", "providers"),
 
-    # ----------------------------------------------------------- OpenRouter
-    _restart("OPENROUTER_API_KEY", "openrouter_api_key", "str", "",
-             "OpenRouter provider API key.", "providers", secret=True),
-
     # --------------------------------------------------------------- Gemini
     _provider("GEMINI_ENABLED", "gemini_enabled", "bool", False,
               "Load the Gemini provider at runtime.", "providers"),
@@ -418,10 +414,6 @@ _RAW_SPECS = (
              "Gemini API base URL.", "providers", provider=True),
     _provider("GEMINI_MODEL_PRIORITY", "gemini_model_priority", "csv", [],
               "Gemini model priority order.", "providers"),
-
-    # ----------------------------------------------------------------- Groq
-    _restart("GROQ_API_KEY", "groq_api_key", "str", "",
-             "Groq provider API key.", "providers", secret=True),
 
     # ------------------------------------------------------------ LM Studio
     _provider("LMSTUDIO_ENABLED", "lmstudio_enabled", "bool", False,
@@ -631,9 +623,7 @@ _TUI_GROUP_OVERRIDE = {
     "NVIDIA_API_KEY": "Security",
     "OPENAI_API_KEY": "Security",
     "ANTHROPIC_API_KEY": "Security",
-    "OPENROUTER_API_KEY": "Security",
     "GEMINI_API_KEY": "Security",
-    "GROQ_API_KEY": "Security",
     "LMSTUDIO_API_KEY": "Security",
     "RELAY_API_KEY": "Security",
 }

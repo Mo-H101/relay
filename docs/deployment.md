@@ -67,6 +67,89 @@ HEALTH_AWARE_ROUTING=true
 # REQUEST_TIMEOUT_BUDGET_SECONDS=0   # total wall-clock budget (0 = none)
 ```
 
+### Continuity (opt-in) profile
+
+The full hardened profile for a continuity-enabled deployment (superset of
+the block above). **Run exactly one Relay process** (single-writer SQLite,
+see below); **enable continuity only when intended** — it is additive
+(headers, SSE `relay:*` events, new tables) and older clients ignore it.
+
+```dotenv
+# --- Identity & transport ---
+RELAY_API_KEY=<long-random-value>
+RELAY_AUTH_STORE=true                  # per-client scoped keys (D6)
+HOST=0.0.0.0                           # TLS at the reverse proxy
+
+# --- Persistence (single SQLite file) ---
+PERSISTENCE_ENABLED=true
+PERSISTENCE_PATH=/var/lib/relay/platform.db
+PERSISTENCE_FLUSH_INTERVAL_SECONDS=60
+PERSISTENCE_RETENTION_DAYS=30
+
+# --- Routing & learning ---
+HEALTH_FEEDBACK_ENABLED=true
+TELEMETRY_ENABLED=true
+HEALTH_AWARE_ROUTING=true
+HEALTH_REFRESH_ENABLED=true
+HEALTH_REFRESH_INTERVAL_SECONDS=60
+
+# --- Providers (only the six supported) ---
+NVIDIA_ENABLED=true
+OPENAI_ENABLED=true
+NVIDIA_MODEL_PRIORITY=<account-invocable-ids>    # D4: pin at deploy time
+OPENAI_MODEL_PRIORITY=<account-invocable-ids>    # D4: pin at deploy time
+
+# --- Provider keys ---
+RELAY_KEYRING=true
+# RELAY_KEYRING_BACKEND=<dotted.module.Class>    # headless servers
+
+# --- Retry hardening (D3) ---
+RETRY_HONOR_RETRY_AFTER=true
+RETRY_AFTER_MAX_SECONDS=60
+RETRY_BACKOFF_BASE_SECONDS=1
+REQUEST_TIMEOUT_BUDGET_SECONDS=120
+
+# --- Continuity (opt-in) ---
+CONTINUITY_ENABLED=true
+CONTINUITY_RETENTION_DAYS=30
+CONTINUITY_FLUSH_INTERVAL_SECONDS=5
+CONTINUITY_CONTEXT_TOKEN_BUDGET=32768
+CONTINUITY_OUTPUT_RESERVE_TOKENS=2048
+CONTINUITY_SUMMARY_SHARE=0.4
+CONTINUITY_SUMMARY_MAX_CHARS=4096
+CONTINUITY_TAIL_MAX_ITEMS=20
+CONTINUITY_CHARS_PER_TOKEN=4
+# CONTINUITY_SUMMARIZER_MODEL=<model-id>         # empty = extractive only
+MAX_SWITCHES_PER_TURN=3
+MAX_SWITCHES_PER_WINDOW=5
+MAX_RESUME_REPLAYS=3
+```
+
+If the optional LLM summarizer is desired, set
+`CONTINUITY_SUMMARIZER_MODEL` to a model id the account can invoke and add
+it to a priority list; any failure degrades to the extractive path.
+
+### Supported storage model
+
+| Aspect | Model |
+| --- | --- |
+| Database | Single SQLite file `platform.db` (schema **v8**), WAL + `busy_timeout 5000`, `0600` + sidecars, corrupt-file backup-aside-and-reopen |
+| Writer | Single guarded connection per process; continuity writes only on the `ContinuityFlusher` thread; hot-path reads bounded (single-row `last_turn` + `resume_envelope` hydration) |
+| Process model | Single process, single writer; **no horizontal scale** (scale by isolated instances with separate `PERSISTENCE_PATH`) |
+| Backup | `relay migrate` backup/rollback copies `platform.db` whole; operators back up `state_dir/` (db + `-wal`/`-shm` + `.env`) |
+| Retention | `CONTINUITY_RETENTION_DAYS` (30) + `PERSISTENCE_RETENTION_DAYS` (30); active conversations are never pruned |
+| Migration | Additive v6→v7→v8, idempotent, guarded by `PRAGMA user_version`; newer-version files are refused; `relay migrate --rollback` restores backups |
+
+### Resource requirements
+
+| Resource | Estimate | Notes |
+| --- | --- | --- |
+| CPU | 1 core nominal | Async I/O (`httpx.AsyncClient`); health refresher probes on an interval; no heavy local compute |
+| Memory | ~100–300 MB | FastAPI/uvicorn + in-memory coordinator (≤ 512 states, LRU) + flusher queue (≤ 10,000 rows, bounded) + ops/metrics windows |
+| Disk | < 1 GB sustained | Metadata-only rows; growth bounded by retention pruning; `platform.db` + WAL sidecars; `.env` + keyring |
+| Network | 2+ provider endpoints | Outbound to provider base URLs; inbound behind a reverse proxy (TLS) |
+| OS keyring | Required for at-rest provider secrets | `RELAY_KEYRING_BACKEND` on headless servers; `.env` fallback must be disk-encrypted + ACL'd |
+
 Both `/chat` and `/v1` record **per-attempt** telemetry/health, so failed
 attempts inside a request (even ones recovered by retry or failover) feed
 the same learning signals. See [configuration.md](configuration.md) for
@@ -310,8 +393,9 @@ relay events --limit 100
 ## Platform database and `relay migrate`
 
 Relay consolidates persistence in `state_dir/platform.db` (SQLite, schema
-v5): API keys, learned-state aggregates, model status, and the security
-event log. An existing installation imports the legacy stores
+v8): API keys, learned-state aggregates, model status, the security event
+log, and (when `CONTINUITY_ENABLED=true`) the project-continuity tables.
+An existing installation imports the legacy stores
 (`relay_keys.db`, `relay_state.db`) in place, in-process and under a
 lock:
 

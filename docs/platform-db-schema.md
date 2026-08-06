@@ -136,7 +136,9 @@ cadence is `REQUEST_LOG_FLUSH_INTERVAL_SECONDS` (default 5).
 Owned by `app/services/conversation_store.py`. Metadata and derived state
 only; raw prompts, raw responses, and generated content are never stored
 (Option C privacy). Resume tokens are stored only as one-way SHA-256
-hashes:
+hashes. The continuity tables are written **only when
+`CONTINUITY_ENABLED=true`** (default off) and only by the
+`ContinuityFlusher` thread:
 
 ```sql
 CREATE TABLE IF NOT EXISTS conversations (

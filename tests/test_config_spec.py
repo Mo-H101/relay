@@ -42,7 +42,7 @@ from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 def test_spec_covers_every_settings_attribute():
     expected = set(vars(Settings()))
     assert set(SPEC_BY_ATTR) == expected
-    assert len(SPECS) == len(expected) == 116
+    assert len(SPECS) == len(expected) == 114
 
 
 def test_every_spec_env_is_unique():
@@ -207,7 +207,6 @@ def test_non_reloadable_fields_are_never_live():
         {
             "anthropic_base_url",
             "gemini_base_url",
-            "groq_api_key",
             "health_deep_refresh_enabled",
             "health_refresh_enabled",
             "health_refresh_interval_seconds",
@@ -216,7 +215,6 @@ def test_non_reloadable_fields_are_never_live():
             "log_file",
             "log_level",
             "ollama_base_url",
-            "openrouter_api_key",
             "persistence_enabled",
             "persistence_flush_interval_seconds",
             "persistence_path",

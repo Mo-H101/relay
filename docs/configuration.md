@@ -35,6 +35,7 @@ handle are detected and degrade to the same guidance. See
 | `RELAY_TUI_NO_EMBED` | `false` | When true, `relay`/`relay tui` runs the terminal interface without starting an embedded API server (for setups managed by a service manager). |
 | `RELAY_ENV_FILE` | *(resolved)* | Explicit path to the `.env` file. |
 | `RELAY_STATE_DIR` | `<env dir>/.relay` | Directory holding setup state (`state.json`) and the `platform.db` database. |
+| `RELAY_DATA_DIR` | *(user data dir)* | Installed installs: base per-user data directory for `.env`, `state_dir`, and the default `platform.db`. Defaults to `platformdirs.user_data_dir("relay")` — e.g. `~/.local/share/relay` on Linux, `%LOCALAPPDATA%\relay` on Windows. Read at startup. |
 
 Setup state distinguishes "installed but not configured", "setup completed",
 and "incomplete/failed setup"; it is independent of whether a `.env` exists.
@@ -64,9 +65,15 @@ and "incomplete/failed setup"; it is independent of whether a `.env` exists.
 | --- | --- | --- | --- |
 | `NVIDIA_ENABLED` | `true` | yes | Enable the NVIDIA NIM endpoint. |
 | `OPENAI_ENABLED` | `false` | yes | Enable the OpenAI endpoint. |
+| `ANTHROPIC_ENABLED` | `false` | yes | Enable the Anthropic Messages endpoint. |
+| `GEMINI_ENABLED` | `false` | yes | Enable the Google Gemini endpoint. |
+| `OLLAMA_ENABLED` | `false` | yes | Enable the local Ollama endpoint. |
 | `LMSTUDIO_ENABLED` | `false` | yes | Enable the local LM Studio endpoint. |
 | `NVIDIA_MODEL_PRIORITY` | *(empty)* | yes | Comma-separated model ids to prefer, in order. |
 | `OPENAI_MODEL_PRIORITY` | *(empty)* | yes | Comma-separated model ids to prefer, in order. |
+| `ANTHROPIC_MODEL_PRIORITY` | *(empty)* | yes | Comma-separated Anthropic model ids to prefer, in order. |
+| `GEMINI_MODEL_PRIORITY` | *(empty)* | yes | Comma-separated Gemini model ids to prefer, in order. |
+| `OLLAMA_MODEL_PRIORITY` | *(empty)* | yes | Comma-separated Ollama model ids to prefer, in order. |
 | `LMSTUDIO_MODEL_PRIORITY` | *(empty)* | yes | Comma-separated model ids to prefer, in order. |
 
 ### API keys
@@ -75,8 +82,14 @@ and "incomplete/failed setup"; it is independent of whether a `.env` exists.
 | --- | --- |
 | `NVIDIA_API_KEY` | NVIDIA key (reloadable, secret). |
 | `OPENAI_API_KEY` | OpenAI key (reloadable, secret). |
+| `ANTHROPIC_API_KEY` | Anthropic key (reloadable, secret). |
+| `GEMINI_API_KEY` | Gemini key (reloadable, secret). |
 | `LMSTUDIO_API_KEY` | Key for keyed local servers; usually empty (reloadable, secret). |
-| `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY` | Reserved for future providers; parsed but unused. |
+
+OpenRouter and Groq are **not** supported in v1.0.0 (decision D1); their
+reserved keys were removed and no `OPENROUTER_*`/`GROQ_*` variable is
+parsed. `.env` files that still contain them are unaffected (unknown
+variables are ignored).
 
 > **Deprecated** (P5): the cloud provider-key env vars (`NVIDIA_API_KEY`,
 > `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) are still
@@ -123,7 +136,7 @@ layouts.
 | --- | --- | --- | --- |
 | `LMSTUDIO_BASE_URL` | `http://localhost:1234/v1` | no | Base URL of the OpenAI-compatible local server. |
 | `LMSTUDIO_PRIORITY` | `1` | no | Priority of the LM Studio provider. |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | no | Reserved; parsed but unused. |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | no | Base URL of the local Ollama endpoint. |
 
 The preferred provider is resolved at runtime from provider priority order,
 not from configuration.
@@ -241,6 +254,43 @@ rotation/prune runbooks and event-log contract.
 | `PERSISTENCE_RETENTION_DAYS` | `0` | yes | Retention in days for persisted failure history and the security event log (`events` table); `0` disables pruning. |
 | `REQUEST_LOG_FLUSH_INTERVAL_SECONDS` | `5` | no | Write-behind flush cadence for the durable request log (min 1). |
 | `REQUEST_LOG_RETENTION_DAYS` | `30` | yes | Retention in days for `request_log` rows; `0` disables pruning. |
+
+## Project continuity (opt-in, P9)
+
+Project continuity is **disabled by default** (`CONTINUITY_ENABLED=false`).
+When enabled, opt-in conversations (`X-Relay-Conversation-Id` +
+`X-Relay-Project-Id` headers) are tracked durably in `platform.db` so a
+client can resume a conversation after a provider switch or a Relay
+restart without re-executing acknowledged work. All continuity settings
+are restart-required (none are hot-reloadable). Only metadata and derived
+state are stored — raw prompts and responses are never persisted.
+
+| Variable | Default | Reloadable | Meaning |
+| --- | --- | --- | --- |
+| `CONTINUITY_ENABLED` | `false` | no | Enable durable conversation tracking and the resume protocol. |
+| `CONTINUITY_RETENTION_DAYS` | `30` | no | Retention in days for conversations, turns, summaries, compactions, and replay rows; `0` disables pruning. Active conversations are never pruned. |
+| `CONTINUITY_FLUSH_INTERVAL_SECONDS` | `5` | no | Write-behind flush cadence for continuity rows (min 1). |
+| `CONTINUITY_CONTEXT_TOKEN_BUDGET` | `32768` | no | Token budget used by the context manager when building the next-turn envelope. |
+| `CONTINUITY_OUTPUT_RESERVE_TOKENS` | `2048` | no | Tokens reserved for model output when budgeting context. |
+| `CONTINUITY_SUMMARY_SHARE` | `0.4` | no | Fraction of the context budget reserved for summaries when compacting. |
+| `CONTINUITY_SUMMARY_MAX_CHARS` | `4096` | no | Maximum characters in a derived, redacted summary. |
+| `CONTINUITY_TAIL_MAX_ITEMS` | `20` | no | Recent turns kept verbatim (as envelope data) after compaction. |
+| `CONTINUITY_CHARS_PER_TOKEN` | `4` | no | Chars-per-token estimate used for budget math. |
+| `CONTINUITY_SUMMARIZER_MODEL` | *(empty)* | no | Model id for optional LLM summaries; empty = extractive only (no summarizer calls). |
+| `MAX_SWITCHES_PER_TURN` | `3` | no | Cap on provider switches within a single turn (a storm guard). |
+| `MAX_SWITCHES_PER_WINDOW` | `5` | no | Cap on provider switches within the switch-window. |
+| `MAX_RESUME_REPLAYS` | `3` | no | Durable cap on replay attempts per resume token; exhausted → the resume path denies. |
+
+The resume protocol: an opt-in client sends
+`X-Relay-Conversation-Id` / `X-Relay-Project-Id` and receives a
+single-use resume token; after an interruption it resumes with that token
+and Relay replays the durable, per-conversation sequence (each server
+`seq` advances monotonically, so acknowledged work is never re-executed).
+Replay attempts are tracked durably (`resume_replays`, schema v8) so the
+cap survives restarts, and the resume path fails closed if the tracker
+cannot be persisted. See [deployment.md](deployment.md) and
+[platform-db-schema.md](platform-db-schema.md) for the storage model and
+privacy contract.
 
 ## Recommended production profile
 
