@@ -1,28 +1,39 @@
 """
-``relay config`` subcommands (P7.1, read-only): ``show``, ``validate``,
-``diff``.
+``relay config`` subcommands: ``show``, ``validate``, ``diff`` (P7.1,
+read-only) and ``set``, ``unset``, ``reload`` (P7.2).
 
-All reads are side-effect free: nothing here mutates ``.env``, the process
+Reads are side-effect free: nothing here mutates ``.env``, the process
 environment, or the in-process settings singleton. Secret fields are masked
 with ``mask_key`` in ``show``/``diff`` and reduced to field-name-only errors
 by ``reload._redact`` in ``validate``; no raw secret material is ever
-printed. Write commands (``set``/``unset``/``reload``) arrive in P7.2.
+printed.
+
+Writes (P7.2) validate before persisting through ``config_store`` (the
+single writer), route provider keys through ``set_provider_config`` so the
+``RELAY_KEYRING`` boundary is honored, apply live changes with
+``reload_settings`` (never importing ``app.core.relay``), roll the file
+back on a failed reload, and emit ``config.set``/``config.unset``/
+``config.reload`` audit events with counts only. ``--dry-run`` validates and
+previews without touching the filesystem.
 """
 
 from __future__ import annotations
 
+import getpass
 import json
 import sys
 from pathlib import Path
 
 from dotenv import dotenv_values
 
+from app.cli.provider_keys import _confirm_write, _emit, _read_stdin
 from app.core.config import settings
 from app.core.config_spec import (
     SPECS,
     INFO,
     LIVE,
     RESTART,
+    SPEC_BY_ENV,
     parse_value,
     render_value,
     validate_value,
@@ -33,7 +44,7 @@ from app.setup.key_validation import mask_key
 
 
 def add_config_parser(parser) -> None:
-    """Attach the ``show``/``validate``/``diff`` subparsers."""
+    """Attach the ``show``/``validate``/``diff``/``set``/``unset``/``reload`` subparsers."""
     sub = parser.add_subparsers(dest="config_command")
 
     show = sub.add_parser(
@@ -73,6 +84,83 @@ def add_config_parser(parser) -> None:
         help="One or two env files to compare (two = file vs file).",
     )
 
+    set_ = sub.add_parser(
+        "set",
+        help="Set one configuration value. Validates first; secrets are "
+             "never echoed and provider keys route through the keyring "
+             "when RELAY_KEYRING is on.",
+    )
+    set_.add_argument("env", help="Env var name (e.g. REQUEST_TIMEOUT).")
+    set_.add_argument(
+        "value",
+        nargs="?",
+        default=None,
+        help="Value; '-' reads it from stdin; omit for a hidden prompt "
+             "(secrets only).",
+    )
+    set_.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm non-interactively (required when stdin is not a TTY).",
+    )
+    set_.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and preview the change without writing anything.",
+    )
+    set_.add_argument(
+        "--no-reload",
+        action="store_true",
+        help="Persist only; skip the in-process apply.",
+    )
+    set_.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable report (values still never included).",
+    )
+
+    unset = sub.add_parser(
+        "unset",
+        help="Remove one setting (restores the default on the next load).",
+    )
+    unset.add_argument("env", help="Env var name (e.g. REQUEST_TIMEOUT).")
+    unset.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm non-interactively (required when stdin is not a TTY).",
+    )
+    unset.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the change without writing anything.",
+    )
+    unset.add_argument(
+        "--no-reload",
+        action="store_true",
+        help="Persist only; skip the in-process apply.",
+    )
+    unset.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable report (values still never included).",
+    )
+
+    reload_ = sub.add_parser(
+        "reload",
+        help="Re-read the active .env into the process and report which "
+             "live fields applied or stayed unchanged (field names only).",
+    )
+    reload_.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would change without mutating anything.",
+    )
+    reload_.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable report (field names only).",
+    )
+
 
 def _run_config(args, parser) -> None:
     """Dispatch one ``relay config`` subcommand."""
@@ -82,6 +170,12 @@ def _run_config(args, parser) -> None:
         _cmd_config_validate(args, parser)
     elif args.config_command == "diff":
         _cmd_config_diff(args, parser)
+    elif args.config_command == "set":
+        _cmd_config_set(args, parser)
+    elif args.config_command == "unset":
+        _cmd_config_unset(args, parser)
+    elif args.config_command == "reload":
+        _cmd_config_reload(args, parser)
     else:
         parser.print_help()
 
@@ -414,3 +508,205 @@ def _collect_diff(rows_a, rows_b, env_specs, mode):
             missing.append(detail)
 
     return changed, unchanged, missing
+
+
+# -------------------------------------------------------------- set / unset
+
+def _resolve_value(args, parser, env: str, spec) -> str:
+    """
+    Resolve a ``set`` value: positional, ``-`` for stdin, or a hidden
+    getpass prompt for secret fields on interactive terminals. Never echoed.
+    """
+    value = args.value or ""
+
+    if value == "-":
+        value = _read_stdin(parser)
+
+    if not value:
+        if spec is not None and spec.secret and sys.stdin.isatty():
+            value = getpass.getpass(f"{env}: ")
+        else:
+            parser.error(
+                f"a value is required for {env} (positional or '-' for stdin)"
+            )
+
+    value = value.strip()
+
+    if not value:
+        parser.error(f"a value is required for {env} (positional or '-' for stdin)")
+
+    return value
+
+
+def _confirm_prompt(env: str, spec, value: str) -> str:
+    """Confirmation prompt with a masked secret / plain value."""
+    shown = mask_key(value) if spec is not None and spec.secret else value
+    return f"Set {env}={shown}?"
+
+
+def _print_mutation_report(report: dict, args) -> None:
+    """Render a set/unset report; secrets are already masked in the dict."""
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return
+
+    if report.get("dry_run"):
+        print(f"{report['env']}: {report['old']} -> {report['new']}")
+        print(
+            f"effect={report['effect']}"
+            + ("; would apply in-process" if report.get("would_reload") else "")
+            + " (dry run, nothing written)"
+        )
+        return
+
+    print(f"{report['env']} saved (effect={report['effect']}).")
+
+    if report.get("reloaded"):
+        print("Applied in-process.")
+    elif report.get("effect") == RESTART:
+        print("Restart required for this change to take effect.")
+
+    if report.get("restored"):
+        print("Reload failed; the previous value was restored.")
+
+
+def _cmd_config_set(args, parser) -> None:
+    """``relay config set <ENV> <VALUE>``: validate, confirm, write, apply."""
+    from app.services import config_mutation
+
+    spec = SPEC_BY_ENV.get(args.env)
+    value = _resolve_value(args, parser, args.env, spec)
+
+    if args.dry_run:
+        report = config_mutation.set_setting(
+            args.env, value, reload=not args.no_reload, dry_run=True
+        )
+        _print_mutation_report(report, args)
+        return
+
+    _confirm_write(args, parser, _confirm_prompt(args.env, spec, value))
+
+    try:
+        report = config_mutation.set_setting(
+            args.env, value, reload=not args.no_reload
+        )
+    except config_mutation.ConfigUsageError as exc:
+        _emit(
+            "config.set",
+            target=args.env,
+            outcome="failed",
+            detail={"reloaded": False, "restored": False},
+        )
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    except config_mutation.ConfigMutationError as exc:
+        _emit(
+            "config.set",
+            target=args.env,
+            outcome="failed",
+            detail={
+                "reloaded": False,
+                "restored": bool(getattr(exc, "restored", False)),
+            },
+        )
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    _emit(
+        "config.set",
+        target=args.env,
+        outcome="ok",
+        detail={
+            "reloaded": report.get("reloaded"),
+            "restored": report.get("restored"),
+        },
+    )
+    _print_mutation_report(report, args)
+
+
+def _cmd_config_unset(args, parser) -> None:
+    """``relay config unset <ENV>``: remove a key, restore the default."""
+    from app.services import config_mutation
+
+    if args.dry_run:
+        report = config_mutation.unset_setting(
+            args.env, reload=not args.no_reload, dry_run=True
+        )
+        _print_mutation_report(report, args)
+        return
+
+    _confirm_write(args, parser, f"Unset {args.env}?")
+
+    try:
+        report = config_mutation.unset_setting(
+            args.env, reload=not args.no_reload
+        )
+    except config_mutation.ConfigUsageError as exc:
+        _emit(
+            "config.unset",
+            target=args.env,
+            outcome="failed",
+            detail={"reloaded": False, "restored": False},
+        )
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    except config_mutation.ConfigMutationError as exc:
+        _emit(
+            "config.unset",
+            target=args.env,
+            outcome="failed",
+            detail={
+                "reloaded": False,
+                "restored": bool(getattr(exc, "restored", False)),
+            },
+        )
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    _emit(
+        "config.unset",
+        target=args.env,
+        outcome="ok",
+        detail={
+            "reloaded": report.get("reloaded"),
+            "restored": report.get("restored"),
+        },
+    )
+    _print_mutation_report(report, args)
+
+
+def _cmd_config_reload(args, parser) -> None:
+    """``relay config reload``: re-read .env in-process, report field names."""
+    from app.services import config_mutation
+
+    try:
+        report = config_mutation.reload_settings_report(dry_run=args.dry_run)
+    except ValueError as exc:
+        _emit("config.reload", target="", outcome="failed", detail={})
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    if not args.dry_run:
+        _emit(
+            "config.reload",
+            target="",
+            outcome="ok",
+            detail={
+                "applied": len(report["applied"]),
+                "unchanged": len(report["unchanged"]),
+            },
+        )
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return
+
+    print("Dry run: nothing changed." if args.dry_run else "Configuration reloaded.")
+    print(
+        f"applied ({len(report['applied'])}): "
+        + (", ".join(report["applied"]) or "(none)")
+    )
+    print(
+        f"unchanged ({len(report['unchanged'])}): "
+        + (", ".join(report["unchanged"]) or "(none)")
+    )

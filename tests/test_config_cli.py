@@ -1,14 +1,17 @@
 """
-Tests for ``relay config`` (P7.1, read-only): ``show``, ``validate``,
-``diff``.
+Tests for ``relay config``: ``show``, ``validate``, ``diff`` (P7.1,
+read-only) and ``set``, ``unset``, ``reload`` (P7.2).
 
 These exercise the CLI through ``main(argv)`` + ``capsys`` exactly like the
 other CLI test modules, including the masking/redaction guarantees: no raw
 secret value may ever reach stdout or stderr, and ``validate`` reports
-field names only.
+field names only. The P7.2 write tests run against a hermetic temp ``.env``
+and restore the settings singleton plus the process environment afterwards.
 """
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,12 +26,42 @@ from app.core.config_spec import (
     parse_value,
     render_value,
 )
+from app.services import config_store
 
 SECRETS = {
     spec.env
     for spec in SPECS
     if spec.secret and spec.env is not None
 }
+
+
+@pytest.fixture
+def mutation_env(monkeypatch, tmp_path):
+    """
+    Hermetic .env for the P7.2 write commands: point the single writer
+    (``config_store.env_file``) and the reload path (``app.core.config
+    .env_file``) at a temp file, and restore the settings singleton plus
+    the process environment afterwards so no test leaks state.
+    """
+    from app.core import config as config_module
+
+    path = tmp_path / ".env"
+    monkeypatch.setattr(config_store, "env_file", path)
+    monkeypatch.setattr(config_module, "env_file", path)
+
+    before_env = dict(os.environ)
+    before_settings = dict(settings.__dict__)
+
+    yield path
+
+    for key in list(os.environ):
+        if key not in before_env:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = before_env[key]
+
+    settings.__dict__.clear()
+    settings.__dict__.update(before_settings)
 
 
 def _write_env(tmp_path: Path, pairs: dict[str, str], name: str = "test.env") -> Path:
@@ -321,3 +354,280 @@ def test_no_subcommand_prints_help(capsys):
     assert "show" in out
     assert "validate" in out
     assert "diff" in out
+    assert "set" in out
+    assert "unset" in out
+    assert "reload" in out
+
+
+# --------------------------------------------------- set (P7.2)
+
+def test_set_valid_exits_zero_and_writes(mutation_env, capsys):
+    main(["config", "set", "MAX_RETRIES", "3", "--yes", "--no-reload"])
+
+    out, err = capsys.readouterr()
+
+    assert "MAX_RETRIES saved" in out
+    assert err == ""
+    assert "MAX_RETRIES='3'" in mutation_env.read_text(encoding="utf-8")
+
+
+def test_set_live_field_applies_in_process(mutation_env, capsys):
+    main(["config", "set", "MAX_RETRIES", "9", "--yes"])
+
+    out, err = capsys.readouterr()
+
+    assert "Applied in-process." in out
+    assert settings.max_retries == 9
+
+
+def test_set_secret_never_echoed(mutation_env, capsys):
+    main(
+        ["config", "set", "OPENAI_API_KEY", "sk-topsecret-xyz", "--yes", "--no-reload"]
+    )
+
+    out, err = capsys.readouterr()
+
+    assert "sk-topsecret-xyz" not in out + err
+    assert "OPENAI_API_KEY" in out
+    assert "sk-topsecret-xyz" in mutation_env.read_text(encoding="utf-8")
+
+
+def test_set_secret_from_stdin(mutation_env, capsys, monkeypatch):
+    import io
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("sk-stdin-secret\n"))
+    main(["config", "set", "OPENAI_API_KEY", "-", "--yes", "--no-reload"])
+
+    out, err = capsys.readouterr()
+
+    assert "sk-stdin-secret" not in out + err
+    assert "sk-stdin-secret" in mutation_env.read_text(encoding="utf-8")
+
+
+def test_set_invalid_exits_two_with_redacted_error(mutation_env, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "set", "REQUEST_TIMEOUT", "abc", "--yes"])
+
+    out, err = capsys.readouterr()
+
+    assert exc.value.code == 2
+    assert "Invalid value for REQUEST_TIMEOUT" in err
+    assert "abc" not in err
+    assert not mutation_env.exists()
+
+
+def test_set_unknown_env_exits_two(mutation_env, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "set", "NOT_A_SETTING", "x", "--yes"])
+
+    out, err = capsys.readouterr()
+
+    assert exc.value.code == 2
+    assert "Unknown setting 'NOT_A_SETTING'" in err
+    assert not mutation_env.exists()
+
+
+def test_set_noninteractive_without_yes_refused(mutation_env, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "set", "MAX_RETRIES", "3"])
+
+    out, err = capsys.readouterr()
+
+    assert exc.value.code == 1
+    assert "pass --yes to confirm" in err
+    assert not mutation_env.exists()
+
+
+def test_set_dry_run_writes_nothing(mutation_env, capsys):
+    main(["config", "set", "MAX_RETRIES", "9", "--yes", "--dry-run"])
+
+    out, err = capsys.readouterr()
+
+    assert "MAX_RETRIES" in out
+    assert "dry run" in out
+    assert not mutation_env.exists()
+
+
+def test_set_dry_run_secret_preview_masked(mutation_env, capsys):
+    main(["config", "set", "OPENAI_API_KEY", "sk-drysecret", "--yes", "--dry-run"])
+
+    out, err = capsys.readouterr()
+
+    assert "sk-drysecret" not in out + err
+    assert not mutation_env.exists()
+
+
+def test_set_restart_field_reports_restart_required(mutation_env, capsys):
+    main(["config", "set", "RELAY_PORT", "9000", "--yes", "--no-reload"])
+
+    out, err = capsys.readouterr()
+
+    assert "Restart required" in out
+    assert "RELAY_PORT='9000'" in mutation_env.read_text(encoding="utf-8")
+
+
+def test_set_json_report_has_no_values(mutation_env, capsys):
+    main(["config", "set", "MAX_RETRIES", "3", "--yes", "--no-reload", "--json"])
+
+    out, _ = capsys.readouterr()
+    payload = json.loads(out)
+
+    assert payload["saved"] is True
+    assert payload["env"] == "MAX_RETRIES"
+    assert set(payload) == {
+        "saved", "env", "effect", "reloaded", "applied", "restored"
+    }
+
+
+# ------------------------------------------------- unset (P7.2)
+
+def test_unset_removes_key(mutation_env, capsys):
+    main(["config", "set", "MAX_RETRIES", "9", "--yes", "--no-reload"])
+    capsys.readouterr()
+
+    main(["config", "unset", "MAX_RETRIES", "--yes", "--no-reload"])
+
+    out, err = capsys.readouterr()
+
+    assert "MAX_RETRIES saved" in out
+    assert "MAX_RETRIES" not in mutation_env.read_text(encoding="utf-8")
+
+
+def test_unset_absent_key_is_idempotent(mutation_env, capsys):
+    main(["config", "unset", "MAX_RETRIES", "--yes", "--no-reload"])
+
+    out, err = capsys.readouterr()
+
+    assert "MAX_RETRIES saved" in out
+    assert err == ""
+
+
+def test_unset_restores_default_in_process(mutation_env, capsys):
+    main(["config", "set", "MAX_RETRIES", "9", "--yes"])
+    capsys.readouterr()
+
+    main(["config", "unset", "MAX_RETRIES", "--yes"])
+
+    out, err = capsys.readouterr()
+
+    assert "Applied in-process." in out
+    assert settings.max_retries == 1
+
+
+# ------------------------------------------------- reload (P7.2)
+
+def test_reload_reports_applied_and_unchanged(mutation_env, capsys):
+    mutation_env.write_text("MAX_RETRIES=9\n", encoding="utf-8")
+
+    main(["config", "reload"])
+
+    out, err = capsys.readouterr()
+
+    assert "Configuration reloaded." in out
+    assert "applied" in out
+    assert "max_retries" in out
+    assert settings.max_retries == 9
+    assert err == ""
+
+
+def test_reload_dry_run_mutates_nothing(mutation_env, capsys):
+    mutation_env.write_text("MAX_RETRIES=9\n", encoding="utf-8")
+    before = settings.max_retries
+
+    main(["config", "reload", "--dry-run"])
+
+    out, err = capsys.readouterr()
+
+    assert "Dry run" in out
+    assert "max_retries" in out
+    assert settings.max_retries == before
+
+
+def test_reload_invalid_file_exits_one_redacted(mutation_env, capsys):
+    mutation_env.write_text("REQUEST_TIMEOUT=abc\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "reload"])
+
+    out, err = capsys.readouterr()
+
+    assert exc.value.code == 1
+    assert "Invalid value for REQUEST_TIMEOUT" in err
+    assert "abc" not in err
+
+
+# ----------------------------------------------------------- audit (P7.2)
+
+def test_config_set_emits_audit_event(mutation_env, capsys, isolated_event_log):
+    main(["config", "set", "MAX_RETRIES", "3", "--yes", "--no-reload"])
+    capsys.readouterr()
+
+    events = isolated_event_log.query(action="config.set")
+
+    assert len(events) == 1
+    assert events[0]["target"] == "MAX_RETRIES"
+    assert events[0]["outcome"] == "ok"
+    assert events[0]["actor"] == "cli"
+    assert events[0]["detail"] == {"reloaded": False, "restored": False}
+
+
+def test_config_set_failed_emits_failed_audit(
+    mutation_env, capsys, isolated_event_log
+):
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "set", "REQUEST_TIMEOUT", "abc", "--yes"])
+
+    assert exc.value.code == 2
+    capsys.readouterr()
+
+    events = isolated_event_log.query(action="config.set")
+
+    assert len(events) == 1
+    assert events[0]["target"] == "REQUEST_TIMEOUT"
+    assert events[0]["outcome"] == "failed"
+    assert events[0]["detail"] == {"reloaded": False, "restored": False}
+
+
+def test_config_unset_emits_audit_event(mutation_env, capsys, isolated_event_log):
+    main(["config", "unset", "MAX_RETRIES", "--yes", "--no-reload"])
+    capsys.readouterr()
+
+    events = isolated_event_log.query(action="config.unset")
+
+    assert len(events) == 1
+    assert events[0]["target"] == "MAX_RETRIES"
+    assert events[0]["outcome"] == "ok"
+    assert events[0]["detail"] == {"reloaded": False, "restored": False}
+
+
+def test_config_reload_emits_audit_event(mutation_env, capsys, isolated_event_log):
+    mutation_env.write_text("MAX_RETRIES=9\n", encoding="utf-8")
+
+    main(["config", "reload"])
+    capsys.readouterr()
+
+    events = isolated_event_log.query(action="config.reload")
+
+    assert len(events) == 1
+    assert events[0]["outcome"] == "ok"
+    # MAX_RETRIES=9 differs from the running default, so it must be applied.
+    assert events[0]["detail"]["applied"] >= 1
+    assert isinstance(events[0]["detail"]["unchanged"], int)
+
+
+def test_config_set_reload_failure_emits_failed_audit(
+    mutation_env, capsys, isolated_event_log
+):
+    mutation_env.write_text("REQUEST_TIMEOUT=abc\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "set", "MAX_RETRIES", "3", "--yes"])
+
+    assert exc.value.code == 1
+    capsys.readouterr()
+
+    events = isolated_event_log.query(action="config.set")
+
+    assert len(events) == 1
+    assert events[0]["outcome"] == "failed"
+    assert events[0]["detail"] == {"reloaded": False, "restored": True}

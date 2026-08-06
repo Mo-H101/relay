@@ -51,6 +51,8 @@ EVENT_ACTIONS = frozenset(
         "provider_key.remove",
         "provider_key.migrate",
         "config.reload",
+        "config.set",
+        "config.unset",
         "auth.success",
         "auth.failure",
         "store.open",

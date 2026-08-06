@@ -222,3 +222,110 @@ def test_keyring_disabled_writes_env_and_never_keyring(monkeypatch, tmp_path):
 
     text = env_file.read_text(encoding="utf-8")
     assert f"{defn.key_env}='sk-secret'" in text
+
+
+def test_atomic_update_preserves_unrelated_lines(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    env_file.write_text("KEEP=1\nFOO=old\nCOMMENT=yes\n", encoding="utf-8")
+
+    config_store.set_env("FOO", "new")
+
+    text = env_file.read_text(encoding="utf-8")
+    assert "KEEP=1" in text
+    assert "COMMENT=yes" in text
+    assert "FOO='new'" in text
+    assert "FOO=old" not in text
+
+
+def test_atomic_update_creates_file_when_missing(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+
+    config_store.set_env("FOO", "bar")
+
+    assert env_file.exists()
+    assert "FOO='bar'" in env_file.read_text(encoding="utf-8")
+
+
+def test_atomic_update_leaves_no_temp_files(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    config_store.set_env("A", "1")
+
+    config_store.set_env("B", "2")
+    config_store.unset_env("A")
+
+    leftovers = [
+        p for p in tmp_path.iterdir()
+        if p.name != env_file.name and p.name != env_file.name + ".lock"
+    ]
+    assert leftovers == []
+
+
+def test_atomic_update_preserves_0600_on_posix(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    if os.name == "nt":
+        pytest.skip("POSIX permission check")
+
+    env_file = _patch_env(monkeypatch, tmp_path)
+    env_file.write_text("FOO=old\n", encoding="utf-8")
+    os.chmod(env_file, 0o600)
+
+    config_store.set_env("FOO", "new")
+
+    assert stat.S_IMODE(os.stat(env_file).st_mode) == 0o600
+
+
+def test_atomic_update_tightens_loose_existing_file(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    if os.name == "nt":
+        pytest.skip("POSIX permission check")
+
+    env_file = _patch_env(monkeypatch, tmp_path)
+    env_file.write_text("FOO=old\n", encoding="utf-8")
+    os.chmod(env_file, 0o644)
+
+    config_store.set_env("FOO", "new")
+
+    assert stat.S_IMODE(os.stat(env_file).st_mode) == 0o600
+
+
+def test_atomic_update_recovers_from_aborted_replace(monkeypatch, tmp_path):
+    import os
+
+    env_file = _patch_env(monkeypatch, tmp_path)
+    env_file.write_text("FOO=old\n", encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(OSError):
+        config_store.set_env("FOO", "new")
+
+    # Original .env untouched, no temp file left behind.
+    assert env_file.read_text(encoding="utf-8") == "FOO=old\n"
+    leftovers = [
+        p for p in tmp_path.iterdir()
+        if p.name != env_file.name and p.name != env_file.name + ".lock"
+    ]
+    assert leftovers == []
+
+
+def test_set_env_interleaved_updates_lose_nothing(monkeypatch, tmp_path):
+    env_file = _patch_env(monkeypatch, tmp_path)
+    env_file.write_text("", encoding="utf-8")
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def set_one(key):
+        config_store.set_env(key, key.lower())
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(set_one, ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8"]))
+
+    text = env_file.read_text(encoding="utf-8")
+    for key in ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8"]:
+        assert f"{key}='{key.lower()}'" in text
