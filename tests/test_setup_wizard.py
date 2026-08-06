@@ -96,11 +96,13 @@ def make_defn(
 
 @pytest.fixture
 def isolated_state(monkeypatch, tmp_path):
+    from app.services import platform_store
     from app.services import setup_state
     from app.setup import persistence
 
     monkeypatch.setattr(setup_state, "state_dir", tmp_path)
     monkeypatch.setattr(persistence, "state_dir", tmp_path)
+    monkeypatch.setattr(platform_store, "state_dir", tmp_path)
     return tmp_path
 
 
@@ -133,8 +135,10 @@ def test_full_cloud_flow_ends_configured(isolated_state):
     assert result.configured == ["openai"]
     assert store.writes == [("openai", {"enabled": True, "api_key": "sk-test"})]
 
-    snapshot = json.loads((isolated_state / "availability.json").read_text(encoding="utf-8"))
-    assert snapshot["providers"]["openai"]["models"]
+    from app.setup import persistence
+
+    statuses = persistence.read_model_status(isolated_state / "platform.db")
+    assert set(statuses.get("openai", {}))  # scan results landed in model_status
 
     data = json.loads((isolated_state / "state.json").read_text(encoding="utf-8"))
     assert data["setup_state"] == "configured"

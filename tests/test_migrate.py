@@ -526,19 +526,24 @@ class TestP6Point2:
             "scanned": 2,
             "source": "migrate",
         }
-        assert json.loads(run_detail)["platform_schema_version"] == 5
+        assert (
+            json.loads(run_detail)["platform_schema_version"]
+            == platform_store.SCHEMA_VERSION
+        )
 
-    def test_v4_created_database_opens_cleanly_under_v5(
+    def test_v4_created_database_opens_cleanly_under_current_schema(
         self, tmp_path, capsys
     ):
         data_dir = tmp_path / "data"
         _build_legacy(data_dir)
         _run(_args(yes=True, data_dir=str(data_dir)))
 
-        # Simulate a P6.1-era v4 platform.db: drop events, step back.
+        # Simulate a P6.1-era v4 platform.db: drop events/request_log, step
+        # back so the additive v5/v6 migrations have to re-run.
         platform_path = data_dir / "platform.db"
         conn = sqlite3.connect(platform_path)
         conn.execute("DROP TABLE events")
+        conn.execute("DROP TABLE request_log")
         conn.execute("PRAGMA user_version = 4")
         conn.commit()
         conn.close()
@@ -553,8 +558,9 @@ class TestP6Point2:
         }
         opened.close()
 
-        assert version == 5
+        assert version == platform_store.SCHEMA_VERSION
         assert "events" in tables
+        assert "request_log" in tables
 
     def test_purge_failure_never_fails_the_run(self, tmp_path, monkeypatch, capsys):
         data_dir = tmp_path / "data"

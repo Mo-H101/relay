@@ -8,7 +8,8 @@ and ``StateStore``:
 * the combined schema migration history (``MIGRATIONS`` +
   ``PRAGMA user_version``) replaying the legacy ``relay_keys.db`` (v1)
   and ``relay_state.db`` (v1-v3) steps plus the ``model_status``
-  table (v4) and the durable ``events`` audit table (v5),
+  table (v4), the durable ``events`` audit table (v5), and the
+  metadata-only ``request_log`` table (v6),
 * an in-process migration lock so concurrent opens of the same file
   cannot race a migration,
 * user-only file permissions on the database plus its ``-wal``/``-shm``
@@ -38,9 +39,10 @@ from typing import List, Optional
 from app.core.config import IS_SOURCE_CHECKOUT, PROJECT_ROOT, state_dir
 
 # Combined schema version: api_keys (v1), the legacy state tables (v2),
-# the v2/v3 state additions (v3), model_status (v4), and events (v5).
-# See docs/platform-db-schema.md for the full DDL and privacy contract.
-SCHEMA_VERSION = 5
+# the v2/v3 state additions (v3), model_status (v4), events (v5), and
+# the metadata-only request_log (v6). See docs/platform-db-schema.md for
+# the full DDL and privacy contract.
+SCHEMA_VERSION = 6
 
 MIGRATIONS: dict = {
     1: [
@@ -165,6 +167,25 @@ MIGRATIONS: dict = {
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts)
+        """,
+    ],
+    6: [
+        """
+        CREATE TABLE IF NOT EXISTS request_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts           REAL NOT NULL,
+            route        TEXT NOT NULL,
+            method       TEXT,
+            status       INTEGER,
+            latency_ms   INTEGER,
+            key_id       TEXT,           -- opaque key id; NULL for unauth'd traffic
+            client_bucket TEXT NOT NULL, -- cline | opencode | continue | other
+            ua           TEXT,           -- trimmed User-Agent, metadata only
+            auth_scheme  TEXT            -- public | bearer | header | none
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log (ts)
         """,
     ],
 }

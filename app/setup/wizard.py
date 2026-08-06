@@ -22,7 +22,7 @@ from app.providers.availability import GLYPH, UNAVAILABLE
 from app.providers.registry import PROVIDER_MENU, RUNTIME_READY
 from app.services import config_store, setup_state
 from app.setup.key_validation import resolve_cloud_key
-from app.setup.persistence import write_snapshot
+from app.setup.persistence import write_model_status
 from app.setup.reporting import ROLLING_WINDOW
 from app.setup.scan import ScanEngine
 
@@ -179,7 +179,7 @@ def _catalog_and_scan(
     ui.notice(f"  Found: {len(models)} models")
 
     available, results = _scan(ui, client, provider, models)
-    write_snapshot(defn.id, results)
+    write_model_status(defn.id, results)
 
     priority = None
 

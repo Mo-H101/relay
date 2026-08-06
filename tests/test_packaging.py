@@ -460,7 +460,7 @@ def test_installed_cli_runs_from_arbitrary_cwd_with_stable_state(
             "from app.services import setup_state; "
             "from app.setup import persistence; "
             "setup_state.write_setup_state('configured'); "
-            "persistence.write_snapshot('nvidia', [])",
+            "persistence.write_model_status('nvidia', [])",
         ],
         cwd=str(arbitrary_cwd),
         env=env,
@@ -469,4 +469,4 @@ def test_installed_cli_runs_from_arbitrary_cwd_with_stable_state(
     )
     assert write.returncode == 0, write.stderr
     assert (data_dir / "state.json").exists()
-    assert (data_dir / "availability.json").exists()
+    assert (data_dir / "platform.db").exists()

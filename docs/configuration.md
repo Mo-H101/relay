@@ -239,6 +239,8 @@ rotation/prune runbooks and event-log contract.
 | `PERSISTENCE_PATH` | `state_dir/platform.db` | no | SQLite database path. |
 | `PERSISTENCE_FLUSH_INTERVAL_SECONDS` | `60` | no | Write-behind flush interval (min 1). |
 | `PERSISTENCE_RETENTION_DAYS` | `0` | yes | Retention in days for persisted failure history and the security event log (`events` table); `0` disables pruning. |
+| `REQUEST_LOG_FLUSH_INTERVAL_SECONDS` | `5` | no | Write-behind flush cadence for the durable request log (min 1). |
+| `REQUEST_LOG_RETENTION_DAYS` | `30` | yes | Retention in days for `request_log` rows; `0` disables pruning. |
 
 ## Recommended production profile
 

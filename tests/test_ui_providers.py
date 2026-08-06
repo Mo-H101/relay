@@ -170,10 +170,12 @@ async def test_rerun_setup_uses_full_provider_menu(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_rescan_selected_provider_writes_snapshot(monkeypatch, tmp_path):
     from app.providers.base import ModelProbe
+    from app.services import platform_store
     from app.setup import persistence
 
     monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
     monkeypatch.setattr(persistence, "state_dir", tmp_path)
+    monkeypatch.setattr(platform_store, "state_dir", tmp_path)
 
     relay = make_relay(
         [FakeProvider("NVIDIA", api_key="k", models=["m1", "m2"])]
@@ -193,7 +195,8 @@ async def test_rescan_selected_provider_writes_snapshot(monkeypatch, tmp_path):
         await pilot.pause()
 
         assert "Scanned NVIDIA NIM: 2/2 available" in _status_text(screen)
-        assert (tmp_path / "availability.json").exists()
+        statuses = persistence.read_model_status(tmp_path / "platform.db")
+        assert statuses == {"nvidia": {"m1": "available", "m2": "available"}}
 
 
 @pytest.mark.asyncio

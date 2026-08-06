@@ -759,6 +759,20 @@ class Settings:
             minimum=0,
         )
 
+        # Durable request log (schema v6). Flush cadence for the
+        # background write-behind; retention bounds how many days of
+        # metadata rows are kept (0 disables pruning).
+        self.request_log_flush_interval_seconds = _valid_int(
+            "REQUEST_LOG_FLUSH_INTERVAL_SECONDS",
+            os.getenv("REQUEST_LOG_FLUSH_INTERVAL_SECONDS", "5"),
+            minimum=1,
+        )
+        self.request_log_retention_days = _valid_int(
+            "REQUEST_LOG_RETENTION_DAYS",
+            os.getenv("REQUEST_LOG_RETENTION_DAYS", "30"),
+            minimum=0,
+        )
+
 
 settings = Settings()
 

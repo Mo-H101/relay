@@ -26,6 +26,19 @@ _audit_log = _event_log_module.EventLog(
 )
 _event_log_module.event_log = lambda: _audit_log
 
+# Session-wide request-log isolation. The HTTP middleware buffers one
+# metadata row per routed request into the module-level request-log
+# accessor, which defaults to the real state dir. Point it at a throwaway
+# temp database for the whole test session so no test touches (or
+# creates) the developer's platform.db.
+from app.services import request_log as _request_log_module  # noqa: E402
+
+_request_log = _request_log_module.RequestLogStore(
+    str(Path(tempfile.mkdtemp(prefix="relay-test-reqlog-")) / "platform.db"),
+    flush_interval_seconds=0,
+)
+_request_log_module.request_log = lambda: _request_log
+
 
 @pytest.fixture
 def isolated_event_log(monkeypatch, tmp_path):

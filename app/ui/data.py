@@ -23,8 +23,12 @@ from app.providers.registry import PROVIDER_MENU, PROVIDER_REGISTRY
 from app.security.auth import auth_configured
 from app.services import config_store as config_store_module
 from app.services import setup_state
+from app.services.apps_projection import (
+    ClientActivityEntry,
+    client_activity as apps_client_activity,
+    auth_totals as apps_auth_totals,
+)
 from app.services.capabilities import is_chat_testable
-from app.services.client_tracking import ClientActivityEntry, client_tracking
 from app.services.diagnostics import DiagnosticsService
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
@@ -118,11 +122,11 @@ def probe_glyph(status: str) -> str:
     return GLYPH.get(status, "?")
 
 
-# Availability-snapshot statuses (probe terms) -> health terms used by
-# ModelInfo. Unrecognized snapshot values degrade to "unknown".
+# Durable ``model_status`` platform statuses -> health terms used by
+# ModelInfo. Unrecognized values degrade to "unknown".
 _AVAILABILITY_STATUS = {
     "available": "healthy",
-    "overloaded": "degraded",
+    "degraded": "degraded",
     "unavailable": "unavailable",
 }
 
@@ -370,21 +374,22 @@ class ServiceFacade:
 
     def _snapshot_statuses(self) -> dict[str, dict[str, str]]:
         """
-        Availability-snapshot statuses joined by runtime provider name.
-        Only snapshot entries for known registry providers are returned.
+        Durable ``model_status`` statuses joined by runtime provider name.
+        Only entries for known registry providers are returned; an
+        unavailable store degrades to an empty snapshot.
         """
-        data = persistence.read_all()
+        data = persistence.read_model_status()
         result: dict[str, dict[str, str]] = {}
 
         for defn in PROVIDER_REGISTRY.values():
-            snapshot = data["providers"].get(defn.id)
+            snapshot = data.get(defn.id)
 
             if not snapshot:
                 continue
 
             result[defn.provider_name] = {
-                entry["model"]: _AVAILABILITY_STATUS.get(entry["status"], "unknown")
-                for entry in snapshot.get("models", [])
+                model: _AVAILABILITY_STATUS.get(status, "unknown")
+                for model, status in snapshot.items()
             }
 
         return result
@@ -593,7 +598,7 @@ class ServiceFacade:
 
         engine = ScanEngine()
         results = engine.scan(client, provider, list(provider.models))
-        persistence.write_snapshot(defn.id, results)
+        persistence.write_model_status(defn.id, results)
 
         available = sum(1 for result in results if result.status != "unavailable")
 
@@ -748,9 +753,10 @@ class ServiceFacade:
     def client_activity(self) -> list[ClientActivityEntry]:
         """
         Client activity rows (bucket, trimmed UA, route, counters, auth
-        schemes). Metadata only; no credentials, bodies, or messages.
+        schemes) from the durable request-log projection. Metadata only;
+        no credentials, bodies, or messages.
         """
-        return client_tracking.activity()
+        return apps_client_activity()
 
     def auth_status(self) -> AuthStatus:
         enabled = auth_configured()
@@ -767,7 +773,7 @@ class ServiceFacade:
                 "missing": relay_metrics.auth_failures.value(reason="missing"),
                 "invalid": relay_metrics.auth_failures.value(reason="invalid"),
             },
-            presented=client_tracking.auth_totals(),
+            presented=apps_auth_totals(),
         )
 
     def endpoint_status(self) -> dict:

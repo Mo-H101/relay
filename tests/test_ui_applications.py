@@ -8,27 +8,45 @@ render an Authorization value, API key, body, prompt, or response.
 
 import pytest
 
-from app.services.client_tracking import client_tracking
+from app.services import request_log as request_log_module
 from app.services.metrics import relay_metrics
 from app.ui.data import ServiceFacade
 from tests.ui_fakes import FakeRelay
 
 
 @pytest.fixture
-def clear_tracking():
-    client_tracking.clear()
-    yield
-    client_tracking.clear()
+def seeded_request_log(monkeypatch, tmp_path):
+    """
+    Seed the request-log projection through an isolated store: the facade
+    reads from the durable ``request_log`` table, so tests record rows and
+    flush before asserting.
+    """
+    store = request_log_module.RequestLogStore(
+        str(tmp_path / "reqlog.db"), flush_interval_seconds=0
+    )
+    monkeypatch.setattr(request_log_module, "request_log", lambda: store)
+    yield store
+    store.close()
 
 
 def _facade() -> ServiceFacade:
     return ServiceFacade(relay_instance=FakeRelay())
 
 
-def test_client_activity_projects_rows(clear_tracking):
-    client_tracking.record("cline", "Cline/3.0", "/chat", 200, "bearer")
-    client_tracking.record("cline", "Cline/3.0", "/chat", 500, "bearer")
-    client_tracking.record("opencode", "opencode/0.1", "/v1/chat/completions", 200, "none")
+def test_client_activity_projects_rows(seeded_request_log):
+    seeded_request_log.record(
+        route="/chat", client_bucket="cline", client_ua="Cline/3.0",
+        status=200, auth_scheme="bearer",
+    )
+    seeded_request_log.record(
+        route="/chat", client_bucket="cline", client_ua="Cline/3.0",
+        status=500, auth_scheme="bearer",
+    )
+    seeded_request_log.record(
+        route="/v1/chat/completions", client_bucket="opencode",
+        client_ua="opencode/0.1", status=200, auth_scheme="none",
+    )
+    seeded_request_log.flush()
 
     rows = _facade().client_activity()
 
@@ -41,8 +59,12 @@ def test_client_activity_projects_rows(clear_tracking):
     assert cline.ua == "Cline/3.0"
 
 
-def test_client_activity_never_leaks_authorization_value(clear_tracking):
-    client_tracking.record("cline", "Cline/3.0", "/chat", 200, "bearer")
+def test_client_activity_never_leaks_authorization_value(seeded_request_log):
+    seeded_request_log.record(
+        route="/chat", client_bucket="cline", client_ua="Cline/3.0",
+        status=200, auth_scheme="bearer",
+    )
+    seeded_request_log.flush()
 
     rendered = repr(_facade().client_activity())
     assert "Authorization" not in rendered
@@ -50,7 +72,9 @@ def test_client_activity_never_leaks_authorization_value(clear_tracking):
     assert "sk-" not in rendered
 
 
-def test_auth_status_reflects_metrics_and_tracking(clear_tracking, monkeypatch):
+def test_auth_status_reflects_metrics_and_tracking(
+    seeded_request_log, monkeypatch
+):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "relay_api_key", "sk-test-key")
@@ -58,7 +82,11 @@ def test_auth_status_reflects_metrics_and_tracking(clear_tracking, monkeypatch):
     before_failures = relay_metrics.auth_failures.total()
     relay_metrics.record_auth(enabled=True, granted=False, method="bearer")
     relay_metrics.record_auth(enabled=True, granted=True, method="header")
-    client_tracking.record("opencode", "ua", "/chat", 200, "none")
+    seeded_request_log.record(
+        route="/chat", client_bucket="opencode", client_ua="ua",
+        status=200, auth_scheme="none",
+    )
+    seeded_request_log.flush()
 
     auth = _facade().auth_status()
 
@@ -73,7 +101,7 @@ def test_auth_status_reflects_metrics_and_tracking(clear_tracking, monkeypatch):
     assert "sk-test-key" not in repr(auth)
 
 
-def test_auth_status_disabled_when_no_key(clear_tracking, monkeypatch):
+def test_auth_status_disabled_when_no_key(monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "relay_api_key", "")

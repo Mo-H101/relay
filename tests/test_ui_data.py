@@ -5,8 +5,6 @@ Textual-free by design: these run headlessly and exercise ServiceFacade
 against fake Relay components.
 """
 
-import json
-
 import pytest
 
 from app.providers.base import ModelProbe
@@ -291,11 +289,13 @@ def test_probe_model_runs_scan_against_registered_client():
 
 @pytest.fixture
 def isolated_state(monkeypatch, tmp_path):
+    from app.services import platform_store
     from app.services import setup_state
     from app.setup import persistence
 
     monkeypatch.setattr(setup_state, "state_dir", tmp_path)
     monkeypatch.setattr(persistence, "state_dir", tmp_path)
+    monkeypatch.setattr(platform_store, "state_dir", tmp_path)
     return tmp_path
 
 
@@ -306,7 +306,7 @@ def test_models_merge_availability_snapshot(isolated_state):
     relay.provider_manager.register(
         FakeProvider("NVIDIA", api_key="k", models=["m1", "m2"])
     )
-    persistence.write_snapshot(
+    persistence.write_model_status(
         "nvidia",
         [
             ScanResult("m1", "available", latency_ms=10, status_code=200),
@@ -330,7 +330,7 @@ def test_models_health_store_beats_snapshot(isolated_state):
     relay.health_store.set(
         FakeReport("NVIDIA", [FakeHealthModel("m1", "degraded")])
     )
-    persistence.write_snapshot(
+    persistence.write_model_status(
         "nvidia", [ScanResult("m1", "available", latency_ms=10, status_code=200)]
     )
 
@@ -450,10 +450,8 @@ def test_rescan_models_writes_snapshot(isolated_state):
     assert report["models"] == 2
     assert report["available"] == 2
 
-    snapshot = json.loads(
-        (isolated_state / "availability.json").read_text(encoding="utf-8")
-    )
-    assert len(snapshot["providers"]["nvidia"]["models"]) == 2
+    statuses = persistence.read_model_status(isolated_state / "platform.db")
+    assert statuses == {"nvidia": {"m1": "available", "m2": "available"}}
 
 
 def test_rescan_not_configured():

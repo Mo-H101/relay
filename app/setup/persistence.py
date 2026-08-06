@@ -1,11 +1,11 @@
 """
-Availability snapshot persistence (``.relay/availability.json``).
+Availability persistence (P6.5 F3).
 
-Bounded by design: only the latest snapshot per provider is kept. The
-canonical ``model_status`` mapping (``available``/``degraded``/
-``unavailable``) is seeded into ``platform.db`` at migration time (P6.1);
-``availability.json`` stays the live setup-scan source until P6.3 (see
-``docs/platform-db-schema.md``). Writes are atomic (tmp + rename).
+Setup-scan results persist to the durable ``model_status`` table in the
+shared ``platform.db``; the live ``availability.json`` snapshot-file write
+was retired. ``read_all`` / ``iter_model_status`` remain as the read-only
+legacy-import hooks for ``relay migrate`` (decision B), which can still
+import a pre-existing ``availability.json`` file.
 """
 
 import json
@@ -65,41 +65,94 @@ def read_all(path: Optional[Path] = None) -> dict:
     }
 
 
-def read_snapshot(provider_id: str):
+def _platform_path(path: Optional[Path] = None) -> str:
     """
-    Return the latest snapshot for one provider, or None.
+    Resolve the platform database path, or a caller-provided override.
     """
-    return read_all()["providers"].get(provider_id)
+    if path is not None:
+        return str(path)
+
+    from app.services import platform_store
+
+    return str(platform_store.default_path())
 
 
-def write_snapshot(provider_id: str, results) -> None:
+def read_model_status(path: Optional[Path] = None) -> dict:
     """
-    Replace the latest snapshot for ``provider_id`` atomically.
+    Read the durable ``model_status`` table as ``{provider_id: {model:
+    status}}``. Best-effort: a missing or unopenable platform database
+    degrades to an empty mapping and never raises.
     """
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    from app.services import platform_store
 
-    payload = read_all()
-    payload["schema"] = SCHEMA
-    payload["generated_at"] = time.time()
-    payload["providers"][provider_id] = {
-        "generated_at": time.time(),
-        "models": [
-            {
-                "model": result.model,
-                "status": result.status,
-                "latency_ms": result.latency_ms,
-                "status_code": result.status_code,
-                "error": result.error,
-                "probed_at": time.time(),
-            }
-            for result in results
-        ],
-    }
+    target = Path(_platform_path(path))
 
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    if not target.exists():
+        return {}
+
+    try:
+        conn = platform_store.open_connection(str(target))
+    except Exception:  # noqa: BLE001 - read path is best-effort
+        return {}
+
+    try:
+        rows = conn.execute(
+            "SELECT provider, model, status FROM model_status"
+        ).fetchall()
+    except Exception:  # noqa: BLE001 - read path is best-effort
+        return {}
+    finally:
+        conn.close()
+
+    result: dict = {}
+
+    for provider, model, status in rows:
+        result.setdefault(provider, {})[model] = status
+
+    return result
+
+
+def write_model_status(
+    provider_id: str,
+    results,
+    path: Optional[Path] = None,
+) -> int:
+    """
+    Replace the ``model_status`` rows for ``provider_id`` with the scan
+    ``results``. Statuses map through the canonical D4 mapping
+    (``overloaded`` -> ``degraded``). Returns the number of rows written.
+    """
+    from app.services import platform_store
+
+    conn = platform_store.open_connection(_platform_path(path))
+
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM model_status WHERE provider = ?", (provider_id,)
+            )
+
+            for result in results:
+                conn.execute(
+                    "INSERT INTO model_status ("
+                    "  provider, model, status, latency_ms, status_code,"
+                    "  error, probed_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        provider_id,
+                        result.model,
+                        _STATUS_MAP.get(result.status, "unavailable"),
+                        result.latency_ms,
+                        result.status_code,
+                        result.error,
+                        time.time(),
+                        time.time(),
+                    ),
+                )
+    finally:
+        conn.close()
+
+    return len(results)
 
 
 def iter_model_status(path: Optional[Path] = None):

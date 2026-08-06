@@ -1,8 +1,11 @@
 # `platform.db` Schema
 
 The consolidated Relay platform database at `state_dir/platform.db`
-(P6.1). Replaces `relay_keys.db` and `relay_state.db`; `availability.json`
-stays the live setup-scan source until P6.3.
+(P6.1). Replaces `relay_keys.db` and `relay_state.db`. The live
+`availability.json` snapshot-file write was retired in P6.5: setup-scan
+results persist straight to the durable `model_status` table, and
+`availability.json` remains only as a read-only legacy source for
+`relay migrate`.
 
 - Schema owner: `app/services/platform_store.py` (`MIGRATIONS` +
   `SCHEMA_VERSION`).
@@ -81,6 +84,61 @@ Column mapping from `availability.json` `providers[pid].models[]` (see
 | `probed_at` | `models[].probed_at` | |
 | `updated_at` | `providers[pid].generated_at` | |
 
+### `events` (schema v5)
+
+Durable security audit log (P6.2):
+
+```sql
+CREATE TABLE IF NOT EXISTS events (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      REAL NOT NULL,
+    actor   TEXT NOT NULL,       -- "bootstrap" | opaque key_id | "cli" | "system"
+    action  TEXT NOT NULL,       -- bounded vocabulary (see D2)
+    target  TEXT NOT NULL,       -- opaque id / provider id / path label
+    outcome TEXT NOT NULL,       -- "ok" | "failed" | "denied"
+    detail  TEXT NOT NULL        -- JSON; redacted, no secrets
+)
+```
+
+`idx_events_ts` indexes `ts` for the tail-query path.
+
+### `request_log` (schema v6)
+
+Metadata-only request log (P6.5), written by `app/services/request_log.py`
+through a bounded in-memory buffer drained by a background flush:
+
+```sql
+CREATE TABLE IF NOT EXISTS request_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            REAL NOT NULL,
+    route         TEXT NOT NULL,
+    method        TEXT,
+    status        INTEGER,
+    latency_ms    INTEGER,
+    key_id        TEXT,           -- opaque key id; NULL for unauth'd traffic
+    client_bucket TEXT NOT NULL,  -- cline | opencode | continue | other
+    ua            TEXT,           -- trimmed User-Agent, metadata only
+    auth_scheme   TEXT            -- public | bearer | header | none
+)
+```
+
+`idx_request_log_ts` indexes `ts` for retention pruning and the
+newest-first queries. Privacy contract: rows hold metadata only - ts,
+route, method, status, latency, opaque key id, client bucket, trimmed
+User-Agent, and the auth-scheme label. Prompts, bodies, responses, raw
+keys, hash material, provider keys, and correlation ids are never stored.
+The Authorization header value itself never lands in this table. Retention
+defaults to 30 days (`REQUEST_LOG_RETENTION_DAYS`); the write-behind flush
+cadence is `REQUEST_LOG_FLUSH_INTERVAL_SECONDS` (default 5).
+
+### Connected-applications projection (derived, not stored)
+
+`relay apps` and the TUI Applications screen read a read-only projection
+over `api_keys` x `request_log` (`app/services/apps_projection.py`): one
+row per (identity, route) exposing label, opaque key id, route/bucket,
+request/success/failure counts, auth schemes, and last-seen. No secrets;
+unknown key ids fall back to their short opaque id.
+
 ## Privacy contract
 
 `platform.db` stores **scrypt hashes only** for keys and **metadata only**
@@ -101,6 +159,8 @@ config swap.
 | 2 | `learned_state`, `telemetry`, `telemetry_failures`, `idx_telemetry_failures_pair` |
 | 3 | `ALTER learned_state ADD provider_status_expires_wall`; `ALTER telemetry ADD ewma_success / ewma_latency_ms / last_updated_wall`; `quality_aggregates`, `decision_stats` |
 | 4 | `model_status` |
+| 5 | `events`, `idx_events_ts` |
+| 6 | `request_log`, `idx_request_log_ts` |
 
 Migrations run under an in-process lock and are idempotent (guarded by
 `PRAGMA user_version`). A file declaring a newer version than
@@ -122,7 +182,7 @@ copied aside as `platform.db.corrupt-<ts>.bak` and reopened fresh.
    `availability.json`, `.env`, plus `-wal`/`-shm` sidecars) into
    `state_dir/backups/<ts>/`, `0600` on POSIX. Sources are copied, never
    moved or deleted.
-5. Create `platform.db` via `PlatformStore` (migrations to v4).
+5. Create `platform.db` via `PlatformStore` (migrations to v6).
 6. Import: `api_keys` ← `relay_keys.db` 1:1; the five state tables ←
    `relay_state.db` 1:1; `model_status` ← `availability.json` (D4).
 7. Verify: `PRAGMA integrity_check` = `ok` and per-table row counts equal
@@ -135,9 +195,10 @@ copied aside as `platform.db.corrupt-<ts>.bak` and reopened fresh.
    remove `platform.db`, unlink the manifest.
 10. Non-interactive runs require `--yes`.
 
-## Timeline (not implemented in P6.1)
+## Schema timeline
 
-Future P6.3/P6.4 tables, listed for scope only: `providers` (non-secret
-`.env` provider fields, **never API keys**), `request_log` (metadata
-only), `events` (durable audit log), and `apps` (derived view, not a
-stored table). No auto-purge runs during P6.1 (purge is a P6.3 concern).
+`events` (durable audit log), `request_log` (metadata-only usage log), and
+the `apps` projection (derived view, not a stored table) are implemented
+in v5/v6. No auto-purge of state tables runs at startup; `request_log`
+retention is pruned by the background flush using
+`REQUEST_LOG_RETENTION_DAYS`.

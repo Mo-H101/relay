@@ -114,9 +114,9 @@ def main(argv=None) -> None:
             "'relay serve' for the headless API server, 'relay setup' "
             "to (re)run the setup wizard, 'relay keys' to manage API "
             "keys, 'relay provider keys' to manage provider keys, "
-            "'relay events' to tail the security audit log, and "
-            "'relay migrate' to consolidate legacy state files into "
-            "platform.db."
+            "'relay events' to tail the security audit log, 'relay "
+            "apps' to list connected applications, and 'relay migrate' "
+            "to consolidate legacy state files into platform.db."
         ),
     )
 
@@ -185,6 +185,15 @@ def main(argv=None) -> None:
 
     add_events_parser(events)
 
+    apps = subparsers.add_parser(
+        "apps",
+        help="List connected applications (labeled keys x request log).",
+    )
+
+    from app.cli.apps import add_apps_parser
+
+    add_apps_parser(apps)
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -209,6 +218,10 @@ def main(argv=None) -> None:
         from app.cli.events import _run_events
 
         _run_events(args, parser)
+    elif args.command == "apps":
+        from app.cli.apps import _run_apps
+
+        _run_apps(args, parser)
     elif args.command is None:
         if _config_configured():
             _cmd_tui()

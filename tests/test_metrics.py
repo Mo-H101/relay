@@ -4,6 +4,7 @@ metrics middleware, and the /metrics endpoint.
 """
 
 import pytest
+from collections import Counter
 from fastapi.testclient import TestClient
 
 from app.main import app as fastapi_app
@@ -638,48 +639,55 @@ class TestHealthMetrics:
 
 
 class TestClientTracking:
-    def test_middleware_records_client_activity(self, client):
-        from app.services.client_tracking import client_tracking
+    @pytest.fixture(autouse=True)
+    def isolated_request_log(self, monkeypatch, tmp_path):
+        from app.services import request_log as request_log_module
 
-        client_tracking.clear()
+        store = request_log_module.RequestLogStore(
+            str(tmp_path / "reqlog.db"), flush_interval_seconds=0
+        )
+        monkeypatch.setattr(request_log_module, "request_log", lambda: store)
+        yield store
+        store.close()
+
+    def test_middleware_records_client_activity(
+        self, client, isolated_request_log
+    ):
         client.get("/health", headers={"User-Agent": "Cline/3.0 (VS Code)"})
         client.get("/health", headers={"User-Agent": "opencode/0.1"})
         client.get("/health", headers={"User-Agent": "curl/8.6"})
 
-        rows = {r.bucket: r for r in client_tracking.activity()}
-        assert rows["cline"].requests == 1
-        assert rows["opencode"].requests == 1
-        assert rows["other"].requests == 1
+        isolated_request_log.flush()
+        counts = Counter(r["client_bucket"] for r in isolated_request_log.query())
+        assert counts["cline"] == 1
+        assert counts["opencode"] == 1
+        assert counts["other"] == 1
 
-        client_tracking.clear()
-
-    def test_middleware_captures_auth_scheme_labels(self, client, monkeypatch):
+    def test_middleware_captures_auth_scheme_labels(
+        self, client, isolated_request_log, monkeypatch
+    ):
         from app.core.config import settings
-        from app.services.client_tracking import client_tracking
 
         monkeypatch.setattr(settings, "relay_api_key", "secret")
-        client_tracking.clear()
         client.get("/providers", headers={"Authorization": "Bearer secret"})
         client.get("/providers", headers={"X-Relay-API-Key": "secret"})
         client.get("/health")
 
-        auth = client_tracking.auth_totals()
+        isolated_request_log.flush()
+        auth = isolated_request_log.auth_totals()
         assert auth.get("bearer") == 1
         assert auth.get("header") == 1
         assert auth.get("public") == 1
 
-        client_tracking.clear()
-
-    def test_middleware_never_records_authorization_value(self, client):
-        from app.services.client_tracking import client_tracking
-
-        client_tracking.clear()
+    def test_middleware_never_records_authorization_value(
+        self, client, isolated_request_log
+    ):
         client.get("/health", headers={"Authorization": "Bearer super-secret-xyz"})
-        rendered = repr(client_tracking.activity()) + repr(client_tracking.auth_totals())
+
+        isolated_request_log.flush()
+        rendered = repr(isolated_request_log.query())
         assert "super-secret-xyz" not in rendered
         assert "Bearer" not in rendered
-
-        client_tracking.clear()
 
 
 class FakeResponse:

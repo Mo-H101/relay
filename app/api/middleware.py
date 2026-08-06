@@ -11,8 +11,8 @@ never inspects payloads, and never raises. Unmatched routes are labeled
 import time
 
 from app.security.auth import auth_configured, auth_scheme
+from app.services import request_log as request_log_module
 from app.services.client_detection import classify_client
-from app.services.client_tracking import client_tracking
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
 
@@ -97,15 +97,18 @@ class MetricsMiddleware:
                     latency_ms=duration * 1000.0,
                     key_id=scope.get("relay_key_id", ""),
                 )
-                self._record_client(scope, route_path, status or 500)
+                self._record_client(scope, route_path, status or 500, duration)
             except Exception:
                 pass
 
-    def _record_client(self, scope, route_path: str, status: int) -> None:
+    def _record_client(
+        self, scope, route_path: str, status: int, duration: float
+    ) -> None:
         """
-        Record client metadata (bucket, trimmed UA, route, status, and the
-        presented auth-scheme label) into the bounded client tracker. The
-        Authorization header value itself is never stored.
+        Buffer one metadata-only request-log row (client bucket, trimmed
+        UA, route, status, latency, opaque key id, and the presented
+        auth-scheme label). The Authorization header value itself is
+        never stored, and the write path never raises.
         """
         headers = _scope_headers(scope)
         user_agent = (headers.get("user-agent") or "")[:200]
@@ -116,10 +119,13 @@ class MetricsMiddleware:
             x_api_key=headers.get("x-relay-api-key", ""),
             auth_enabled=auth_configured(),
         )
-        client_tracking.record(
-            bucket,
-            user_agent,
-            route_path,
-            status,
-            scheme,
+        request_log_module.request_log().record(
+            route=route_path,
+            method=scope.get("method", ""),
+            status=status,
+            latency_ms=duration * 1000.0,
+            key_id=scope.get("relay_key_id"),
+            client_bucket=bucket,
+            client_ua=user_agent,
+            auth_scheme=scheme,
         )
