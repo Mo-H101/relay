@@ -26,81 +26,23 @@ from contextlib import contextmanager
 from dotenv import dotenv_values
 
 from app.core.config import PROJECT_ROOT, Settings, settings
+from app.core.config_spec import (
+    reload_secret_fields as _spec_reload_secret_fields,
+    reloadable_fields as _spec_reloadable_fields,
+    simple_reloadable_fields as _spec_simple_fields,
+)
 from app.providers.base import apply_model_priority
 from app.providers.factory import build_runtime_provider, resolve_provider_key
 from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 
 # Settings read dynamically at request time and safe to reload in place.
-_SIMPLE_FIELDS = (
-    "request_timeout",
-    "max_retries",
-    "retry_honor_retry_after",
-    "retry_after_max_seconds",
-    "retry_backoff_base_seconds",
-    "retry_backoff_max_seconds",
-    "request_timeout_budget_seconds",
-    "task_routing_enabled",
-    "cross_provider_model_selection",
-    "task_coding",
-    "task_vision",
-    "task_reasoning",
-    "task_general",
-    "task_creative",
-    "task_translation",
-    "health_aware_routing",
-    "health_ttl_seconds",
-    "health_degraded_ttl_seconds",
-    "health_unavailable_ttl_seconds",
-    "health_feedback_enabled",
-    "health_feedback_model_server_error_threshold",
-    "health_feedback_provider_server_error_threshold",
-    "health_feedback_model_timeout_degraded_threshold",
-    "health_feedback_model_timeout_unavailable_threshold",
-    "health_feedback_model_invalid_request_unavailable_threshold",
-    "health_feedback_model_unknown_degraded_threshold",
-    "health_freshness_exponent",
-    "scoring_priority_weight",
-    "scoring_success_weight",
-    "scoring_latency_weight",
-    "scoring_failure_weight",
-    "scoring_preference_weight",
-    "scoring_priority_denom",
-    "scoring_latency_ref_ms",
-    "scoring_failure_ref_count",
-    "scoring_task_compatibility_weight",
-    "adaptive_routing_enabled",
-    "adaptive_min_samples",
-    "adaptive_learning_rate",
-    "adaptive_latency_weight",
-    "adaptive_reliability_weight",
-    "quality_feedback_enabled",
-    "quality_feedback_min_samples",
-    "quality_feedback_learning_rate",
-    "quality_feedback_retention_limit",
-    "quality_feedback_weight",
-    "scoring_cost_weight",
-    "decision_engine_enabled",
-    "persistence_retention_days",
-    "task_classification_enabled",
-    "task_classification_threshold",
-    "task_catalog_enabled",
-    "telemetry_enabled",
-    "decision_explanations_enabled",
-    "ops_window_seconds",
-    "ops_max_events",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-    "proxy_enabled",
-    "relay_auth_store",
-)
+# The reload allowlist lives in app/core/config_spec.py (the single source
+# of truth for setting metadata); the derived tuples below reproduce the
+# exact field names and ordering the hand-maintained lists previously had.
+_SIMPLE_FIELDS = _spec_simple_fields()
 
 # Secrets: reported by field name only.
-_SECRET_FIELDS = ("relay_api_key",) + tuple(
-    defn.key_attr
-    for defn in PROVIDER_REGISTRY.values()
-    if defn.id in RUNTIME_READY and defn.key_attr
-)
+_SECRET_FIELDS = _spec_reload_secret_fields()
 
 # Runtime provider specs are derived from the provider registry (P4.1) so
 # the registry is the single source of runtime truth. Only providers wired
@@ -117,15 +59,7 @@ _PROVIDER_SPECS = tuple(
     if defn.id in RUNTIME_READY
 )
 
-_RELOADABLE_FIELDS = (
-    tuple(_SIMPLE_FIELDS)
-    + _SECRET_FIELDS
-    + tuple(
-        f"{spec['prefix']}_{suffix}"
-        for spec in _PROVIDER_SPECS
-        for suffix in ("enabled", "api_key", "model_priority")
-    )
-)
+_RELOADABLE_FIELDS = _spec_reloadable_fields()
 
 _lock = threading.Lock()
 

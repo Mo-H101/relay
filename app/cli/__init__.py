@@ -116,7 +116,8 @@ def main(argv=None) -> None:
             "keys, 'relay provider keys' to manage provider keys, "
             "'relay events' to tail the security audit log, 'relay "
             "apps' to list connected applications, and 'relay migrate' "
-            "to consolidate legacy state files into platform.db."
+            "to consolidate legacy state files into platform.db, and "
+            "'relay config' to show, validate, or diff configuration."
         ),
     )
 
@@ -194,6 +195,17 @@ def main(argv=None) -> None:
 
     add_apps_parser(apps)
 
+    config = subparsers.add_parser(
+        "config",
+        help="Inspect configuration: show effective values (secrets "
+             "masked), validate an env file, diff env files or the "
+             "running process.",
+    )
+
+    from app.cli.config import add_config_parser
+
+    add_config_parser(config)
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -222,6 +234,10 @@ def main(argv=None) -> None:
         from app.cli.apps import _run_apps
 
         _run_apps(args, parser)
+    elif args.command == "config":
+        from app.cli.config import _run_config
+
+        _run_config(args, config)
     elif args.command is None:
         if _config_configured():
             _cmd_tui()
