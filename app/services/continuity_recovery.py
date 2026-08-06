@@ -3,17 +3,19 @@ P9d recovery, retention, and operator-visibility service.
 
 ``ContinuityRecovery`` owns the P9d recovery state machine
 (``RecoveryState``), resume-token issuance/validation (one-way SHA-256
-hashes only), the per-process replay counter, and the startup
-reconciliation pass. It is additive on top of the P9c coordinator:
-``HandoffCoordinator`` asks it for a fresh resume token per turn and
-reports ``turn_started`` / ``turn_committed`` events; the relay facade
-asks it to validate a presented token and to hydrate the durable resume
-envelope.
+hashes only), the durable replay counter (schema v8 ``resume_replays``),
+and the startup reconciliation pass. It is additive on top of the P9c
+coordinator: ``HandoffCoordinator`` asks it for a fresh resume token per
+turn and reports ``turn_started`` / ``turn_committed`` events; the relay
+facade asks it to validate a presented token and to hydrate the durable
+resume envelope.
 
 Boundary notes:
 
 * No new rows are ever written by this service except the best-effort
-  ``continuity.reconcile`` audit event. Tokens are stored as hashes only,
+  ``continuity.reconcile`` audit event and the v8 ``resume_replays``
+  attempt counter (written synchronously from ``validate_resume``, the
+  single sanctioned resume path). Tokens are stored as hashes only,
   attached to the next committed turn via the existing
   ``conversation_turns.resume_token`` column (P9a schema v7, no
   migration). Durable single-use comes from replacing the hash on the
@@ -25,6 +27,10 @@ Boundary notes:
   "SQLite never on chat paths" rule; it is read-only and bounded.
 * Recovery state is derived and process-local: it is rebuilt on startup by
   ``reconcile()``. Nothing here claims that unfinished work completed.
+* The replay counter is durable (P9e): replay attempts survive a process
+  restart because they are tracked in ``resume_replays``, keyed by
+  ``(conversation_id, token_hash)``, and cleared only when a new token is
+  issued or a turn commits.
 
 Recovery-confidence gating (clarification 1): a resume is only valid when
 the last committed turn exists, carries a resume-token hash, and has
@@ -88,8 +94,6 @@ class ContinuityRecovery:
         self._lock = threading.Lock()
         # conversation_id -> RecoveryState (derived, process-local).
         self._states: dict = {}
-        # (conversation_id, token_hash) -> attempt count (per process).
-        self._replay: dict = {}
         # conversation_id -> latest issued-but-uncommitted token hash.
         self._pending_tokens: dict = {}
 
@@ -188,9 +192,9 @@ class ContinuityRecovery:
         token_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         with self._lock:
             self._pending_tokens[conversation_id] = token_hash
-            # A new issuance resets any in-process replay history for this
-            # conversation: the old token is dead on the next commit.
-            self._drop_replay_locked(conversation_id)
+        # A new issuance ends the previous token's lifecycle: reset its
+        # durable replay budget (best-effort, never raises).
+        self._clear_replay_best_effort(conversation_id, key_id)
         return raw
 
     def pending_token_hash(self, conversation_id: str) -> Optional[str]:
@@ -200,10 +204,17 @@ class ContinuityRecovery:
         with self._lock:
             return self._pending_tokens.get(conversation_id)
 
-    def _drop_replay_locked(self, conversation_id: str) -> None:
-        for key in list(self._replay):
-            if key[0] == conversation_id:
-                del self._replay[key]
+    def _clear_replay_best_effort(
+        self, conversation_id: str, key_id: Optional[str] = None
+    ) -> None:
+        if self._store is None or not conversation_id:
+            return
+        try:
+            self._store.clear_resume_replay(conversation_id, key_id)
+        except Exception:  # noqa: BLE001 - recovery never raises
+            _logger.debug(
+                "durable replay clear failed for %s", conversation_id
+            )
 
     # ------------------------- resume validation -------------------------
 
@@ -267,15 +278,24 @@ class ContinuityRecovery:
                 conversation_id, "token_mismatch", attempted=True
             )
 
-        with self._lock:
-            replay_key = (conversation_id, token_hash)
-            attempts = self._replay.get(replay_key, 0) + 1
-            self._replay[replay_key] = attempts
-            exceeded = attempts > self._max_resume_replays
+        # Durable replay counter (P9e): the attempt is recorded in
+        # resume_replays before it is honored, so the cap survives a
+        # process restart. Fail-closed when the counter cannot be
+        # persisted: an untracked token is never honored.
+        if self._store is None:
+            return self._deny(
+                conversation_id, "store_unavailable", attempted=True
+            )
+        try:
+            attempts = self._store.record_resume_replay_attempt(
+                conversation_id, key_id, token_hash
+            )
+        except Exception:  # noqa: BLE001 - recovery never breaks chat
+            return self._deny(
+                conversation_id, "replay_store_unavailable", attempted=True
+            )
 
-        # Released the lock before denying: _deny reads the state machine,
-        # which needs the same lock.
-        if exceeded:
+        if attempts > self._max_resume_replays:
             return self._deny(
                 conversation_id, "replay_limit", attempted=True
             )
@@ -341,18 +361,21 @@ class ContinuityRecovery:
         """A new turn began (in-memory in-flight marker, S4d)."""
         self.transition(conversation_id, "turn_start")
 
-    def on_turn_committed(self, conversation_id: str) -> None:
+    def on_turn_committed(
+        self, conversation_id: str, key_id: Optional[str] = None
+    ) -> None:
         """
         A turn committed. The pending token (if any) is now durable on the
         latest turn, so an old token becomes invalid (single-use). Clears
-        the pending token and the in-process replay history.
+        the pending token and the durable replay history for the
+        conversation (best-effort).
         """
         self.transition(conversation_id, "turn_committed")
         if not conversation_id:
             return
         with self._lock:
             self._pending_tokens.pop(conversation_id, None)
-            self._drop_replay_locked(conversation_id)
+        self._clear_replay_best_effort(conversation_id, key_id)
 
     # ------------------------- reconcile -------------------------
 

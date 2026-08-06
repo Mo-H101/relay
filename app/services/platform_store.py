@@ -9,8 +9,8 @@ and ``StateStore``:
   ``PRAGMA user_version``) replaying the legacy ``relay_keys.db`` (v1)
   and ``relay_state.db`` (v1-v3) steps plus the ``model_status``
   table (v4), the durable ``events`` audit table (v5), the
-  metadata-only ``request_log`` table (v6), and the project-continuity
-  tables (v7),
+  metadata-only ``request_log`` table (v6), the project-continuity
+  tables (v7), and the durable resume-replay tracker (v8),
 * an in-process migration lock so concurrent opens of the same file
   cannot race a migration,
 * user-only file permissions on the database plus its ``-wal``/``-shm``
@@ -41,11 +41,12 @@ from app.core.config import IS_SOURCE_CHECKOUT, PROJECT_ROOT, state_dir
 
 # Combined schema version: api_keys (v1), the legacy state tables (v2),
 # the v2/v3 state additions (v3), model_status (v4), events (v5), the
-# metadata-only request_log (v6), and the project-continuity tables (v7:
+# metadata-only request_log (v6), the project-continuity tables (v7:
 # conversations, conversation_turns, summaries, compaction_records,
-# project_state). See docs/platform-db-schema.md for the full DDL and
+# project_state), and the durable resume-replay tracker (v8:
+# resume_replays). See docs/platform-db-schema.md for the full DDL and
 # privacy contract.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 MIGRATIONS: dict = {
     1: [
@@ -278,6 +279,21 @@ MIGRATIONS: dict = {
         """
         CREATE INDEX IF NOT EXISTS idx_project_state_key
             ON project_state (key_id, last_seen)
+        """,
+    ],
+    8: [
+        """
+        CREATE TABLE IF NOT EXISTS resume_replays (
+            conversation_id TEXT NOT NULL,
+            token_hash      TEXT NOT NULL,  -- sha256 hex, never a raw token
+            attempts        INTEGER NOT NULL,
+            last_ts         REAL NOT NULL,
+            PRIMARY KEY (conversation_id, token_hash)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_resume_replays_cid
+            ON resume_replays (conversation_id)
         """,
     ],
 }

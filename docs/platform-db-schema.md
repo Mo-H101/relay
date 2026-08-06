@@ -131,6 +131,73 @@ The Authorization header value itself never lands in this table. Retention
 defaults to 30 days (`REQUEST_LOG_RETENTION_DAYS`); the write-behind flush
 cadence is `REQUEST_LOG_FLUSH_INTERVAL_SECONDS` (default 5).
 
+### Project-continuity tables (schema v7)
+
+Owned by `app/services/conversation_store.py`. Metadata and derived state
+only; raw prompts, raw responses, and generated content are never stored
+(Option C privacy). Resume tokens are stored only as one-way SHA-256
+hashes:
+
+```sql
+CREATE TABLE IF NOT EXISTS conversations (
+    id            TEXT PRIMARY KEY,  -- conversation_id (uuid)
+    key_id        TEXT NOT NULL,     -- opaque app key id (scope)
+    client_bucket TEXT NOT NULL,     -- cline | opencode | continue | other
+    project_key   TEXT NOT NULL,     -- key-scoped opaque project id
+    status        TEXT NOT NULL,     -- active | archived
+    model_chain   TEXT NOT NULL,     -- bounded JSON array of model ids
+    token_budget  INTEGER,
+    created_at    REAL NOT NULL,
+    updated_at    REAL NOT NULL,
+    last_turn_ts  REAL
+)
+```
+
+```sql
+CREATE TABLE IF NOT EXISTS conversation_turns (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    seq           INTEGER NOT NULL,
+    provider      TEXT,
+    model         TEXT,
+    outcome       TEXT NOT NULL,     -- ok | failed | denied
+    task          TEXT,              -- routing task classification
+    tokens_in     INTEGER,
+    tokens_out    INTEGER,
+    latency_ms    INTEGER,
+    resume_token  TEXT,              -- stored as a hash, never raw
+    ts            REAL NOT NULL,
+    UNIQUE (conversation_id, seq)
+)
+```
+
+Plus `summaries` (one derived, redacted, bounded `content` per
+`(conversation_id, up_to_seq)`), `compaction_records`, and
+`project_state`. Indexes: `idx_conversations_key`,
+`idx_conversations_project`, `idx_turns_cid`, `idx_compaction_cid`,
+`idx_project_state_key`.
+
+### `resume_replays` (schema v8)
+
+Durable resume-replay tracker (P9e): replay-attempt limits survive a
+process restart because the counter is keyed by
+`(conversation_id, token_hash)` and persisted, rather than held in
+process memory. `token_hash` is a SHA-256 hex digest - never a raw token.
+Rows are cleared on token issuance / turn commit (single-use lifecycle)
+and removed with their conversation by retention pruning.
+
+```sql
+CREATE TABLE IF NOT EXISTS resume_replays (
+    conversation_id TEXT NOT NULL,
+    token_hash      TEXT NOT NULL,  -- sha256 hex, never a raw token
+    attempts        INTEGER NOT NULL,
+    last_ts         REAL NOT NULL,
+    PRIMARY KEY (conversation_id, token_hash)
+)
+```
+
+Indexed by `idx_resume_replays_cid` for conversation-scoped cleanup.
+
 ### Connected-applications projection (derived, not stored)
 
 `relay apps` and the TUI Applications screen read a read-only projection
@@ -161,6 +228,8 @@ config swap.
 | 4 | `model_status` |
 | 5 | `events`, `idx_events_ts` |
 | 6 | `request_log`, `idx_request_log_ts` |
+| 7 | `conversations`, `conversation_turns`, `summaries`, `compaction_records`, `project_state` + their indexes |
+| 8 | `resume_replays`, `idx_resume_replays_cid` (durable replay counter) |
 
 Migrations run under an in-process lock and are idempotent (guarded by
 `PRAGMA user_version`). A file declaring a newer version than
@@ -182,7 +251,7 @@ copied aside as `platform.db.corrupt-<ts>.bak` and reopened fresh.
    `availability.json`, `.env`, plus `-wal`/`-shm` sidecars) into
    `state_dir/backups/<ts>/`, `0600` on POSIX. Sources are copied, never
    moved or deleted.
-5. Create `platform.db` via `PlatformStore` (migrations to v6).
+5. Create `platform.db` via `PlatformStore` (migrations to v8).
 6. Import: `api_keys` ← `relay_keys.db` 1:1; the five state tables ←
    `relay_state.db` 1:1; `model_status` ← `availability.json` (D4).
 7. Verify: `PRAGMA integrity_check` = `ok` and per-table row counts equal
@@ -199,6 +268,9 @@ copied aside as `platform.db.corrupt-<ts>.bak` and reopened fresh.
 
 `events` (durable audit log), `request_log` (metadata-only usage log), and
 the `apps` projection (derived view, not a stored table) are implemented
-in v5/v6. No auto-purge of state tables runs at startup; `request_log`
-retention is pruned by the background flush using
-`REQUEST_LOG_RETENTION_DAYS`.
+in v5/v6; the project-continuity tables arrive in v7 (P9a) and the
+durable `resume_replays` replay tracker in v8 (P9e). No auto-purge of
+state tables runs at startup; `request_log` retention is pruned by the
+background flush using `REQUEST_LOG_RETENTION_DAYS`, and continuity
+conversations (plus their turns, summaries, compactions, and replay rows)
+are pruned by `ConversationStore.prune_retention`.

@@ -146,7 +146,9 @@ class ContinuityFlusher:
         Apply every buffered row to the ConversationStore on this thread.
         A ``conversation.create`` that collides with an existing row is
         idempotent (the conversation predates this process); any other
-        failure is counted and degraded.
+        failure is counted, the row is retained at the head of the queue,
+        and the drain stops so a transient store outage never loses
+        un-flushed turns (P9e, audit §3.4).
         """
         drained = 0
 
@@ -173,16 +175,28 @@ class ContinuityFlusher:
                     self._on_op_drained(kwargs.get("conversation_id"))
                     continue
                 self._record_flush_error(exc)
-                self._on_op_drained(kwargs.get("conversation_id"))
+                self._retain_row(operation, kwargs)
+                break
             except Exception as exc:
                 self._record_flush_error(exc)
-                self._on_op_drained(kwargs.get("conversation_id"))
+                self._retain_row(operation, kwargs)
+                break
 
         with self._lock:
             self._drained_count += drained
             relay_metrics.continuity_rows_queued.set(len(self._queue))
 
         return drained
+
+    def _retain_row(self, operation: str, kwargs: dict) -> None:
+        """
+        Re-queue a row that failed to flush at the head of the buffer so a
+        later pass can retry it. The conversation stays in-flight (its
+        pending count is untouched) so a background prune never removes it.
+        """
+        with self._lock:
+            self._queue.appendleft((operation, dict(kwargs)))
+            relay_metrics.continuity_rows_queued.set(len(self._queue))
 
     def _on_op_drained(self, conversation_id: Optional[str]) -> None:
         """

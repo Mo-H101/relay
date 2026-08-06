@@ -32,6 +32,7 @@ _FULL_TABLE_SET = {
     "summaries",
     "compaction_records",
     "project_state",
+    "resume_replays",
 }
 
 
@@ -70,8 +71,8 @@ class TestOpenAndSchema:
 
     def test_migration_from_scratch_history(self, tmp_path):
         # A fresh, empty file starts at user_version 0 and runs the full
-        # history (v1 -> v7), including api_keys, events, request_log, and
-        # the project-continuity tables.
+        # history (v1 -> v8), including api_keys, events, request_log, the
+        # project-continuity tables, and the resume_replays tracker.
         path = str(tmp_path / "history.db")
 
         platform_conn = platform_store.open_connection(path)
@@ -84,7 +85,7 @@ class TestOpenAndSchema:
         }
         platform_conn.close()
 
-        assert version == platform_store.SCHEMA_VERSION == 7
+        assert version == platform_store.SCHEMA_VERSION == 8
         assert _FULL_TABLE_SET <= tables
 
     def test_v4_to_v6_additive_upgrade(self, tmp_path):

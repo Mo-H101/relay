@@ -13,6 +13,7 @@ from typing import Any, Callable, List, Optional
 
 from app.models.continuity import SUMMARY_VERSION, SummaryBlock, SummaryMethod
 from app.services.memory_contract import FORBIDDEN_KEYS
+from app.services.summary_verifier import is_instruction_shaped
 
 _TRUNCATION_SUFFIX = "...(truncated)"
 
@@ -243,6 +244,8 @@ def llm_summarize(
             raise ValueError("empty llm summary")
         if _redaction_suspicious(text):
             raise ValueError("redaction-suspicious llm summary")
+        if is_instruction_shaped(text):
+            raise ValueError("instruction-shaped llm summary")
     except Exception:  # noqa: BLE001 - any failure degrades to extractive
         return extractive_summarize(normalized, budget, params=params, now=now)
 
@@ -321,7 +324,19 @@ def summarize_and_persist(
     if existing:
         latest = existing[0].get("up_to_seq")
 
-    if not verify(summary, conversation, turns, latest_up_to_seq=latest):
+    summary_budget, _ = manager.budget_split(
+        budget or merged["context_token_budget"],
+        merged["output_reserve_tokens"],
+        merged["summary_share"],
+    )
+
+    if not verify(
+        summary,
+        conversation,
+        turns,
+        latest_up_to_seq=latest,
+        max_summary_tokens=summary_budget,
+    ):
         return None
 
     recorded = store.record_summary(

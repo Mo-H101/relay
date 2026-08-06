@@ -1,9 +1,10 @@
 """
 Durable conversation store for the P9 project-continuity layer.
 
-``ConversationStore`` owns the schema-v7 continuity tables on the shared
+``ConversationStore`` owns the continuity tables on the shared
 ``platform.db`` (``conversations``, ``conversation_turns``, ``summaries``,
-``compaction_records``, ``project_state``) behind a single guarded
+``compaction_records``, ``project_state``, plus the v8
+``resume_replays`` replay tracker) behind a single guarded
 connection. It follows the ``StateStore`` / ``RequestLogStore``
 conventions: WAL + ``busy_timeout 5000`` + ``0600`` sidecars via
 ``PlatformStore``, a ``threading.Lock`` around every operation,
@@ -369,6 +370,11 @@ class ConversationStore:
                         (conversation_id,),
                     )
                     conn.execute(
+                        "DELETE FROM resume_replays"
+                        " WHERE conversation_id = ?",
+                        (conversation_id,),
+                    )
+                    conn.execute(
                         "DELETE FROM compaction_records"
                         " WHERE conversation_id = ?",
                         (conversation_id,),
@@ -495,7 +501,10 @@ class ConversationStore:
             "up_to_seq": row[1],
             "version": row[2],
             "method": row[3],
-            "content": row[4],
+            # Safe key name: the resume envelope carries this dict into
+            # resume responses and must pass the memory-contract negative
+            # tests (P9e F-2).
+            "summary_text": row[4],
             "tokens_in": row[5],
             "tokens_out": row[6],
             "ts": row[7],
@@ -625,6 +634,104 @@ class ConversationStore:
         ]
 
     # ============================
+    # Resume replay tracking (v8)
+    # ============================
+
+    def resume_replay_attempts(
+        self, conversation_id: str, key_id: str, token_hash: str
+    ) -> int:
+        """
+        Durable replay-attempt count for one ``(conversation, token_hash)``
+        pair, key-scoped. Returns 0 when no attempt was ever recorded.
+        """
+        if not token_hash or len(token_hash) > _MAX_RESUME_TOKEN_HASH_LENGTH:
+            return 0
+        conn = self._require_open()
+
+        with self._lock:
+            row = conn.execute(
+                "SELECT r.attempts FROM resume_replays r"
+                " JOIN conversations c ON c.id = r.conversation_id"
+                " WHERE r.conversation_id = ? AND c.key_id = ?"
+                "   AND r.token_hash = ?",
+                (conversation_id, key_id, token_hash),
+            ).fetchone()
+
+        return row[0] if row else 0
+
+    def record_resume_replay_attempt(
+        self, conversation_id: str, key_id: str, token_hash: str
+    ) -> int:
+        """
+        Atomically increment and return the durable replay-attempt count
+        for one ``(conversation, token_hash)`` pair, key-scoped. Returns 0
+        when the conversation is missing or not owned by ``key_id`` (no
+        row is ever created for a foreign key). The increment and read run
+        in one transaction under the store lock so concurrent validations
+        are serialized (P9e: replay limits survive process restart).
+        """
+        if not token_hash or len(token_hash) > _MAX_RESUME_TOKEN_HASH_LENGTH:
+            return 0
+        conn = self._require_open()
+
+        with self._lock:
+            with conn:
+                owned = conn.execute(
+                    "SELECT 1 FROM conversations WHERE id = ? AND key_id = ?",
+                    (conversation_id, key_id),
+                ).fetchone()
+
+                if owned is None:
+                    return 0
+
+                conn.execute(
+                    "INSERT INTO resume_replays ("
+                    "  conversation_id, token_hash, attempts, last_ts"
+                    ") VALUES (?, ?, 1, ?)"
+                    " ON CONFLICT(conversation_id, token_hash)"
+                    " DO UPDATE SET attempts = attempts + 1,"
+                    "  last_ts = excluded.last_ts",
+                    (conversation_id, token_hash, time.time()),
+                )
+                row = conn.execute(
+                    "SELECT attempts FROM resume_replays"
+                    " WHERE conversation_id = ? AND token_hash = ?",
+                    (conversation_id, token_hash),
+                ).fetchone()
+
+        return row[0] if row else 0
+
+    def clear_resume_replay(
+        self, conversation_id: str, key_id: Optional[str] = None
+    ) -> None:
+        """
+        Delete all durable replay rows for a conversation (single-use token
+        lifecycle: a new issuance or a turn commit ends the old token's
+        budget). Key-scoped when ``key_id`` is given; without a key the
+        delete is still bounded to one opaque conversation id.
+        """
+        if not conversation_id:
+            return
+        conn = self._require_open()
+
+        with self._lock:
+            with conn:
+                if key_id:
+                    conn.execute(
+                        "DELETE FROM resume_replays"
+                        " WHERE conversation_id = ? AND EXISTS ("
+                        "  SELECT 1 FROM conversations"
+                        "   WHERE id = ? AND key_id = ?)",
+                        (conversation_id, conversation_id, key_id),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM resume_replays"
+                        " WHERE conversation_id = ?",
+                        (conversation_id,),
+                    )
+
+    # ============================
     # Summaries and compactions
     # ============================
 
@@ -644,12 +751,19 @@ class ConversationStore:
         Persist one derived summary. ``content`` is redacted and bounded
         before insert (last line of defense); the summary is deduped by
         ``(conversation_id, up_to_seq)`` via the UNIQUE constraint.
+        Instruction-shaped content (P9e) is rejected so a poisoned summary
+        never counts as trusted state, regardless of which path recorded
+        it.
         """
         from app.core.config import settings
         from app.services.redaction import redact_text
+        from app.services.summary_verifier import is_instruction_shaped
 
         max_chars = settings.continuity_summary_max_chars
         safe_content = redact_text(str(content or ""))[: max_chars]
+
+        if is_instruction_shaped(safe_content):
+            raise ValueError("instruction-shaped summary content")
 
         conn = self._require_open()
 
@@ -909,6 +1023,7 @@ class ConversationStore:
             "summaries": 0,
             "compactions": 0,
             "projects": 0,
+            "replays": 0,
         }
 
         if not self._ensure_open():
@@ -958,6 +1073,16 @@ class ConversationStore:
                     f"SELECT count(*) FROM project_state{scope}",
                     (key_id,) if key_id else (),
                 ).fetchone()[0]
+                replays = self._conn.execute(
+                    "SELECT count(*) FROM resume_replays r"
+                    + (
+                        " JOIN conversations c ON c.id = r.conversation_id"
+                        " WHERE c.key_id = ?"
+                        if key_id
+                        else ""
+                    ),
+                    (key_id,) if key_id else (),
+                ).fetchone()[0]
         except Exception:  # noqa: BLE001 - diagnostics are best-effort
             return zero
 
@@ -969,6 +1094,7 @@ class ConversationStore:
             "summaries": summaries,
             "compactions": compactions,
             "projects": projects,
+            "replays": replays,
         }
 
     # ============================

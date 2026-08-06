@@ -1,8 +1,8 @@
 """
-Schema-v7 and memory-contract parity tests for the P9a continuity layer.
+Schema-v8 and memory-contract parity tests for the P9 continuity layer.
 
 Guards the contract between ``app/services/platform_store.py``
-(MIGRATIONS[7] + SCHEMA_VERSION), ``app/services/memory_contract.py``
+(MIGRATIONS[7..8] + SCHEMA_VERSION), ``app/services/memory_contract.py``
 (durable surfaces), and ``app/services/conversation_store.py`` so the
 continuity tables, their indexes, and the never-capture guarantees stay
 aligned across refactors.
@@ -30,6 +30,10 @@ P9_TABLES = [
     "project_state",
 ]
 
+V8_TABLES = [
+    "resume_replays",
+]
+
 P9_INDEXES = [
     "idx_conversations_key",
     "idx_conversations_project",
@@ -46,13 +50,14 @@ P9_SURFACES = [
     "summaries",
     "compaction_records",
     "project_state",
+    "resume_replays",
 ]
 
 
 class TestSchemaParity:
-    def test_migration_history_reaches_schema_v7(self):
-        assert SCHEMA_VERSION == 7
-        assert 7 in MIGRATIONS
+    def test_migration_history_reaches_schema_v8(self):
+        assert SCHEMA_VERSION == 8
+        assert 8 in MIGRATIONS
 
     def test_v7_defines_all_five_tables(self):
         statements = MIGRATIONS[7]
@@ -69,7 +74,16 @@ class TestSchemaParity:
             assert f"create index" in ddl
             assert index in ddl
 
-    def test_fresh_database_matches_v7_ddl(self, tmp_path):
+    def test_v8_defines_resume_replays_tracker(self):
+        ddl = " ".join(MIGRATIONS[8]).lower()
+
+        for table in V8_TABLES:
+            assert f"create table" in ddl
+            assert f" {table}" in ddl
+        assert "primary key (conversation_id, token_hash)" in ddl
+        assert "idx_resume_replays_cid" in ddl
+
+    def test_fresh_database_matches_v8_ddl(self, tmp_path):
         path = str(tmp_path / "parity.db")
         conn = open_connection(path)
         tables = {
@@ -87,10 +101,10 @@ class TestSchemaParity:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
 
-        assert version == SCHEMA_VERSION == 7
-        for table in P9_TABLES:
+        assert version == SCHEMA_VERSION == 8
+        for table in P9_TABLES + V8_TABLES:
             assert table in tables
-        for index in P9_INDEXES:
+        for index in P9_INDEXES + ["idx_resume_replays_cid"]:
             assert index in indexes
 
     def test_resume_token_column_is_storage_only_hash(self, tmp_path):
@@ -108,8 +122,8 @@ class TestSchemaParity:
 class TestModelParity:
     def test_store_exposes_schema_version(self, tmp_path):
         store = ConversationStore(str(tmp_path / "p.db"))
-        assert store.SCHEMA_VERSION == 7
-        assert store.stats()["schema_version"] == 7
+        assert store.SCHEMA_VERSION == 8
+        assert store.stats()["schema_version"] == 8
         store.close()
 
     def test_export_shapes_are_metadata_only(self, tmp_path):

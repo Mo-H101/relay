@@ -385,6 +385,52 @@ class TestRepeatedResumeAttempts:
         assert recovery.validate_resume(cid, "k", raw)["valid"] is True
         store.close()
 
+    def test_replay_limit_survives_process_restart(self, tmp_path):
+        store = _store(tmp_path)
+        cid = _commit_turn(
+            store, seq=1,
+            resume_token_hash=derive_resume_token_hash("tok"),
+        )
+
+        # Process 1: two successful resumes (durable counter = 2).
+        process_one = _recovery(store, max_resume_replays=3)
+        assert process_one.validate_resume(cid, "k", "tok")["valid"] is True
+        assert process_one.validate_resume(cid, "k", "tok")["valid"] is True
+
+        # Process 2 (simulated restart): the durable counter still sees the
+        # prior attempts, so one more resume is honored and the next is
+        # denied. The cap is no longer reset by a process restart (P9e R-1).
+        process_two = _recovery(store, max_resume_replays=3)
+        assert process_two.validate_resume(cid, "k", "tok")["valid"] is True
+        decision = process_two.validate_resume(cid, "k", "tok")
+        assert decision["valid"] is False
+        assert decision["reason"] == "replay_limit"
+        assert relay_metrics.continuity_resumes.value() == 3
+        store.close()
+
+    def test_commit_clears_durable_replay_rows(self, tmp_path):
+        store = _store(tmp_path)
+        recovery = _recovery(store, max_resume_replays=1)
+        cid = _commit_turn(
+            store, seq=1,
+            resume_token_hash=derive_resume_token_hash("tok"),
+        )
+        assert recovery.validate_resume(cid, "k", "tok")["valid"] is True
+        assert store.resume_replay_attempts(
+            cid, "k", derive_resume_token_hash("tok")
+        ) == 1
+
+        raw = recovery.issue_resume_token(cid, "k")
+        recovery.on_turn_committed(cid, "k")
+        _commit_turn(
+            store, seq=2, cid=cid,
+            resume_token_hash=derive_resume_token_hash(raw),
+        )
+        assert store.resume_replay_attempts(
+            cid, "k", derive_resume_token_hash("tok")
+        ) == 0
+        store.close()
+
 
 # ------------------------- failure injection: corrupted summary/state -------------------------
 

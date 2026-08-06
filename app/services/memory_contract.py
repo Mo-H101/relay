@@ -40,7 +40,8 @@ MEMORY_SURFACES = {
     "quality_feedback_aggregates": MemoryClass.DURABLE,
     "decision_stats": MemoryClass.DURABLE,
     # P9 project continuity: metadata-only surfaces on the shared
-    # platform.db (schema v7). Raw prompts/responses are never stored.
+    # platform.db (schema v7, plus the v8 resume_replays tracker).
+    # Raw prompts/responses are never stored.
     "conversation_store": MemoryClass.DURABLE,
     "continuity_flusher": MemoryClass.DURABLE,
     "conversations": MemoryClass.DURABLE,
@@ -48,6 +49,7 @@ MEMORY_SURFACES = {
     "summaries": MemoryClass.DURABLE,
     "compaction_records": MemoryClass.DURABLE,
     "project_state": MemoryClass.DURABLE,
+    "resume_replays": MemoryClass.DURABLE,
     # Ephemeral: process-lifetime only.
     "health_snapshots": MemoryClass.EPHEMERAL,
     "ops_store": MemoryClass.EPHEMERAL,
