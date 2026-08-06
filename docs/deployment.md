@@ -29,6 +29,10 @@ base_url=http://relay-host:8000/v1
 api_key=<RELAY_API_KEY>        # required when auth is on
 ```
 
+Step-by-step setup for Cline, OpenCode, Continue, and any other
+OpenAI-compatible client (including per-app keys): [client setup
+guides](clients/index.md).
+
 The `/v1` surface forwards `messages`, `tools`, `tool_choice`,
 `stream`, and `stream_options` verbatim, streams with a stable relay
 generated `id`, and returns OpenAI-shaped errors

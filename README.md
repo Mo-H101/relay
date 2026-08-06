@@ -60,6 +60,7 @@ http://localhost:8000/redoc (ReDoc).
 - [v1.0.0 readiness report](docs/v1.0.0-readiness-report.md) — release checklist, verification evidence, remaining risks, required actions.
 - [UX validation guide](docs/ux-validation-guide.md) — Phase 8 manual test checklist for first-time users.
 - [Terminal interface guide](docs/tui-guide.md) — startup behavior, the seven screens, Windows requirements.
+- [Client setup guides](docs/clients/index.md) — connect Cline, OpenCode, Continue, or any OpenAI-compatible client to Relay.
 - [Platform analysis](docs/platform-architecture-report.md) — Phase 9 current-architecture report.
 - [Platform missing components](docs/platform-missing-components-report.md) — Phase 9 gap analysis vs. the target platform.
 - [Platform implementation roadmap](docs/platform-implementation-roadmap.md) — Phase 9 phased plan (P0–P8).
@@ -107,6 +108,9 @@ api_key=<rl_... returned by `relay keys add`>
 and `relay keys test` verifies a key without echoing it. Store-backed keys
 are accepted when `RELAY_AUTH_STORE=true`; a store outage fails closed
 (`401`). See [docs/security.md](docs/security.md) for the full key model.
+
+Step-by-step setup for Cline, OpenCode, Continue, and any other
+OpenAI-compatible client: [client setup guides](docs/clients/index.md).
 
 ### Async Streaming (P3)
 
