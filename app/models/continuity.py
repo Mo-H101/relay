@@ -194,6 +194,79 @@ class ProjectStateRecord:
         }
 
 
+@dataclass(frozen=True)
+class SummaryBlock:
+    """
+    A derived, bounded compaction summary produced by the summarizer
+    (P9b). Mirrors ``SummaryRecord`` but carries the summarizer model
+    provenance (ephemeral; the durable ``summaries`` table has no model
+    column, so model provenance is surfaced only via envelopes/events).
+    """
+
+    conversation_id: str
+    up_to_seq: int
+    version: int
+    method: str
+    content: str
+    created_at: float
+    tokens_in: Optional[int] = None
+    tokens_out: Optional[int] = None
+    model: Optional[str] = None
+    summary_id: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        # ``content`` is exported under a safe key name so exported
+        # summaries always pass the memory-contract negative tests.
+        return {
+            "summary_id": self.summary_id,
+            "conversation_id": self.conversation_id,
+            "up_to_seq": self.up_to_seq,
+            "version": self.version,
+            "method": self.method,
+            "summary_text": self.content,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
+            "model": self.model,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True)
+class CompactionResult:
+    """
+    The outcome of one context compaction (P9b): a derived summary block,
+    the verbatim metadata tail kept for the next candidate, and the token
+    accounting that drove the split.
+    """
+
+    conversation_id: str
+    up_to_seq: int
+    reason: str
+    method: str
+    summary: Optional[SummaryBlock]
+    tail: list
+    from_tokens: int
+    to_tokens: int
+    summary_tokens: int
+    tail_tokens: int
+    created_at: float
+
+    def to_dict(self) -> dict:
+        return {
+            "conversation_id": self.conversation_id,
+            "up_to_seq": self.up_to_seq,
+            "reason": self.reason,
+            "method": self.method,
+            "summary": self.summary.to_dict() if self.summary else None,
+            "tail": [dict(turn) for turn in self.tail],
+            "from_tokens": self.from_tokens,
+            "to_tokens": self.to_tokens,
+            "summary_tokens": self.summary_tokens,
+            "tail_tokens": self.tail_tokens,
+            "created_at": self.created_at,
+        }
+
+
 __all__ = [
     "MODEL_VERSION",
     "SUMMARY_VERSION",
@@ -208,4 +281,6 @@ __all__ = [
     "SummaryRecord",
     "CompactionRecord",
     "ProjectStateRecord",
+    "SummaryBlock",
+    "CompactionResult",
 ]
