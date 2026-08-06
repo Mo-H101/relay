@@ -20,6 +20,8 @@ from app.services.state_store import StateStore, StateStoreError
 from app.services.state_flusher import StateFlusher
 from app.services.conversation_store import ConversationStore
 from app.services.continuity_flusher import ContinuityFlusher
+from app.services.context_manager import ContextManager
+from app.services.handoff import HandoffCoordinator
 from app.services.metrics import relay_metrics
 from app.services import platform_store
 from app.providers.factory import build_runtime_provider
@@ -100,6 +102,7 @@ class Relay:
         # flusher are None and every continuity path is inert.
         self.conversation_store: Optional[ConversationStore] = None
         self.continuity_flusher: Optional[ContinuityFlusher] = None
+        self.continuity_handoff: Optional[HandoffCoordinator] = None
 
         if settings.continuity_enabled:
             self._init_continuity()
@@ -125,6 +128,23 @@ class Relay:
             interval_seconds=settings.continuity_flush_interval_seconds,
             retention_days=settings.continuity_retention_days,
         )
+        self.continuity_handoff = HandoffCoordinator(
+            flusher=self.continuity_flusher,
+            context_manager=ContextManager(),
+        )
+
+    def begin_continuity_turn(self, continuity_scope):
+        """
+        Start a P9c turn from a resolved continuity scope, or return None
+        when continuity is off or the coordinator is unavailable. Never
+        raises; continuity must never break chat.
+        """
+        if not continuity_scope or self.continuity_handoff is None:
+            return None
+        try:
+            return self.continuity_handoff.start(**continuity_scope)
+        except Exception:  # noqa: BLE001 - continuity never breaks chat
+            return None
 
     def _init_persistence(self) -> None:
         """
@@ -258,7 +278,7 @@ class Relay:
 
         return candidates[0][0]
 
-    def chat(self, message: str, task: str | None = None, correlation_id: str | None = None, **generation_kwargs: Any) -> dict:
+    def chat(self, message: str, task: str | None = None, correlation_id: str | None = None, continuity_scope: dict | None = None, **generation_kwargs: Any) -> dict:
         """
         Send a message through the highest-priority available provider,
         failing over intelligently across models and providers.
@@ -267,6 +287,11 @@ class Relay:
         caller) and carried on the result dict so the API layer can emit
         it as a response header and the request logger can tag log
         records. It is never persisted.
+
+        ``continuity_scope`` (resolved from the request headers by the
+        API layer) opts this request into P9c continuity: the envelope is
+        injected, failover passes the switch caps, and the successful
+        turn is committed.
         """
 
         cid = correlation_id or new_correlation_id()
@@ -285,10 +310,13 @@ class Relay:
         if self.decision_engine.enabled:
             self.decision_engine.decide(providers, task=task)
 
+        turn = self.begin_continuity_turn(continuity_scope)
+
         result = self.chat_service.chat_across(
             candidates,
             message,
             max_retries=settings.max_retries,
+            turn=turn,
             **generation_kwargs,
         )
 
@@ -309,6 +337,7 @@ class Relay:
         message: str,
         task: str | None = None,
         correlation_id: str | None = None,
+        continuity_scope: dict | None = None,
         **generation_kwargs: Any,
     ) -> dict:
         """
@@ -335,10 +364,13 @@ class Relay:
         if self.decision_engine.enabled:
             self.decision_engine.decide(providers, task=task)
 
+        turn = self.begin_continuity_turn(continuity_scope)
+
         result = await self.async_chat_service.achat_across(
             candidates,
             message,
             max_retries=settings.max_retries,
+            turn=turn,
             **generation_kwargs,
         )
 

@@ -1,11 +1,15 @@
 """
 OpenAI-compatible API endpoints for Relay.
 """
-from fastapi import APIRouter, Response, Body
+from fastapi import APIRouter, Response, Body, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from app.core.config import settings
 from app.core.relay import relay
 from app.services.async_chat_service import AsyncChatService
+from app.services.continuity_headers import (
+    ContinuityHeaderError,
+    resolve_scope,
+)
 from app.services.correlation import new_correlation_id
 from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
@@ -23,6 +27,7 @@ router = APIRouter()
 async_chat_svc = AsyncChatService()
 
 _CORRELATION_HEADER = "X-Relay-Correlation-Id"
+_CONVERSATION_HEADER = "X-Relay-Conversation-Id"
 
 
 def _correlation_headers(correlation_id: str) -> dict:
@@ -32,17 +37,78 @@ def _correlation_headers(correlation_id: str) -> dict:
     return {_CORRELATION_HEADER: correlation_id}
 
 
+def _resolve_continuity_scope(
+    http_request: Request, correlation_id: str = ""
+) -> dict | None:
+    """
+    Resolve the continuity scope from the request headers. A malformed
+    header value becomes a generic 400 (the offending value is never
+    surfaced).
+    """
+    try:
+        return resolve_scope(http_request)
+    except ContinuityHeaderError:
+        return _openai_error_response(
+            400,
+            "Invalid relay continuity header.",
+            code="invalid_request",
+            correlation_id=correlation_id,
+        )
+
+
+def _continuity_headers(result: dict) -> dict:
+    """
+    Header payload echoing the conversation id when continuity is active.
+    """
+    continuity = result.get("continuity")
+    if not isinstance(continuity, dict):
+        return {}
+    conversation_id = continuity.get("conversation_id")
+    if not conversation_id:
+        return {}
+    return {_CONVERSATION_HEADER: conversation_id}
+
+
+def _continuity_events(result: dict) -> list[dict]:
+    """
+    The additive ``relay:*`` continuity events carried on a stream result.
+    """
+    continuity = result.get("continuity")
+    if not isinstance(continuity, dict):
+        return []
+    return [dict(ev) for ev in continuity.get("events") or []]
+
+
+def _sse_continuity_events(result: dict) -> str:
+    """
+    Render the continuity events as additive SSE lines (``event:`` +
+    ``data:``) emitted before the provider stream, so clients can observe
+    conversation creation and model handoffs without the payload being
+    affected.
+    """
+    lines: list[str] = []
+    for ev in _continuity_events(result):
+        ev_type = ev.get("type", "relay:event")
+        lines.append(f"event: {ev_type}")
+        lines.append(f"data: {json.dumps(ev)}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _openai_error_response(
     status_code: int,
     message: str,
     error_type: str = "invalid_request_error",
     code: str | None = None,
     correlation_id: str = "",
+    extra_headers: dict | None = None,
 ) -> JSONResponse:
     """
     Build an OpenAI-shaped error body ({"error": {...}}) rather than the
     FastAPI {"detail": ...} shape, so SDK clients parse errors directly.
     """
+    headers = _correlation_headers(correlation_id)
+    headers.update(extra_headers or {})
     return JSONResponse(
         status_code=status_code,
         content={
@@ -52,7 +118,7 @@ def _openai_error_response(
                 "code": code,
             }
         },
-        headers=_correlation_headers(correlation_id),
+        headers=headers,
     )
 
 
@@ -189,9 +255,20 @@ def _generation_kwargs(req: OpenAIChatCompletionRequest) -> dict:
 async def openai_chat_completion(
     req: OpenAIChatCompletionRequest = Body(...),
     response: Response = None,
+    http_request: Request = None,
 ):
     correlation_id = new_correlation_id()
     response.headers[_CORRELATION_HEADER] = correlation_id
+
+    # Continuity scope is resolved once for the whole request; a malformed
+    # header value becomes a generic 400 (never echoing the value).
+    continuity_scope = None
+    if http_request is not None:
+        continuity_scope = _resolve_continuity_scope(
+            http_request, correlation_id=correlation_id
+        )
+        if isinstance(continuity_scope, JSONResponse):
+            return continuity_scope
 
     # 1. tool_choice without tools is invalid on the OpenAI surface.
     if req.tool_choice is not None and not req.tools:
@@ -219,6 +296,8 @@ async def openai_chat_completion(
     payload = req.to_provider_payload()
     gen_kwargs = _generation_kwargs(req)
 
+    turn = relay.begin_continuity_turn(continuity_scope)
+
     # 4. Handle streaming vs non-streaming
     if req.stream:
         payload["stream"] = True
@@ -228,6 +307,7 @@ async def openai_chat_completion(
             candidates,
             payload,
             max_retries=settings.max_retries,
+            turn=turn,
         )
 
         # Record telemetry/health for candidates that failed to start.
@@ -248,10 +328,12 @@ async def openai_chat_completion(
                 error_type="server_error",
                 code="provider_error",
                 correlation_id=correlation_id,
+                extra_headers=_continuity_headers(result),
             )
 
         provider_name = result["provider"]
         stream_gen = result["stream_gen"]
+        continuity_sse = _sse_continuity_events(result)
 
         # Stable identifiers across the whole stream, plus passthrough of
         # provider deltas, finish_reason, tool_call deltas, and usage.
@@ -264,6 +346,8 @@ async def openai_chat_completion(
 
         async def stream_generator():
             nonlocal full_response, success, failure_type
+            if continuity_sse:
+                yield continuity_sse + "\n\n"
             try:
                 async for chunk in stream_gen:
                     out = {
@@ -308,10 +392,13 @@ async def openai_chat_completion(
                     success=success,
                 )
 
+        headers = {_CORRELATION_HEADER: correlation_id}
+        headers.update(_continuity_headers(result))
+
         return StreamingResponse(
             stream_generator(),
             media_type="text/event-stream",
-            headers={_CORRELATION_HEADER: correlation_id},
+            headers=headers,
         )
 
     # Non-streaming path: full message pipeline with verbatim passthrough.
@@ -322,6 +409,7 @@ async def openai_chat_completion(
             candidates,
             payload,
             max_retries=settings.max_retries,
+            turn=turn,
         )
     except Exception as exc:
         return _openai_error_response(
@@ -338,6 +426,9 @@ async def openai_chat_completion(
     # real failure signals and the winning attempt records its success.
     _record_attempts_telemetry_and_health(result)
 
+    for header, value in _continuity_headers(result).items():
+        response.headers[header] = value
+
     if not result["success"]:
         _record_chat(
             "/v1/chat/completions",
@@ -352,6 +443,7 @@ async def openai_chat_completion(
             error_type="server_error",
             code="provider_error",
             correlation_id=correlation_id,
+            extra_headers=_continuity_headers(result),
         )
 
     _record_chat(

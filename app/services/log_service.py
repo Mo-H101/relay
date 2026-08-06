@@ -101,6 +101,18 @@ class RequestLogger:
         """
         correlation_id = result.get("correlation_id")
 
+        continuity = result.get("continuity")
+        conversation_id = (
+            continuity.get("conversation_id")
+            if isinstance(continuity, dict)
+            else None
+        )
+        switched = (
+            continuity.get("switched", False)
+            if isinstance(continuity, dict)
+            else False
+        )
+
         for attempt in result.get("attempts", []):
             self.attempt(
                 provider=attempt.get("provider"),
@@ -111,6 +123,7 @@ class RequestLogger:
                 failure_type=attempt.get("failure_type"),
                 reason=attempt.get("reason"),
                 correlation_id=correlation_id,
+                conversation_id=conversation_id,
             )
 
         self.request(
@@ -121,4 +134,6 @@ class RequestLogger:
             fallback_reason=result.get("fallback_reason"),
             error=result.get("error"),
             correlation_id=correlation_id,
+            conversation_id=conversation_id,
+            switched=switched,
         )

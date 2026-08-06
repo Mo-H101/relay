@@ -1,10 +1,14 @@
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Request
 from typing import Any
 import time
 
 from app.core.config import settings
 from app.core.relay import relay
 from app.models.chat import ChatRequest, ChatResponse
+from app.services.continuity_headers import (
+    ContinuityHeaderError,
+    resolve_scope,
+)
 from app.services.routing import TASK_CATEGORIES
 from app.services.task_classifier import classify_task
 from app.services.metrics import relay_metrics
@@ -13,6 +17,7 @@ from app.services.ops_store import ops_store
 router = APIRouter()
 
 _CORRELATION_HEADER = "X-Relay-Correlation-Id"
+_CONVERSATION_HEADER = "X-Relay-Conversation-Id"
 
 
 def _correlation_headers(correlation_id: str) -> dict:
@@ -20,6 +25,36 @@ def _correlation_headers(correlation_id: str) -> dict:
     Header payload for error responses carrying the correlation id.
     """
     return {_CORRELATION_HEADER: correlation_id}
+
+
+def _continuity_headers(result: dict) -> dict:
+    """
+    Header payload echoing the conversation id when continuity is active.
+    The value is already a server-issued opaque id; it is never echoed in
+    error bodies.
+    """
+    continuity = result.get("continuity")
+    if not isinstance(continuity, dict):
+        return {}
+    conversation_id = continuity.get("conversation_id")
+    if not conversation_id:
+        return {}
+    return {_CONVERSATION_HEADER: conversation_id}
+
+
+def _resolve_continuity_scope(http_request: Request) -> dict | None:
+    """
+    Resolve the continuity scope from the request headers. A malformed
+    header value becomes a generic 400 (the offending value is never
+    surfaced).
+    """
+    try:
+        return resolve_scope(http_request)
+    except ContinuityHeaderError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid relay continuity header.",
+        )
 
 
 def _fallback_flag(result: dict) -> bool:
@@ -80,7 +115,7 @@ def _resolve_task(request: ChatRequest) -> str | None:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, response: Response):
+async def chat(request: ChatRequest, http_request: Request, response: Response):
 
     if settings.task_classification_enabled:
         task = _resolve_task(request)
@@ -117,7 +152,14 @@ async def chat(request: ChatRequest, response: Response):
 
     start = time.perf_counter()
 
-    result = await relay.achat(request.message, task=task, **generation_kwargs)
+    continuity_scope = _resolve_continuity_scope(http_request)
+
+    result = await relay.achat(
+        request.message,
+        task=task,
+        continuity_scope=continuity_scope,
+        **generation_kwargs,
+    )
 
     latency_ms = (time.perf_counter() - start) * 1000
 
@@ -126,17 +168,22 @@ async def chat(request: ChatRequest, response: Response):
     correlation_id = result.get("correlation_id", "")
     response.headers[_CORRELATION_HEADER] = correlation_id
 
+    for header, value in _continuity_headers(result).items():
+        response.headers[header] = value
+
     if not result.get("success"):
+        error_headers = _correlation_headers(correlation_id)
+        error_headers.update(_continuity_headers(result))
         if "provider" in result:
             raise HTTPException(
                 status_code=502,
                 detail=result.get("error", "Provider request failed."),
-                headers=_correlation_headers(correlation_id),
+                headers=error_headers,
             )
         raise HTTPException(
             status_code=503,
             detail=result.get("error", "No provider available."),
-            headers=_correlation_headers(correlation_id),
+            headers=error_headers,
         )
 
     if not result.get("response"):

@@ -8,9 +8,13 @@ continuity tables, their indexes, and the never-capture guarantees stay
 aligned across refactors.
 """
 
+import inspect
+import re
 import sqlite3
 
+from app.services.continuity_flusher import ContinuityFlusher, _OP_METHODS
 from app.services.conversation_store import ConversationStore
+from app.services.handoff import HandoffCoordinator
 from app.services.memory_contract import (
     MEMORY_SURFACES,
     MemoryClass,
@@ -163,3 +167,76 @@ class TestMemoryContractParity:
     def test_never_surfaces_have_no_continuity_aliases(self):
         for surface in P9_SURFACES:
             assert MEMORY_SURFACES[surface] is not MemoryClass.NEVER
+
+
+class TestEnqueueContract:
+    def test_ops_map_to_real_store_methods(self):
+        for operation, method in _OP_METHODS.items():
+            assert callable(getattr(ConversationStore, method, None)), (
+                f"{operation} -> {method} is not a ConversationStore method"
+            )
+
+    def test_coordinator_enqueues_only_known_ops(self):
+        source = inspect.getsource(HandoffCoordinator)
+        enqueued = set(re.findall(r'self\._enqueue\(\s*"([a-z_.]+)"', source))
+
+        assert enqueued
+        assert enqueued <= set(_OP_METHODS)
+
+    def test_enqueued_rows_drain_to_the_store(self, tmp_path):
+        store = ConversationStore(str(tmp_path / "p.db"))
+        flusher = ContinuityFlusher(
+            conversation_store=store, retention_days=0
+        )
+
+        flusher.enqueue(
+            "conversation.create",
+            key_id="key-1",
+            client_bucket="cline",
+            project_key="ab" * 16,
+            conversation_id="c1",
+        )
+        flusher.enqueue(
+            "turn.append",
+            conversation_id="c1",
+            key_id="key-1",
+            seq=1,
+            outcome="ok",
+            provider="nvidia",
+            model="model-a",
+        )
+        flusher.enqueue(
+            "summary.record",
+            conversation_id="c1",
+            key_id="key-1",
+            up_to_seq=1,
+            version=1,
+            method="extractive",
+            content="summary text",
+        )
+        flusher.enqueue(
+            "compaction.record",
+            conversation_id="c1",
+            key_id="key-1",
+            reason="preflight",
+            method="extractive",
+        )
+        flusher.enqueue(
+            "project_state.update",
+            key_id="key-1",
+            project_key="ab" * 16,
+            last_models=["model-a"],
+            counters={"turns": 1},
+        )
+
+        assert flusher.queue_size == 5
+
+        flusher.flush()
+
+        assert store.get("c1", "key-1") is not None
+        assert len(store.turns("c1", "key-1")) == 1
+        assert len(store.summaries("c1", "key-1")) == 1
+        assert len(store.compactions("c1", "key-1")) == 1
+        assert store.project_state("key-1", "ab" * 16) is not None
+        assert flusher.flush_stats()["drained_total"] == 5
+        store.close()

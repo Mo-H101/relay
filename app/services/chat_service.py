@@ -107,6 +107,8 @@ class ChatService:
         candidates: List[Tuple[Provider, str]],
         message: str,
         max_retries: int = 1,
+        *,
+        turn=None,
         **generation_kwargs: Any,
     ) -> dict:
         """
@@ -117,6 +119,10 @@ class ChatService:
         latency_ms, fallback_reason, and per-attempt records. On failure,
         the result includes success=False, error, fallback_reason, and
         attempts (no response key).
+
+        When a ``TurnContext`` is supplied (P9c continuity), the envelope
+        is injected once up front, each failover to a new candidate passes
+        through the switch caps, and a successful turn is committed.
         """
 
         attempts: List[Attempt] = []
@@ -125,7 +131,16 @@ class ChatService:
         max_retries = max(0, int(max_retries))
         start_wall = time.perf_counter()
 
+        if turn is not None:
+            message = turn.inject_message(message)
+
+        last_key = None
+        stop_failover = False
+
         for provider, model in candidates:
+
+            if stop_failover:
+                break
 
             if provider.name in skip_providers:
                 continue
@@ -137,6 +152,22 @@ class ChatService:
                 if budget_exhausted(time.perf_counter() - start_wall):
                     break
 
+                if (
+                    turn is not None
+                    and last_key is not None
+                    and last_key != (provider.name, model)
+                ):
+                    decision = turn.switch(
+                        from_provider=last_key[0],
+                        from_model=last_key[1],
+                        to_provider=provider.name,
+                        to_model=model,
+                        reason="failover",
+                    )
+                    if not decision.get("allowed", True):
+                        stop_failover = True
+                        break
+
                 attempt, response, kind = self._try_once(
                     provider,
                     model,
@@ -145,10 +176,11 @@ class ChatService:
                     **generation_kwargs,
                 )
 
+                last_key = (provider.name, model)
                 attempts.append(attempt)
 
                 if attempt.success:
-                    return {
+                    result = {
                         "success": True,
                         "provider": provider.name,
                         "model": model,
@@ -164,6 +196,14 @@ class ChatService:
                             record.to_dict() for record in attempts
                         ],
                     }
+                    if turn is not None:
+                        turn.attach(result)
+                        turn.finish(
+                            provider=provider.name,
+                            model=model,
+                            latency_ms=attempt.latency_ms,
+                        )
+                    return result
 
                 errors.append(f"{model} ({provider.name}): {attempt.reason}")
 
@@ -188,7 +228,7 @@ class ChatService:
         first_provider = candidates[0][0].name if candidates else ""
         first_model = candidates[0][1] if candidates else ""
 
-        return {
+        result = {
             "success": False,
             "provider": first_provider,
             "model": first_model,
@@ -196,6 +236,11 @@ class ChatService:
             "fallback_reason": None,
             "attempts": [record.to_dict() for record in attempts],
         }
+
+        if turn is not None:
+            turn.attach(result)
+
+        return result
 
     def _try_once_messages(
         self,
@@ -258,6 +303,8 @@ class ChatService:
         candidates: List[Tuple[Provider, str]],
         payload: dict,
         max_retries: int = 1,
+        *,
+        turn=None,
     ) -> dict:
         """
         Try candidates in order with a full message payload: current
@@ -273,7 +320,16 @@ class ChatService:
         max_retries = max(0, int(max_retries))
         start_wall = time.perf_counter()
 
+        if turn is not None:
+            payload = turn.inject_payload(payload)
+
+        last_key = None
+        stop_failover = False
+
         for provider, model in candidates:
+
+            if stop_failover:
+                break
 
             if provider.name in skip_providers:
                 continue
@@ -285,6 +341,22 @@ class ChatService:
                 if budget_exhausted(time.perf_counter() - start_wall):
                     break
 
+                if (
+                    turn is not None
+                    and last_key is not None
+                    and last_key != (provider.name, model)
+                ):
+                    decision = turn.switch(
+                        from_provider=last_key[0],
+                        from_model=last_key[1],
+                        to_provider=provider.name,
+                        to_model=model,
+                        reason="failover",
+                    )
+                    if not decision.get("allowed", True):
+                        stop_failover = True
+                        break
+
                 attempt, response, kind = self._try_once_messages(
                     provider,
                     model,
@@ -292,10 +364,11 @@ class ChatService:
                     retry_no,
                 )
 
+                last_key = (provider.name, model)
                 attempts.append(attempt)
 
                 if attempt.success:
-                    return {
+                    result = {
                         "success": True,
                         "provider": provider.name,
                         "model": model,
@@ -311,6 +384,14 @@ class ChatService:
                             record.to_dict() for record in attempts
                         ],
                     }
+                    if turn is not None:
+                        turn.attach(result)
+                        turn.finish(
+                            provider=provider.name,
+                            model=model,
+                            latency_ms=attempt.latency_ms,
+                        )
+                    return result
 
                 errors.append(f"{model} ({provider.name}): {attempt.reason}")
 
@@ -335,7 +416,7 @@ class ChatService:
         first_provider = candidates[0][0].name if candidates else ""
         first_model = candidates[0][1] if candidates else ""
 
-        return {
+        result = {
             "success": False,
             "provider": first_provider,
             "model": first_model,
@@ -343,6 +424,11 @@ class ChatService:
             "fallback_reason": None,
             "attempts": [record.to_dict() for record in attempts],
         }
+
+        if turn is not None:
+            turn.attach(result)
+
+        return result
 
     def _try_stream_once(
         self,
@@ -371,6 +457,8 @@ class ChatService:
         candidates: List[Tuple[Provider, str]],
         message: str,
         max_retries: int = 1,
+        *,
+        turn=None,
         **generation_kwargs: Any,
     ) -> dict:
         """
@@ -390,10 +478,30 @@ class ChatService:
         errors: List[str] = []
         skip_providers = set()
 
+        if turn is not None:
+            message = turn.inject_message(message)
+
+        last_key = None
+
         for provider, model in candidates:
 
             if provider.name in skip_providers:
                 continue
+
+            if (
+                turn is not None
+                and last_key is not None
+                and last_key != (provider.name, model)
+            ):
+                decision = turn.switch(
+                    from_provider=last_key[0],
+                    from_model=last_key[1],
+                    to_provider=provider.name,
+                    to_model=model,
+                    reason="failover",
+                )
+                if not decision.get("allowed", True):
+                    break
 
             start = time.perf_counter()
 
@@ -415,6 +523,7 @@ class ChatService:
                     "reason": "stream ended before producing content",
                 })
                 errors.append(f"{model} ({provider.name}): empty stream")
+                last_key = (provider.name, model)
                 continue
             except Exception as exc:
                 kind = classify(exc)
@@ -429,13 +538,14 @@ class ChatService:
 
                 if kind in PROVIDER_LEVEL:
                     skip_providers.add(provider.name)
+                last_key = (provider.name, model)
                 continue
 
             def gen() -> Generator[str, None, None]:
                 yield first_chunk
                 yield from stream_gen
 
-            return {
+            result = {
                 "success": True,
                 "provider": provider.name,
                 "model": model,
@@ -444,10 +554,20 @@ class ChatService:
                 "attempts": attempts,
             }
 
+            if turn is not None:
+                turn.attach(result)
+                turn.finish(
+                    provider=provider.name,
+                    model=model,
+                    outcome="ok",
+                )
+
+            return result
+
         first_provider = candidates[0][0].name if candidates else ""
         first_model = candidates[0][1] if candidates else ""
 
-        return {
+        result = {
             "success": False,
             "provider": first_provider,
             "model": first_model,
@@ -459,6 +579,11 @@ class ChatService:
             ),
             "attempts": attempts,
         }
+
+        if turn is not None:
+            turn.attach(result)
+
+        return result
 
     def _try_stream_once_messages(
         self,
@@ -484,6 +609,8 @@ class ChatService:
         candidates: List[Tuple[Provider, str]],
         payload: dict,
         max_retries: int = 1,
+        *,
+        turn=None,
     ) -> dict:
         """
         Try candidates in order to start a streaming chat with a full
@@ -504,10 +631,30 @@ class ChatService:
         errors: List[str] = []
         skip_providers = set()
 
+        if turn is not None:
+            payload = turn.inject_payload(payload)
+
+        last_key = None
+
         for provider, model in candidates:
 
             if provider.name in skip_providers:
                 continue
+
+            if (
+                turn is not None
+                and last_key is not None
+                and last_key != (provider.name, model)
+            ):
+                decision = turn.switch(
+                    from_provider=last_key[0],
+                    from_model=last_key[1],
+                    to_provider=provider.name,
+                    to_model=model,
+                    reason="failover",
+                )
+                if not decision.get("allowed", True):
+                    break
 
             start = time.perf_counter()
 
@@ -527,6 +674,7 @@ class ChatService:
                     "reason": "stream ended before producing content",
                 })
                 errors.append(f"{model} ({provider.name}): empty stream")
+                last_key = (provider.name, model)
                 continue
             except Exception as exc:
                 kind = classify(exc)
@@ -541,13 +689,14 @@ class ChatService:
 
                 if kind in PROVIDER_LEVEL:
                     skip_providers.add(provider.name)
+                last_key = (provider.name, model)
                 continue
 
             def gen() -> Generator[dict, None, None]:
                 yield first_chunk
                 yield from stream_gen
 
-            return {
+            result = {
                 "success": True,
                 "provider": provider.name,
                 "model": model,
@@ -556,10 +705,20 @@ class ChatService:
                 "attempts": attempts,
             }
 
+            if turn is not None:
+                turn.attach(result)
+                turn.finish(
+                    provider=provider.name,
+                    model=model,
+                    outcome="ok",
+                )
+
+            return result
+
         first_provider = candidates[0][0].name if candidates else ""
         first_model = candidates[0][1] if candidates else ""
 
-        return {
+        result = {
             "success": False,
             "provider": first_provider,
             "model": first_model,
@@ -571,6 +730,11 @@ class ChatService:
             ),
             "attempts": attempts,
         }
+
+        if turn is not None:
+            turn.attach(result)
+
+        return result
 
     def chat(
         self,

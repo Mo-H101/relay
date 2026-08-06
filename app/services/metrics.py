@@ -568,6 +568,22 @@ class RelayMetrics:
             "relay_continuity_flush_failures_total",
             "Continuity flush failures.",
         )
+        self.continuity_switches = r.counter(
+            "relay_continuity_switches_total",
+            "Model handoffs allowed by the continuity coordinator.",
+        )
+        self.continuity_denials = r.counter(
+            "relay_continuity_denials_total",
+            "Model handoffs denied by the continuity coordinator.",
+        )
+        self.continuity_turns_committed = r.counter(
+            "relay_continuity_turns_committed_total",
+            "Turns committed to the continuity store.",
+        )
+        self.continuity_compactions = r.counter(
+            "relay_continuity_compactions_total",
+            "Envelope compactions performed by the continuity coordinator.",
+        )
 
         # Process
         self.uptime = r.gauge(

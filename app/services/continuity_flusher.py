@@ -7,14 +7,19 @@ and applies retention pruning, with a final flush on shutdown and
 consecutive-failure tracking. SQLite writes happen only on this thread
 (or on explicit ``flush()`` calls) -- never on the chat request path.
 
-In P9a the write-behind buffer is not yet populated (chat integration
-arrives in P9c); the flusher owns the lifecycle, the periodic retention
-prune, and the shutdown hook that later phases fill.
+P9c populates the write-behind buffer: the ``HandoffCoordinator`` enqueues
+durable operations (``conversation.create``, ``turn.append``,
+``summary.record``, ``compaction.record``, ``project_state.update``)
+through ``enqueue()`` and the flusher drains them on its thread, applying
+each to the matching ``ConversationStore`` method. A create that collides
+with an existing row (a conversation resumed across processes) is treated
+as idempotent so later turns still append to the existing conversation.
 """
 
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -23,6 +28,20 @@ from typing import Optional
 from app.services.metrics import relay_metrics
 
 _logger = logging.getLogger("relay")
+
+# Bounded in-memory buffer; a full buffer drops the oldest queued row so
+# a flood of writes can never grow the heap without limit.
+_MAX_QUEUE = 10000
+
+# Continuity operations enqueued by the coordinator, mapped to the
+# ConversationStore method that persists them.
+_OP_METHODS = {
+    "conversation.create": "create",
+    "turn.append": "append_turn",
+    "summary.record": "record_summary",
+    "compaction.record": "record_compaction",
+    "project_state.update": "update_project_state",
+}
 
 
 class ContinuityFlusher:
@@ -49,34 +68,53 @@ class ContinuityFlusher:
         self._flush_count = 0
         self._flush_errors: deque = deque(maxlen=20)
         self._consecutive_flush_failures = 0
+        self._queue: deque = deque()
+        self._queued_count = 0
+        self._drained_count = 0
+        self._dropped_count = 0
+
+    def enqueue(self, operation: str, **kwargs) -> bool:
+        """
+        Buffer one durable continuity operation for the write-behind
+        thread. Never touches SQLite and never raises; a full buffer drops
+        the oldest queued row (counted as dropped).
+        """
+        if operation not in _OP_METHODS:
+            return False
+
+        with self._lock:
+            if len(self._queue) >= _MAX_QUEUE:
+                self._queue.popleft()
+                self._dropped_count += 1
+            self._queue.append((operation, dict(kwargs)))
+            self._queued_count += 1
+            relay_metrics.continuity_rows_queued.set(len(self._queue))
+
+        return True
+
+    @property
+    def queue_size(self) -> int:
+        """Number of rows waiting in the write-behind buffer."""
+        with self._lock:
+            return len(self._queue)
 
     def flush(self) -> int:
         """
-        Drain queued continuity rows and apply retention pruning.
+        Drain queued continuity rows, then apply retention pruning.
 
         Returns the number of rows pruned this pass (0 when pruning is
         disabled or the store is unavailable). Never raises: a store
-        outage is counted and degraded instead.
+        outage is counted and degraded instead, and drained rows are
+        counted per operation.
         """
+        self._drain_queue()
         pruned = 0
 
         try:
             if self._store is not None and self._retention_days > 0:
                 pruned = self._store.prune_retention(self._retention_days)
         except Exception as exc:
-            self._consecutive_flush_failures += 1
-            if self._consecutive_flush_failures >= 5:
-                _logger.warning(
-                    "continuity flush has failed %d consecutive times; "
-                    "last error: %s",
-                    self._consecutive_flush_failures,
-                    str(exc),
-                )
-            with self._lock:
-                self._flush_errors.append(
-                    {"at": time.time(), "message": str(exc)}
-                )
-            relay_metrics.continuity_flush_failures.inc()
+            self._record_flush_error(exc)
         else:
             self._consecutive_flush_failures = 0
             with self._lock:
@@ -86,6 +124,60 @@ class ContinuityFlusher:
         relay_metrics.continuity_flushes.inc()
         relay_metrics.continuity_pruned.inc(pruned)
         return pruned
+
+    def _drain_queue(self) -> int:
+        """
+        Apply every buffered row to the ConversationStore on this thread.
+        A ``conversation.create`` that collides with an existing row is
+        idempotent (the conversation predates this process); any other
+        failure is counted and degraded.
+        """
+        drained = 0
+
+        while True:
+            with self._lock:
+                if not self._queue:
+                    break
+                operation, kwargs = self._queue.popleft()
+
+            method_name = _OP_METHODS.get(operation)
+
+            if method_name is None or self._store is None:
+                continue
+
+            try:
+                getattr(self._store, method_name)(**kwargs)
+                drained += 1
+            except sqlite3.IntegrityError as exc:
+                if operation == "conversation.create":
+                    # Resume across processes: the conversation row already
+                    # exists; keep it and let later turns append to it.
+                    drained += 1
+                    continue
+                self._record_flush_error(exc)
+            except Exception as exc:
+                self._record_flush_error(exc)
+
+        with self._lock:
+            self._drained_count += drained
+            relay_metrics.continuity_rows_queued.set(len(self._queue))
+
+        return drained
+
+    def _record_flush_error(self, exc: Exception) -> None:
+        self._consecutive_flush_failures += 1
+        if self._consecutive_flush_failures >= 5:
+            _logger.warning(
+                "continuity flush has failed %d consecutive times; "
+                "last error: %s",
+                self._consecutive_flush_failures,
+                str(exc),
+            )
+        with self._lock:
+            self._flush_errors.append(
+                {"at": time.time(), "message": str(exc)}
+            )
+        relay_metrics.continuity_flush_failures.inc()
 
     def prune_now(self) -> int:
         """
@@ -104,6 +196,10 @@ class ContinuityFlusher:
                 "flush_count": self._flush_count,
                 "flush_errors": list(self._flush_errors),
                 "running": self._thread is not None and self._thread.is_alive(),
+                "queued": len(self._queue),
+                "queued_total": self._queued_count,
+                "drained_total": self._drained_count,
+                "dropped_total": self._dropped_count,
             }
 
     def start(self) -> None:
