@@ -18,6 +18,7 @@ router = APIRouter()
 
 _CORRELATION_HEADER = "X-Relay-Correlation-Id"
 _CONVERSATION_HEADER = "X-Relay-Conversation-Id"
+_RESUME_TOKEN_HEADER = "X-Relay-Resume-Token"
 
 
 def _correlation_headers(correlation_id: str) -> dict:
@@ -30,31 +31,41 @@ def _correlation_headers(correlation_id: str) -> dict:
 def _continuity_headers(result: dict) -> dict:
     """
     Header payload echoing the conversation id when continuity is active.
-    The value is already a server-issued opaque id; it is never echoed in
-    error bodies.
+    P9d also hands back the one-time resume token for the turn via
+    ``X-Relay-Resume-Token`` when one was issued. Values are already
+    server-issued opaque ids/tokens; they are never echoed in error
+    bodies.
     """
     continuity = result.get("continuity")
     if not isinstance(continuity, dict):
         return {}
+    headers = {}
     conversation_id = continuity.get("conversation_id")
-    if not conversation_id:
-        return {}
-    return {_CONVERSATION_HEADER: conversation_id}
+    if conversation_id:
+        headers[_CONVERSATION_HEADER] = conversation_id
+    resume_token = continuity.get("resume_token")
+    if resume_token:
+        headers[_RESUME_TOKEN_HEADER] = resume_token
+    return headers
 
 
 def _resolve_continuity_scope(http_request: Request) -> dict | None:
     """
     Resolve the continuity scope from the request headers. A malformed
     header value becomes a generic 400 (the offending value is never
-    surfaced).
+    surfaced). P9d: when continuity is active the presented resume token
+    is validated and the decision is attached to the scope.
     """
     try:
-        return resolve_scope(http_request)
+        scope = resolve_scope(http_request)
     except ContinuityHeaderError:
         raise HTTPException(
             status_code=400,
             detail="Invalid relay continuity header.",
         )
+    if scope:
+        relay.validate_resume(scope)
+    return scope
 
 
 def _fallback_flag(result: dict) -> bool:

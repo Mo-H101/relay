@@ -66,6 +66,7 @@ EVENT_ACTIONS = frozenset(
         "continuity.archive",
         "continuity.prune",
         "continuity.denied",
+        "continuity.reconcile",
     }
 )
 

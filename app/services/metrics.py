@@ -584,6 +584,18 @@ class RelayMetrics:
             "relay_continuity_compactions_total",
             "Envelope compactions performed by the continuity coordinator.",
         )
+        self.continuity_resumes = r.counter(
+            "relay_continuity_resumes_total",
+            "Resume tokens accepted by continuity recovery.",
+        )
+        self.continuity_resume_denials = r.counter(
+            "relay_continuity_resume_denials_total",
+            "Resume attempts denied by continuity recovery.",
+        )
+        self.continuity_reconciliations = r.counter(
+            "relay_continuity_reconciliations_total",
+            "Startup continuity reconciliation passes.",
+        )
 
         # Process
         self.uptime = r.gauge(

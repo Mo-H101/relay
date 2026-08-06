@@ -82,6 +82,21 @@ def add_continuity_parser(parser) -> None:
              "CONTINUITY_RETENTION_DAYS).",
     )
     prune.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview what would be pruned without removing anything.",
+    )
+    prune.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON.",
+    )
+
+    health = sub.add_parser(
+        "health",
+        help="Recovery, flusher, and retention diagnostics (read-only).",
+    )
+    health.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON.",
@@ -112,6 +127,8 @@ def _run_continuity(args, parser) -> None:
         _archive(store, args)
     elif command == "prune":
         _prune(store, args)
+    elif command == "health":
+        _health(store, args)
     else:
         _summary(store)
 
@@ -150,10 +167,12 @@ def _show(store, args) -> None:
     key_id = record["key_id"]
     turns = store.turns(args.conversation_id, key_id, limit=args.turns)
     summaries = store.summaries(args.conversation_id, key_id, limit=5)
+    recovery_state = _recovery_state(args.conversation_id)
 
     if args.json:
         print(json.dumps({"conversation": record, "turns": turns,
-                          "summaries": summaries}, indent=2))
+                          "summaries": summaries,
+                          "recovery_state": recovery_state}, indent=2))
         return
 
     print(
@@ -162,6 +181,7 @@ def _show(store, args) -> None:
         f"key_id:       {record['key_id']}\n"
         f"client_bucket:{record['client_bucket']}\n"
         f"model_chain:  {','.join(record['model_chain'])}\n"
+        f"recovery:     {recovery_state}\n"
         f"turns:        {len(turns)}\n"
         f"summaries:    {len(summaries)}"
     )
@@ -184,6 +204,23 @@ def _archive(store, args) -> None:
 def _prune(store, args) -> None:
     days = args.days if args.days is not None else settings.continuity_retention_days
 
+    if args.dry_run:
+        try:
+            candidates = store.prune_preview(days)
+        except Exception as exc:  # noqa: BLE001
+            _fail("could not preview pruning", exc)
+        if args.json:
+            print(json.dumps({"removed": len(candidates), "days": days,
+                              "candidates": candidates}))
+            return
+        print(
+            f"would prune {len(candidates)} conversations "
+            f"(window: {days} days, dry run)"
+        )
+        for cid in candidates:
+            print(f"  {cid}")
+        return
+
     try:
         removed = store.prune_retention(days)
     except Exception as exc:  # noqa: BLE001
@@ -194,6 +231,70 @@ def _prune(store, args) -> None:
         return
 
     print(f"pruned {removed} conversations (window: {days} days)")
+
+
+def _recovery_state(conversation_id: str) -> str:
+    """Recovery state for one conversation (read-only diagnostic)."""
+    from app.core.relay import relay
+
+    recovery = relay.continuity_recovery
+    if recovery is None:
+        return "unavailable"
+    try:
+        return recovery.state(conversation_id)
+    except Exception:  # noqa: BLE001
+        return "unavailable"
+
+
+def _health(store, args) -> None:
+    """Diagnostic-only recovery / flusher / retention health surface."""
+    from app.core.relay import relay
+
+    recovery = relay.continuity_recovery
+    flusher = relay.continuity_flusher
+
+    recovery_states = {}
+    if recovery is not None:
+        try:
+            for state_name in (
+                "active", "interrupted", "recoverable",
+                "recovery_in_progress", "recovered",
+                "failed_recovery", "archived",
+            ):
+                recovery_states[state_name] = 0
+            for conversation in store.list(limit=5000):
+                state_name = recovery.state(conversation["id"])
+                recovery_states[state_name] = (
+                    recovery_states.get(state_name, 0) + 1
+                )
+        except Exception as exc:  # noqa: BLE001
+            recovery_states = {"error": str(exc)}
+
+    flusher_stats = flusher.flush_stats() if flusher is not None else {}
+
+    try:
+        prune_window = settings.continuity_retention_days
+        prune_preview_count = len(store.prune_preview(prune_window))
+    except Exception:  # noqa: BLE001
+        prune_window = 0
+        prune_preview_count = -1
+
+    if args.json:
+        print(json.dumps({
+            "recovery_states": recovery_states,
+            "flusher": flusher_stats,
+            "prune_preview": {"days": prune_window,
+                              "candidates": prune_preview_count},
+        }, indent=2))
+        return
+
+    print("continuity health")
+    print(f"recovery states: {recovery_states}")
+    print(f"flusher: queued {flusher_stats.get('queued', 'n/a')}, "
+          f"drained {flusher_stats.get('drained_total', 'n/a')}, "
+          f"errors {len(flusher_stats.get('flush_errors') or [])}")
+    print(f"prune preview: {prune_preview_count} candidates "
+          f"(window: {prune_window} days)")
 
 
 def _summary(store) -> None:

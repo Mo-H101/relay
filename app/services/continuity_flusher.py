@@ -72,6 +72,11 @@ class ContinuityFlusher:
         self._queued_count = 0
         self._drained_count = 0
         self._dropped_count = 0
+        self._pruned_total = 0
+        # Pending (queued-but-unflushed) rows per conversation, so the
+        # store's in-flight registry stays accurate and background prunes
+        # skip conversations that still have rows in this buffer.
+        self._pending_per_conversation: dict = {}
 
     def enqueue(self, operation: str, **kwargs) -> bool:
         """
@@ -82,6 +87,8 @@ class ContinuityFlusher:
         if operation not in _OP_METHODS:
             return False
 
+        conversation_id = kwargs.get("conversation_id")
+
         with self._lock:
             if len(self._queue) >= _MAX_QUEUE:
                 self._queue.popleft()
@@ -89,6 +96,13 @@ class ContinuityFlusher:
             self._queue.append((operation, dict(kwargs)))
             self._queued_count += 1
             relay_metrics.continuity_rows_queued.set(len(self._queue))
+
+        if conversation_id and self._store is not None:
+            self._store.mark_in_flight(conversation_id)
+            with self._lock:
+                self._pending_per_conversation[conversation_id] = (
+                    self._pending_per_conversation.get(conversation_id, 0) + 1
+                )
 
         return True
 
@@ -123,6 +137,8 @@ class ContinuityFlusher:
 
         relay_metrics.continuity_flushes.inc()
         relay_metrics.continuity_pruned.inc(pruned)
+        with self._lock:
+            self._pruned_total += pruned
         return pruned
 
     def _drain_queue(self) -> int:
@@ -148,21 +164,46 @@ class ContinuityFlusher:
             try:
                 getattr(self._store, method_name)(**kwargs)
                 drained += 1
+                self._on_op_drained(kwargs.get("conversation_id"))
             except sqlite3.IntegrityError as exc:
                 if operation == "conversation.create":
                     # Resume across processes: the conversation row already
                     # exists; keep it and let later turns append to it.
                     drained += 1
+                    self._on_op_drained(kwargs.get("conversation_id"))
                     continue
                 self._record_flush_error(exc)
+                self._on_op_drained(kwargs.get("conversation_id"))
             except Exception as exc:
                 self._record_flush_error(exc)
+                self._on_op_drained(kwargs.get("conversation_id"))
 
         with self._lock:
             self._drained_count += drained
             relay_metrics.continuity_rows_queued.set(len(self._queue))
 
         return drained
+
+    def _on_op_drained(self, conversation_id: Optional[str]) -> None:
+        """
+        Release one pending row for a conversation; when the conversation
+        has no rows left in the buffer, clear its in-flight marker so a
+        background prune may consider it again.
+        """
+        if not conversation_id or self._store is None:
+            return
+
+        with self._lock:
+            pending = self._pending_per_conversation.get(conversation_id, 0) - 1
+            if pending <= 0:
+                self._pending_per_conversation.pop(conversation_id, None)
+                clear = True
+            else:
+                self._pending_per_conversation[conversation_id] = pending
+                clear = False
+
+        if clear:
+            self._store.clear_in_flight(conversation_id)
 
     def _record_flush_error(self, exc: Exception) -> None:
         self._consecutive_flush_failures += 1
@@ -200,6 +241,10 @@ class ContinuityFlusher:
                 "queued_total": self._queued_count,
                 "drained_total": self._drained_count,
                 "dropped_total": self._dropped_count,
+                "pruned_total": self._pruned_total,
+                "in_flight": list(self._store.in_flight)
+                if self._store is not None
+                else [],
             }
 
     def start(self) -> None:

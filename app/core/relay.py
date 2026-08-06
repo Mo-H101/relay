@@ -103,6 +103,7 @@ class Relay:
         self.conversation_store: Optional[ConversationStore] = None
         self.continuity_flusher: Optional[ContinuityFlusher] = None
         self.continuity_handoff: Optional[HandoffCoordinator] = None
+        self.continuity_recovery = None
 
         if settings.continuity_enabled:
             self._init_continuity()
@@ -128,21 +129,80 @@ class Relay:
             interval_seconds=settings.continuity_flush_interval_seconds,
             retention_days=settings.continuity_retention_days,
         )
+        from app.services.continuity_recovery import ContinuityRecovery
+
+        self.continuity_recovery = ContinuityRecovery(
+            self.conversation_store,
+            max_resume_replays=settings.max_resume_replays,
+        )
         self.continuity_handoff = HandoffCoordinator(
             flusher=self.continuity_flusher,
             context_manager=ContextManager(),
+            recovery=self.continuity_recovery,
         )
+
+    def validate_resume(self, continuity_scope) -> None:
+        """
+        P9d: validate a presented resume token for a resolved continuity
+        scope and attach the decision as ``scope["resume"]``. Never
+        raises; a failure degrades to a denial. Mutates the scope in
+        place so ``begin_continuity_turn`` sees the decision.
+        """
+        if not isinstance(continuity_scope, dict):
+            return
+        recovery = self.continuity_recovery
+        if recovery is None:
+            continuity_scope["resume"] = {
+                "attempted": False,
+                "valid": False,
+                "reason": "unavailable",
+                "state": "active",
+                "last_seq": None,
+            }
+            return
+        try:
+            continuity_scope["resume"] = recovery.validate_resume(
+                continuity_scope.get("conversation_id"),
+                continuity_scope.get("key_id"),
+                continuity_scope.get("resume_token"),
+            )
+        except Exception:  # noqa: BLE001 - continuity never breaks chat
+            continuity_scope["resume"] = {
+                "attempted": False,
+                "valid": False,
+                "reason": "error",
+                "state": "active",
+                "last_seq": None,
+            }
 
     def begin_continuity_turn(self, continuity_scope):
         """
         Start a P9c turn from a resolved continuity scope, or return None
         when continuity is off or the coordinator is unavailable. Never
         raises; continuity must never break chat.
+
+        P9d: when the scope carries a valid resume decision the durable
+        resume envelope is hydrated so the resumed turn continues from the
+        last safe point and never repeats acknowledged work.
         """
         if not continuity_scope or self.continuity_handoff is None:
             return None
         try:
-            return self.continuity_handoff.start(**continuity_scope)
+            resume = continuity_scope.get("resume") or {}
+            resume_envelope = None
+            if resume.get("valid"):
+                resume_envelope = self.continuity_recovery.resume_envelope(
+                    continuity_scope.get("conversation_id"),
+                    continuity_scope.get("key_id"),
+                )
+            return self.continuity_handoff.start(
+                key_id=continuity_scope["key_id"],
+                client_bucket=continuity_scope["client_bucket"],
+                project_key=continuity_scope["project_key"],
+                conversation_id=continuity_scope.get("conversation_id"),
+                token_budget=continuity_scope.get("token_budget"),
+                resume=resume_envelope,
+            )
         except Exception:  # noqa: BLE001 - continuity never breaks chat
             return None
 

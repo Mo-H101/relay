@@ -61,6 +61,11 @@ class _ConversationState:
     envelope: Optional[dict] = None
     envelope_seq: int = 0
     last_touched: float = 0.0
+    # P9d: latest issued-but-uncommitted resume-token hash, attached on
+    # the next commit; the durable resume point of a resumed turn.
+    pending_resume_hash: Optional[str] = None
+    resume_up_to_seq: int = 0
+    resume_summary: Optional[dict] = None
 
 
 @dataclass
@@ -86,6 +91,12 @@ class TurnContext:
     events: List[dict] = field(default_factory=list)
     _injected_payload: Optional[dict] = field(default=None, repr=False)
     _handoff: "Optional[HandoffCoordinator]" = field(default=None, repr=False)
+    # P9d: the one-time resume token issued for this turn (surfaced to the
+    # client exactly once), plus whether this turn resumed a prior
+    # conversation and the acknowledged scope it excludes.
+    resume_token: Optional[str] = None
+    resumed: bool = False
+    exclude_up_to_seq: int = 0
 
     @property
     def is_new(self) -> bool:
@@ -182,7 +193,7 @@ class TurnContext:
 
     def metadata(self) -> dict:
         """Metadata-only projection consumed by logs/metrics/SSE layers."""
-        return {
+        meta = {
             "conversation_id": self.conversation_id,
             "project_key": self.project_key,
             "client_bucket": self.client_bucket,
@@ -192,6 +203,12 @@ class TurnContext:
             "switch_denied": self.switch_denied,
             "events": [dict(ev) for ev in self.events],
         }
+        if self.resume_token:
+            meta["resume_token"] = self.resume_token
+        if self.resumed:
+            meta["resumed"] = True
+            meta["exclude_up_to_seq"] = self.exclude_up_to_seq
+        return meta
 
 
 def render_envelope(envelope: dict) -> str:
@@ -234,6 +251,7 @@ class HandoffCoordinator:
         *,
         flusher=None,
         context_manager: Optional[ContextManager] = None,
+        recovery=None,
         max_switches_per_turn: Optional[int] = None,
         max_switches_per_window: Optional[int] = None,
         model_chain_cap: int = 8,
@@ -244,6 +262,9 @@ class HandoffCoordinator:
 
         self._flusher = flusher
         self._manager = context_manager or ContextManager()
+        # P9d: continuity recovery (resume tokens, state machine). Optional;
+        # when absent the coordinator behaves exactly as P9c.
+        self._recovery = recovery
         self._max_switches_per_turn = max(
             1,
             int(
@@ -276,6 +297,7 @@ class HandoffCoordinator:
         project_key: str,
         conversation_id: Optional[str] = None,
         token_budget: Optional[int] = None,
+        resume: Optional[dict] = None,
     ) -> TurnContext:
         """
         Begin a turn, creating or reusing the conversation state.
@@ -287,6 +309,13 @@ class HandoffCoordinator:
         (project-only headers still get a conversation id). The durable
         create row is enqueued to the write-behind flusher, never written
         here.
+
+        P9d: ``resume`` is the validated durable resume envelope (last
+        committed turn, latest summary, acknowledged scope). When it is
+        supplied the conversation is hydrated so the first candidate
+        already carries prior context and already-acknowledged work is
+        excluded from the envelope. A fresh one-time resume token is
+        issued for the turn when a recovery service is wired.
         """
         cid = conversation_id or new_conversation_id()
         budget = (
@@ -325,6 +354,8 @@ class HandoffCoordinator:
             else:
                 self._touch(state)
 
+            resumed = self._hydrate_resume(state, resume)
+
         turn = TurnContext(
             conversation_id=state.conversation_id,
             key_id=state.key_id,
@@ -334,6 +365,8 @@ class HandoffCoordinator:
             model_chain=list(state.model_chain),
         )
         turn._handoff = self
+        turn.resumed = resumed
+        turn.exclude_up_to_seq = state.resume_up_to_seq
 
         turn.events.append(
             {
@@ -344,6 +377,23 @@ class HandoffCoordinator:
             }
         )
 
+        # P9d: issue a fresh one-time resume token for this turn. The raw
+        # value is handed to the client exactly once; only its hash is
+        # attached to the next committed turn.
+        if self._recovery is not None:
+            turn.resume_token = self._recovery.issue_resume_token(
+                cid, state.key_id
+            )
+            state.pending_resume_hash = self._recovery.pending_token_hash(cid)
+            if turn.resume_token:
+                turn.events.append(
+                    {
+                        "type": "relay:resume_token",
+                        "conversation_id": state.conversation_id,
+                    }
+                )
+            self._recovery.on_turn_started(cid)
+
         # Resume-with-context: assemble the envelope from prior committed
         # turns so the first candidate already carries the context.
         if state.committed_turns:
@@ -351,6 +401,38 @@ class HandoffCoordinator:
                 self._ensure_envelope(turn, state)
 
         return turn
+
+    def _hydrate_resume(
+        self, state: _ConversationState, resume: Optional[dict]
+    ) -> bool:
+        """
+        Seed in-memory state from a validated durable resume envelope.
+        Returns True when a resume was applied. The envelope is treated as
+        authoritative for ``exclude_up_to_seq`` (duplicate-work
+        prevention): already-acknowledged turns are never repeated.
+        """
+        if not isinstance(resume, dict):
+            return False
+        if resume.get("conversation_id") != state.conversation_id:
+            return False
+
+        last_turn = resume.get("last_turn")
+        if isinstance(last_turn, dict) and last_turn.get("seq"):
+            state.committed_turns.append(dict(last_turn))
+            state.next_seq = max(state.next_seq, int(last_turn["seq"]) + 1)
+        else:
+            return False
+
+        state.resume_up_to_seq = int(resume.get("exclude_up_to_seq") or 0)
+        summary = resume.get("last_summary")
+        if isinstance(summary, dict):
+            state.resume_summary = {
+                "up_to_seq": summary.get("up_to_seq"),
+                "version": summary.get("version"),
+                "method": summary.get("method"),
+                "summary_text": summary.get("content"),
+            }
+        return True
 
     # ------------------------- candidate walk -------------------------
 
@@ -472,6 +554,9 @@ class HandoffCoordinator:
             self._remember_model(state, turn, model)
             self._touch(state)
 
+            resume_token_hash = state.pending_resume_hash
+            state.pending_resume_hash = None
+
             self._enqueue(
                 "turn.append",
                 conversation_id=state.conversation_id,
@@ -484,6 +569,7 @@ class HandoffCoordinator:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 latency_ms=latency_ms,
+                resume_token_hash=resume_token_hash,
             )
             if state.project_key:
                 self._enqueue(
@@ -496,6 +582,9 @@ class HandoffCoordinator:
                         "switches": turn.switch_count,
                     },
                 )
+
+        if self._recovery is not None:
+            self._recovery.on_turn_committed(state.conversation_id)
 
         relay_metrics.continuity_turns_committed.inc()
         return dict(record)
@@ -539,6 +628,23 @@ class HandoffCoordinator:
         }
 
         if not turns:
+            return envelope
+
+        # P9d: a resumed turn reuses the durable summary of its last safe
+        # point instead of re-compacting, and excludes acknowledged work.
+        if state.resume_summary is not None:
+            envelope["summary"] = dict(state.resume_summary)
+            envelope["summary_version"] = state.resume_summary.get(
+                "version", SUMMARY_VERSION
+            )
+            envelope["exclude_up_to_seq"] = state.resume_up_to_seq
+            envelope["tail"] = self._manager.serialize_tail(turns)
+            consumed = self._manager.estimate_tokens(
+                str(envelope.get("tail") or "")
+            )
+            envelope["token_budget_remaining"] = max(
+                0, (state.token_budget or 0) - consumed
+            )
             return envelope
 
         tail = self._manager.serialize_tail(turns)

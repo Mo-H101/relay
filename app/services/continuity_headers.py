@@ -92,6 +92,32 @@ def derive_project_key(key_id: object, project_id: object) -> Optional[str]:
     return digest[:16].hex()
 
 
+def validate_resume_token(value: object) -> Optional[str]:
+    """
+    Validate an ``X-Relay-Resume-Token`` value (P9d).
+
+    The token is an opaque one-time value issued by
+    ``ContinuityRecovery`` (uuid4 hex). Same bounds/charset contract as
+    the other continuity headers: printable ASCII only, at most 128
+    bytes. Returns the normalized value, or None when absent or malformed.
+    The value itself is never echoed in errors, logs, or metrics; only a
+    one-way SHA-256 hash is ever persisted or compared.
+    """
+    return _valid(value)
+
+
+def derive_resume_token_hash(token: object) -> Optional[str]:
+    """
+    One-way hash of a resume token: ``sha256(token)`` hex (full digest).
+    Never reversible; only the hash is persisted or compared (P9d). None
+    when the token fails the wire contract.
+    """
+    text = _valid(token)
+    if text is None:
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def resolve_scope(request) -> Optional[dict]:
     """
     Resolve the continuity scope for one HTTP request.
@@ -103,7 +129,9 @@ def resolve_scope(request) -> Optional[dict]:
     facade:
 
     ``key_id``, ``client_bucket``, ``project_key``,
-    ``conversation_id`` (may be None), ``token_budget``.
+    ``conversation_id`` (may be None), ``token_budget``,
+    ``resume_token`` (may be None; P9d, validated under the same
+    bounds/charset contract).
     """
     from app.core.config import settings
     from app.services.client_detection import classify_client
@@ -117,6 +145,7 @@ def resolve_scope(request) -> Optional[dict]:
 
     raw_conversation = request.headers.get("x-relay-conversation-id")
     raw_project = request.headers.get("x-relay-project-id")
+    raw_resume = request.headers.get("x-relay-resume-token")
 
     conversation_id = None
     if raw_conversation:
@@ -140,12 +169,19 @@ def resolve_scope(request) -> Optional[dict]:
     if project_key is None:
         project_key = derive_project_key(key_id, conversation_id)
 
+    resume_token = None
+    if raw_resume:
+        resume_token = validate_resume_token(raw_resume)
+        if resume_token is None:
+            raise ContinuityHeaderError("invalid relay resume token")
+
     return {
         "key_id": str(key_id),
         "client_bucket": classify_client(request.headers.get("user-agent")),
         "project_key": project_key,
         "conversation_id": conversation_id,
         "token_budget": settings.continuity_context_token_budget,
+        "resume_token": resume_token,
     }
 
 
@@ -155,5 +191,7 @@ __all__ = [
     "validate_conversation_id",
     "validate_project_id",
     "derive_project_key",
+    "validate_resume_token",
+    "derive_resume_token_hash",
     "resolve_scope",
 ]

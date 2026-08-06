@@ -56,6 +56,8 @@ class DiagnosticsScreen(Screen):
                 yield Select([], id="provider-select")
                 yield Button("Test connection", id="test-conn")
             yield DataTable(id="health-table", cursor_type="row")
+            yield Static("Continuity recovery (read-only)", classes="config-group")
+            yield DataTable(id="continuity-table", cursor_type="row")
             with Horizontal(id="diag-controls"):
                 yield Input(
                     placeholder="Export path",
@@ -91,6 +93,7 @@ class DiagnosticsScreen(Screen):
         self._refresh_log_table()
         self._refresh_provider_select()
         self._refresh_health_table()
+        self._refresh_continuity_table()
 
     def _refresh_summary(self) -> None:
         stats = self._facade.ops_stats()
@@ -179,6 +182,41 @@ class DiagnosticsScreen(Screen):
                 latency,
                 ",".join(model.get("learned") or []) or "-",
                 key=model["name"],
+            )
+
+    def _refresh_continuity_table(self) -> None:
+        table = self.query_one("#continuity-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns(
+            "Metric", "Value"
+        )
+
+        health = self._facade.continuity_health()
+        if not health:
+            table.add_row("state", "continuity disabled")
+            return
+
+        for state_name, count in sorted(health.get("recovery_states", {}).items()):
+            table.add_row(f"recovery {state_name}", str(count))
+
+        flusher = health.get("flusher") or {}
+        if flusher:
+            table.add_row("flusher queued", str(flusher.get("queued", "-")))
+            table.add_row(
+                "flusher drained",
+                str(flusher.get("drained_total", "-")),
+            )
+            table.add_row(
+                "flush errors",
+                str(len(flusher.get("flush_errors") or [])),
+            )
+
+        preview = health.get("prune_preview") or {}
+        if preview:
+            table.add_row(
+                "prune candidates",
+                f"{preview.get('candidates')} (window: "
+                f"{preview.get('days')} days)",
             )
 
     # ------------------------------------------------------------ handlers

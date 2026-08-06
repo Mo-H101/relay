@@ -32,6 +32,56 @@ class ConversationStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class RecoveryState(str, Enum):
+    """
+    P9d recovery state machine (per conversation).
+
+    ``ConversationStatus`` stays the durable status vocabulary (active /
+    archived); ``RecoveryState`` is the derived recovery classification
+    surfaced by ``ContinuityRecovery`` for diagnostics and transitions.
+
+    Valid transitions (driven by ``ContinuityRecovery``; invalid ones are
+    rejected and never change state):
+
+    * ``ACTIVE`` -- no interrupt, no pending recovery.
+      + turn_start -> INTERRUPTED; resume_denied -> FAILED_RECOVERY
+        (last safe point undeterminable); archive -> ARCHIVED.
+    * ``INTERRUPTED`` -- a turn started but has not committed (in-memory
+      in-flight marker).
+      + turn_committed -> ACTIVE; resume_valid -> RECOVERY_IN_PROGRESS;
+        resume_denied -> FAILED_RECOVERY; archive -> ARCHIVED.
+    * ``RECOVERABLE`` -- durable resume point exists (the last committed
+      turn carries a resume-token hash) so a reconnect can proceed.
+      + resume_valid -> RECOVERY_IN_PROGRESS; resume_denied ->
+        FAILED_RECOVERY; turn_start -> ACTIVE; turn_committed -> ACTIVE;
+        archive -> ARCHIVED.
+    * ``RECOVERY_IN_PROGRESS`` -- resume validated, context rebuilt,
+      waiting for the next commit.
+      + turn_committed -> RECOVERED; archive -> ARCHIVED. (No turn_start:
+        a resume session is not re-interrupted by its own turn.)
+    * ``RECOVERED`` -- the resumed turn committed.
+      + turn_start -> ACTIVE; turn_committed -> ACTIVE; archive -> ARCHIVED.
+    * ``FAILED_RECOVERY`` -- resume denied or durable state inconsistent
+      (requires recovery review). The conversation proceeds as new (S7).
+      + resume_valid -> RECOVERY_IN_PROGRESS; turn_start -> ACTIVE;
+        turn_committed -> ACTIVE; archive -> ARCHIVED.
+    * ``ARCHIVED`` -- terminal; every transition is rejected.
+
+Invalid (documented, rejected): ARCHIVED -> anything; ACTIVE ->
+RECOVERY_IN_PROGRESS/RECOVERED (a resume can only succeed through
+INTERRUPTED or RECOVERABLE, never straight from ACTIVE); RECOVERY_IN_PROGRESS ->
+INTERRUPTED; RECOVERED -> RECOVERABLE.
+    """
+
+    ACTIVE = "active"
+    INTERRUPTED = "interrupted"
+    RECOVERABLE = "recoverable"
+    RECOVERY_IN_PROGRESS = "recovery_in_progress"
+    RECOVERED = "recovered"
+    FAILED_RECOVERY = "failed_recovery"
+    ARCHIVED = "archived"
+
+
 class TurnOutcome(str, Enum):
     OK = "ok"
     FAILED = "failed"

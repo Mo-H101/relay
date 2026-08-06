@@ -49,6 +49,7 @@ _MAX_TURNS_LIMIT = 1000
 # continuity_headers enforces the wire contract; the store guards against
 # junk rows regardless of caller).
 _MAX_ID_LENGTH = 128
+_MAX_RESUME_TOKEN_HASH_LENGTH = 128
 _VALID_BUCKETS = frozenset({"cline", "opencode", "continue", "other"})
 _VALID_STATUS = frozenset({"active", "archived"})
 _VALID_OUTCOMES = frozenset({"ok", "failed", "denied"})
@@ -75,6 +76,28 @@ class ConversationStore:
         self._conn: Optional[sqlite3.Connection] = None
         self._open_attempts = 0
         self._open_errors = 0
+        # Conversation ids with un-drained flusher rows (registered by
+        # ContinuityFlusher). Guarded by _lock; used to keep background
+        # prunes from racing pending flushes (P9d).
+        self._in_flight: set = set()
+
+    def mark_in_flight(self, conversation_id: str) -> None:
+        """Register a conversation as having queued-but-unflushed rows."""
+        if not conversation_id:
+            return
+        with self._lock:
+            self._in_flight.add(conversation_id)
+
+    def clear_in_flight(self, conversation_id: str) -> None:
+        """Deregister a conversation once its flusher queue drains."""
+        with self._lock:
+            self._in_flight.discard(conversation_id)
+
+    @property
+    def in_flight(self) -> tuple:
+        """Snapshot of in-flight conversation ids (for diagnostics)."""
+        with self._lock:
+            return tuple(sorted(self._in_flight))
 
     @property
     def path(self) -> str:
@@ -273,6 +296,45 @@ class ConversationStore:
         )
         return True
 
+    def _prune_candidates(self, days: int) -> list:
+        """
+        Return conversation ids idle longer than ``days`` days. Shared by
+        ``prune_retention`` and ``prune_preview`` so the preview always
+        matches what a real prune would remove. ``days <= 0`` yields no
+        candidates. In-flight conversations (un-drained flusher rows) are
+        always excluded so a prune never removes a conversation whose
+        flusher queue still holds rows.
+        """
+        if days <= 0:
+            return []
+
+        cutoff = time.time() - int(days) * 86400
+        conn = self._require_open()
+
+        with self._lock:
+            exclude_ids = tuple(sorted(self._in_flight))
+            placeholders = ",".join("?" for _ in exclude_ids)
+
+            if placeholders:
+                rows = conn.execute(
+                    "SELECT id FROM conversations"
+                    " WHERE id NOT IN ({})"
+                    "   AND (status = ? OR last_turn_ts IS NOT NULL)"
+                    "   AND COALESCE(last_turn_ts, updated_at) < ?"
+                    " ORDER BY id ASC".format(placeholders),
+                    (*exclude_ids, ConversationStatus.ARCHIVED.value, cutoff),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id FROM conversations"
+                    " WHERE (status = ? OR last_turn_ts IS NOT NULL)"
+                    "   AND COALESCE(last_turn_ts, updated_at) < ?"
+                    " ORDER BY id ASC",
+                    (ConversationStatus.ARCHIVED.value, cutoff),
+                ).fetchall()
+
+        return [row[0] for row in rows]
+
     def prune_retention(self, days: int) -> int:
         """
         Delete conversations idle longer than ``days`` days and their
@@ -282,26 +344,20 @@ class ConversationStore:
 
         S8: only archived or long-inactive conversations are pruned; a
         conversation active within the retention window is never removed.
+        P9d: in-flight conversations (in the flusher registry) are skipped
+        so a background prune cannot race a pending flush.
         Emits a best-effort ``continuity.prune`` audit row.
         """
         if days <= 0:
             return 0
 
         cutoff = time.time() - int(days) * 86400
+        ids = self._prune_candidates(days)
 
         conn = self._require_open()
 
         with self._lock:
             with conn:
-                rows = conn.execute(
-                    "SELECT id FROM conversations"
-                    " WHERE (status = ? OR last_turn_ts IS NOT NULL)"
-                    "   AND COALESCE(last_turn_ts, updated_at) < ?",
-                    (ConversationStatus.ARCHIVED.value, cutoff),
-                ).fetchall()
-
-                ids = [row[0] for row in rows]
-
                 for conversation_id in ids:
                     conn.execute(
                         "DELETE FROM conversation_turns"
@@ -340,9 +396,110 @@ class ConversationStore:
 
         return removed
 
+    def prune_preview(self, days: int) -> list:
+        """
+        Diagnostic-only: return the ids that ``prune_retention`` would
+        remove for ``days`` (same candidate logic, including the in-flight
+        exclusion). Never mutates rows.
+        """
+        return self._prune_candidates(days)
+
     # ============================
     # Turns
     # ============================
+
+    def last_turn(self, conversation_id: str, key_id: str) -> Optional[dict]:
+        """
+        Return the most recently appended turn (highest seq) for a
+        conversation owned by ``key_id``, or None when no turn exists.
+        Used by ``ContinuityRecovery`` to find the last committed resume
+        point.
+        """
+        conn = self._require_open()
+
+        with self._lock:
+            row = conn.execute(
+                "SELECT t.conversation_id, t.seq, t.provider, t.model,"
+                "  t.outcome, t.task, t.tokens_in, t.tokens_out,"
+                "  t.latency_ms, t.resume_token, t.ts"
+                " FROM conversation_turns t"
+                " JOIN conversations c ON c.id = t.conversation_id"
+                " WHERE t.conversation_id = ? AND c.key_id = ?"
+                " ORDER BY t.seq DESC LIMIT 1",
+                (conversation_id, key_id),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "conversation_id": row[0],
+            "seq": row[1],
+            "provider": row[2],
+            "model": row[3],
+            "outcome": row[4],
+            "task": row[5],
+            "tokens_in": row[6],
+            "tokens_out": row[7],
+            "latency_ms": row[8],
+            "resume_token_hash": row[9],
+            "ts": row[10],
+        }
+
+    def turn_seqs(self, conversation_id: str, key_id: str) -> list:
+        """
+        Return the committed turn sequence numbers (ascending) for a
+        conversation owned by ``key_id``. Used by ``ContinuityRecovery``
+        reconcile to detect seq gaps / duplicates without pulling full
+        rows.
+        """
+        conn = self._require_open()
+
+        with self._lock:
+            rows = conn.execute(
+                "SELECT t.seq FROM conversation_turns t"
+                " JOIN conversations c ON c.id = t.conversation_id"
+                " WHERE t.conversation_id = ? AND c.key_id = ?"
+                " ORDER BY t.seq ASC",
+                (conversation_id, key_id),
+            ).fetchall()
+
+        return [row[0] for row in rows]
+
+    def last_summary(self, conversation_id: str, key_id: str) -> Optional[dict]:
+        """
+        Return the summary with the highest ``up_to_seq`` for a
+        conversation owned by ``key_id``, or None. Used by
+        ``ContinuityRecovery`` reconcile to verify that the last committed
+        summary is consistent with committed turns.
+        """
+        conn = self._require_open()
+
+        with self._lock:
+            row = conn.execute(
+                "SELECT s.conversation_id, s.up_to_seq, s.version,"
+                "  s.method, s.content, s.tokens_in, s.tokens_out,"
+                "  s.created_at"
+                " FROM summaries s"
+                " JOIN conversations c ON c.id = s.conversation_id"
+                " WHERE s.conversation_id = ? AND c.key_id = ?"
+                " ORDER BY s.up_to_seq DESC, s.created_at DESC LIMIT 1",
+                (conversation_id, key_id),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "conversation_id": row[0],
+            "up_to_seq": row[1],
+            "version": row[2],
+            "method": row[3],
+            "content": row[4],
+            "tokens_in": row[5],
+            "tokens_out": row[6],
+            "ts": row[7],
+        }
 
     def append_turn(
         self,
@@ -367,6 +524,17 @@ class ConversationStore:
         """
         if outcome not in _VALID_OUTCOMES:
             raise ValueError(f"invalid turn outcome: {outcome!r}")
+        if (
+            resume_token_hash is not None
+            and not isinstance(resume_token_hash, str)
+            or (
+                resume_token_hash is not None
+                and len(resume_token_hash) > _MAX_RESUME_TOKEN_HASH_LENGTH
+            )
+        ):
+            raise ValueError("resume_token_hash must be a short string")
+        if not isinstance(seq, int) or seq < 1:
+            raise ValueError(f"invalid turn seq: {seq!r}")
 
         now = time.time()
         conn = self._require_open()

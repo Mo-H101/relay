@@ -616,6 +616,47 @@ class ServiceFacade:
     def ops_stats(self) -> dict:
         return ops_store.stats()
 
+    def continuity_health(self) -> dict:
+        """
+        Diagnostic-only continuity recovery / flusher / retention health.
+        Returns an empty dict when continuity is disabled. Never mutates.
+        """
+        if not settings.continuity_enabled:
+            return {}
+
+        recovery = getattr(self._relay, "continuity_recovery", None)
+        flusher = getattr(self._relay, "continuity_flusher", None)
+        store = getattr(self._relay, "conversation_store", None)
+
+        health: dict = {"recovery_states": {}, "flusher": {},
+                        "prune_preview": {}}
+
+        if store is not None:
+            try:
+                states = {}
+                for conversation in store.list(limit=5000):
+                    state_name = (
+                        recovery.state(conversation["id"])
+                        if recovery is not None else "unavailable"
+                    )
+                    states[state_name] = states.get(state_name, 0) + 1
+                health["recovery_states"] = states
+                window = settings.continuity_retention_days
+                health["prune_preview"] = {
+                    "days": window,
+                    "candidates": len(store.prune_preview(window)),
+                }
+            except Exception:  # noqa: BLE001 - diagnostics never raise
+                health["error"] = "store read failed"
+
+        if flusher is not None:
+            try:
+                health["flusher"] = flusher.flush_stats()
+            except Exception:  # noqa: BLE001
+                health["flusher"] = {"error": "flush stats unavailable"}
+
+        return health
+
     def ops_events(self) -> list:
         return ops_store.events()
 

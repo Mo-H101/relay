@@ -219,12 +219,12 @@ class AsyncChatService:
                         ],
                     }
                     if turn is not None:
-                        turn.attach(result)
                         turn.finish(
                             provider=provider.name,
                             model=model,
                             latency_ms=attempt.latency_ms,
                         )
+                        turn.attach(result)
                     return result
 
                 errors.append(f"{model} ({provider.name}): {attempt.reason}")
@@ -392,12 +392,12 @@ class AsyncChatService:
             }
 
             if turn is not None:
-                turn.attach(result)
                 turn.finish(
                     provider=provider.name,
                     model=model,
                     outcome="ok",
                 )
+                turn.attach(result)
 
             return result
 
@@ -565,12 +565,12 @@ class AsyncChatService:
                         ],
                     }
                     if turn is not None:
-                        turn.attach(result)
                         turn.finish(
                             provider=provider.name,
                             model=model,
                             latency_ms=attempt.latency_ms,
                         )
+                        turn.attach(result)
                     return result
 
                 errors.append(f"{model} ({provider.name}): {attempt.reason}")
@@ -735,12 +735,12 @@ class AsyncChatService:
             }
 
             if turn is not None:
-                turn.attach(result)
                 turn.finish(
                     provider=provider.name,
                     model=model,
                     outcome="ok",
                 )
+                turn.attach(result)
 
             return result
 

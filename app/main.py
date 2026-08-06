@@ -41,6 +41,31 @@ async def lifespan(fastapi_app: FastAPI):
         relay.continuity_flusher.start()
         relay.continuity_flusher.prune_now()
 
+    # P9d: startup reconciliation -- detect seq gaps / duplicates and
+    # summary-ahead-of-turns anomalies, and mark conversations whose last
+    # safe point is undeterminable as requiring recovery review. Best
+    # effort: it reports, never repairs, and never breaks startup.
+    if relay.continuity_recovery is not None:
+        try:
+            report = relay.continuity_recovery.reconcile()
+            if report.get("requires_review"):
+                _logger.warning(
+                    "continuity reconcile: %d/%d conversations require "
+                    "recovery review",
+                    report["requires_review"],
+                    report["scanned"],
+                )
+            else:
+                _logger.info(
+                    "continuity reconcile: %d conversations scanned, "
+                    "%d healthy, %d recoverable",
+                    report["scanned"],
+                    report["healthy"],
+                    report.get("recoverable", 0),
+                )
+        except Exception:
+            _logger.exception("continuity reconcile failed")
+
     try:
         yield
     finally:
