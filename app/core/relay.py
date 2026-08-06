@@ -18,6 +18,10 @@ from app.services.telemetry import TelemetryStore
 from app.services.quality import QualityStore
 from app.services.state_store import StateStore, StateStoreError
 from app.services.state_flusher import StateFlusher
+from app.services.conversation_store import ConversationStore
+from app.services.continuity_flusher import ContinuityFlusher
+from app.services.metrics import relay_metrics
+from app.services import platform_store
 from app.providers.factory import build_runtime_provider
 from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 
@@ -92,7 +96,35 @@ class Relay:
         if settings.persistence_enabled:
             self._init_persistence()
 
+        # P9 project continuity. Disabled by default: the store and
+        # flusher are None and every continuity path is inert.
+        self.conversation_store: Optional[ConversationStore] = None
+        self.continuity_flusher: Optional[ContinuityFlusher] = None
+
+        if settings.continuity_enabled:
+            self._init_continuity()
+
+        relay_metrics.continuity_enabled.set(
+            1 if settings.continuity_enabled else 0
+        )
+
         self._load_providers()
+
+    def _init_continuity(self) -> None:
+        """
+        Open the ConversationStore and start the write-behind
+        ContinuityFlusher on the shared platform.db. Continuity is
+        additive on top of the existing routing; a store failure never
+        affects startup or the chat path.
+        """
+        path = settings.persistence_path or str(platform_store.default_path())
+
+        self.conversation_store = ConversationStore(path)
+        self.continuity_flusher = ContinuityFlusher(
+            conversation_store=self.conversation_store,
+            interval_seconds=settings.continuity_flush_interval_seconds,
+            retention_days=settings.continuity_retention_days,
+        )
 
     def _init_persistence(self) -> None:
         """

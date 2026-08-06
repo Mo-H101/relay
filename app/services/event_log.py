@@ -58,6 +58,14 @@ EVENT_ACTIONS = frozenset(
         "store.open",
         "store.close",
         "migrate.run",
+        # P9 project continuity.
+        "continuity.create",
+        "continuity.resume",
+        "continuity.switch",
+        "continuity.compact",
+        "continuity.archive",
+        "continuity.prune",
+        "continuity.denied",
     }
 )
 

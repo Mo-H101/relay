@@ -42,7 +42,7 @@ from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 def test_spec_covers_every_settings_attribute():
     expected = set(vars(Settings()))
     assert set(SPEC_BY_ATTR) == expected
-    assert len(SPECS) == len(expected) == 103
+    assert len(SPECS) == len(expected) == 116
 
 
 def test_every_spec_env_is_unique():
@@ -229,6 +229,19 @@ def test_non_reloadable_fields_are_never_live():
             "request_log_flush_interval_seconds",
             "request_log_retention_days",
             "telemetry_max_failure_history",
+            "continuity_chars_per_token",
+            "continuity_context_token_budget",
+            "continuity_enabled",
+            "continuity_flush_interval_seconds",
+            "continuity_output_reserve_tokens",
+            "continuity_retention_days",
+            "continuity_summarizer_model",
+            "continuity_summary_max_chars",
+            "continuity_summary_share",
+            "continuity_tail_max_items",
+            "max_resume_replays",
+            "max_switches_per_turn",
+            "max_switches_per_window",
         }
     )
 

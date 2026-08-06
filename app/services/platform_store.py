@@ -8,8 +8,9 @@ and ``StateStore``:
 * the combined schema migration history (``MIGRATIONS`` +
   ``PRAGMA user_version``) replaying the legacy ``relay_keys.db`` (v1)
   and ``relay_state.db`` (v1-v3) steps plus the ``model_status``
-  table (v4), the durable ``events`` audit table (v5), and the
-  metadata-only ``request_log`` table (v6),
+  table (v4), the durable ``events`` audit table (v5), the
+  metadata-only ``request_log`` table (v6), and the project-continuity
+  tables (v7),
 * an in-process migration lock so concurrent opens of the same file
   cannot race a migration,
 * user-only file permissions on the database plus its ``-wal``/``-shm``
@@ -39,10 +40,12 @@ from typing import List, Optional
 from app.core.config import IS_SOURCE_CHECKOUT, PROJECT_ROOT, state_dir
 
 # Combined schema version: api_keys (v1), the legacy state tables (v2),
-# the v2/v3 state additions (v3), model_status (v4), events (v5), and
-# the metadata-only request_log (v6). See docs/platform-db-schema.md for
-# the full DDL and privacy contract.
-SCHEMA_VERSION = 6
+# the v2/v3 state additions (v3), model_status (v4), events (v5), the
+# metadata-only request_log (v6), and the project-continuity tables (v7:
+# conversations, conversation_turns, summaries, compaction_records,
+# project_state). See docs/platform-db-schema.md for the full DDL and
+# privacy contract.
+SCHEMA_VERSION = 7
 
 MIGRATIONS: dict = {
     1: [
@@ -186,6 +189,95 @@ MIGRATIONS: dict = {
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log (ts)
+        """,
+    ],
+    7: [
+        """
+        CREATE TABLE IF NOT EXISTS conversations (
+            id            TEXT PRIMARY KEY,  -- conversation_id (uuid)
+            key_id        TEXT NOT NULL,     -- opaque app key id (scope)
+            client_bucket TEXT NOT NULL,     -- cline | opencode | continue | other
+            project_key   TEXT NOT NULL,     -- key-scoped opaque project id
+            status        TEXT NOT NULL,     -- active | archived
+            model_chain   TEXT NOT NULL,     -- bounded JSON array of model ids
+            token_budget  INTEGER,
+            created_at    REAL NOT NULL,
+            updated_at    REAL NOT NULL,
+            last_turn_ts  REAL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS conversation_turns (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id),
+            seq           INTEGER NOT NULL,
+            provider      TEXT,
+            model         TEXT,
+            outcome       TEXT NOT NULL,     -- ok | failed | denied
+            task          TEXT,              -- routing task classification
+            tokens_in     INTEGER,
+            tokens_out    INTEGER,
+            latency_ms    INTEGER,
+            resume_token  TEXT,              -- stored as a hash, never raw
+            ts            REAL NOT NULL,
+            UNIQUE (conversation_id, seq)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS summaries (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id),
+            up_to_seq     INTEGER NOT NULL,
+            version       INTEGER NOT NULL,  -- SUMMARY_VERSION
+            method        TEXT NOT NULL,     -- extractive | llm
+            content       TEXT NOT NULL,     -- derived, redacted, bounded
+            tokens_in     INTEGER,
+            tokens_out    INTEGER,
+            created_at    REAL NOT NULL,
+            UNIQUE (conversation_id, up_to_seq)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS compaction_records (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id),
+            at            REAL NOT NULL,
+            reason        TEXT NOT NULL,     -- preflight | overflow | manual
+            method        TEXT NOT NULL,     -- summary+tail | tail-only
+            from_tokens   INTEGER,
+            to_tokens     INTEGER,
+            summary_id    INTEGER REFERENCES summaries(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS project_state (
+            project_key   TEXT NOT NULL,
+            key_id        TEXT NOT NULL,
+            last_models   TEXT NOT NULL,     -- bounded JSON array
+            counters      TEXT NOT NULL,     -- bounded JSON counters
+            last_seen     REAL NOT NULL,
+            PRIMARY KEY (project_key, key_id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversations_key
+            ON conversations (key_id, status)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversations_project
+            ON conversations (project_key, key_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_turns_cid
+            ON conversation_turns (conversation_id, seq)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_compaction_cid
+            ON compaction_records (conversation_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_project_state_key
+            ON project_state (key_id, last_seen)
         """,
     ],
 }

@@ -27,6 +27,11 @@ _FULL_TABLE_SET = {
     "model_status",
     "events",
     "request_log",
+    "conversations",
+    "conversation_turns",
+    "summaries",
+    "compaction_records",
+    "project_state",
 }
 
 
@@ -65,7 +70,8 @@ class TestOpenAndSchema:
 
     def test_migration_from_scratch_history(self, tmp_path):
         # A fresh, empty file starts at user_version 0 and runs the full
-        # history (v1 -> v6), including api_keys, events, and request_log.
+        # history (v1 -> v7), including api_keys, events, request_log, and
+        # the project-continuity tables.
         path = str(tmp_path / "history.db")
 
         platform_conn = platform_store.open_connection(path)
@@ -78,13 +84,14 @@ class TestOpenAndSchema:
         }
         platform_conn.close()
 
-        assert version == platform_store.SCHEMA_VERSION == 6
+        assert version == platform_store.SCHEMA_VERSION == 7
         assert _FULL_TABLE_SET <= tables
 
     def test_v4_to_v6_additive_upgrade(self, tmp_path):
         # Build an explicit v4 database (migrations 1..4 only), write a
-        # sentinel key, then let open_connection advance it to v6. The
-        # upgrade is additive: existing rows survive byte-identical.
+        # sentinel key, then let open_connection advance it to the current
+        # schema. The upgrade is additive: existing rows survive
+        # byte-identical.
         path = str(tmp_path / "v4.db")
         conn = sqlite3.connect(path)
 

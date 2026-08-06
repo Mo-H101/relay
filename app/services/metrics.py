@@ -547,6 +547,28 @@ class RelayMetrics:
             "Persistent state load failures.",
         )
 
+        # P9 project continuity
+        self.continuity_enabled = r.gauge(
+            "relay_continuity_enabled",
+            "Whether project continuity is enabled.",
+        )
+        self.continuity_rows_queued = r.gauge(
+            "relay_continuity_rows_queued",
+            "Continuity rows waiting in the write-behind buffer.",
+        )
+        self.continuity_flushes = r.counter(
+            "relay_continuity_flushes_total",
+            "Continuity background flush passes.",
+        )
+        self.continuity_pruned = r.counter(
+            "relay_continuity_pruned_total",
+            "Conversations pruned by continuity retention.",
+        )
+        self.continuity_flush_failures = r.counter(
+            "relay_continuity_flush_failures_total",
+            "Continuity flush failures.",
+        )
+
         # Process
         self.uptime = r.gauge(
             "relay_process_uptime_seconds",

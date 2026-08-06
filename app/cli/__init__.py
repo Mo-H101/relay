@@ -115,9 +115,11 @@ def main(argv=None) -> None:
             "to (re)run the setup wizard, 'relay keys' to manage API "
             "keys, 'relay provider keys' to manage provider keys, "
             "'relay events' to tail the security audit log, 'relay "
-            "apps' to list connected applications, and 'relay migrate' "
-            "to consolidate legacy state files into platform.db, and "
-            "'relay config' to show, validate, or diff configuration."
+            "apps' to list connected applications, 'relay migrate' "
+            "to consolidate legacy state files into platform.db, "
+            "'relay conversations' to inspect project-continuity "
+            "metadata, and 'relay config' to show, validate, or diff "
+            "configuration."
         ),
     )
 
@@ -186,6 +188,16 @@ def main(argv=None) -> None:
 
     add_events_parser(events)
 
+    conversations = subparsers.add_parser(
+        "conversations",
+        help="Project-continuity metadata surfaces (list, show, archive, "
+             "prune).",
+    )
+
+    from app.cli.continuity import add_continuity_parser
+
+    add_continuity_parser(conversations)
+
     apps = subparsers.add_parser(
         "apps",
         help="List connected applications (labeled keys x request log).",
@@ -230,6 +242,10 @@ def main(argv=None) -> None:
         from app.cli.events import _run_events
 
         _run_events(args, parser)
+    elif args.command == "conversations":
+        from app.cli.continuity import _run_continuity
+
+        _run_continuity(args, parser)
     elif args.command == "apps":
         from app.cli.apps import _run_apps
 

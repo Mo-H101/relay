@@ -37,6 +37,10 @@ async def lifespan(fastapi_app: FastAPI):
     if relay.state_flusher is not None:
         relay.state_flusher.start()
 
+    if relay.continuity_flusher is not None:
+        relay.continuity_flusher.start()
+        relay.continuity_flusher.prune_now()
+
     try:
         yield
     finally:
@@ -48,6 +52,13 @@ async def lifespan(fastapi_app: FastAPI):
                 relay.state_flusher.flush()
             except Exception:
                 _logger.exception("shutdown state flush failed")
+
+        if relay.continuity_flusher is not None:
+            relay.continuity_flusher.stop()
+            try:
+                relay.continuity_flusher.flush()
+            except Exception:
+                _logger.exception("shutdown continuity flush failed")
 
 
 app = FastAPI(

@@ -39,6 +39,15 @@ MEMORY_SURFACES = {
     "adaptive_routing_learning": MemoryClass.DURABLE,
     "quality_feedback_aggregates": MemoryClass.DURABLE,
     "decision_stats": MemoryClass.DURABLE,
+    # P9 project continuity: metadata-only surfaces on the shared
+    # platform.db (schema v7). Raw prompts/responses are never stored.
+    "conversation_store": MemoryClass.DURABLE,
+    "continuity_flusher": MemoryClass.DURABLE,
+    "conversations": MemoryClass.DURABLE,
+    "conversation_turns": MemoryClass.DURABLE,
+    "summaries": MemoryClass.DURABLE,
+    "compaction_records": MemoryClass.DURABLE,
+    "project_state": MemoryClass.DURABLE,
     # Ephemeral: process-lifetime only.
     "health_snapshots": MemoryClass.EPHEMERAL,
     "ops_store": MemoryClass.EPHEMERAL,

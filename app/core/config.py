@@ -773,6 +773,77 @@ class Settings:
             minimum=0,
         )
 
+        # =========================
+        # Project continuity & model handoff (P9)
+        # =========================
+
+        # Disabled by default: continuity surfaces are inert, no rows are
+        # ever written, and chat routing stays byte-identical until this
+        # flag is explicitly enabled. Every continuity setting is
+        # restart-required (none are hot-reloadable).
+        self.continuity_enabled = (
+            os.getenv("CONTINUITY_ENABLED", "false").lower() == "true"
+        )
+        self.continuity_retention_days = _valid_int(
+            "CONTINUITY_RETENTION_DAYS",
+            os.getenv("CONTINUITY_RETENTION_DAYS", "30"),
+            minimum=0,
+        )
+        self.continuity_flush_interval_seconds = _valid_int(
+            "CONTINUITY_FLUSH_INTERVAL_SECONDS",
+            os.getenv("CONTINUITY_FLUSH_INTERVAL_SECONDS", "5"),
+            minimum=1,
+        )
+        self.continuity_context_token_budget = _valid_int(
+            "CONTINUITY_CONTEXT_TOKEN_BUDGET",
+            os.getenv("CONTINUITY_CONTEXT_TOKEN_BUDGET", "32768"),
+            minimum=1,
+        )
+        self.continuity_output_reserve_tokens = _valid_int(
+            "CONTINUITY_OUTPUT_RESERVE_TOKENS",
+            os.getenv("CONTINUITY_OUTPUT_RESERVE_TOKENS", "2048"),
+            minimum=0,
+        )
+        self.continuity_summary_share = _valid_float(
+            "CONTINUITY_SUMMARY_SHARE",
+            os.getenv("CONTINUITY_SUMMARY_SHARE", "0.4"),
+            minimum=0.0,
+            maximum=1.0,
+        )
+        self.continuity_summary_max_chars = _valid_int(
+            "CONTINUITY_SUMMARY_MAX_CHARS",
+            os.getenv("CONTINUITY_SUMMARY_MAX_CHARS", "4096"),
+            minimum=1,
+        )
+        self.continuity_tail_max_items = _valid_int(
+            "CONTINUITY_TAIL_MAX_ITEMS",
+            os.getenv("CONTINUITY_TAIL_MAX_ITEMS", "20"),
+            minimum=1,
+        )
+        self.continuity_chars_per_token = _valid_int(
+            "CONTINUITY_CHARS_PER_TOKEN",
+            os.getenv("CONTINUITY_CHARS_PER_TOKEN", "4"),
+            minimum=1,
+        )
+        self.continuity_summarizer_model = os.getenv(
+            "CONTINUITY_SUMMARIZER_MODEL", ""
+        ).strip()
+        self.max_switches_per_turn = _valid_int(
+            "MAX_SWITCHES_PER_TURN",
+            os.getenv("MAX_SWITCHES_PER_TURN", "3"),
+            minimum=1,
+        )
+        self.max_switches_per_window = _valid_int(
+            "MAX_SWITCHES_PER_WINDOW",
+            os.getenv("MAX_SWITCHES_PER_WINDOW", "5"),
+            minimum=1,
+        )
+        self.max_resume_replays = _valid_int(
+            "MAX_RESUME_REPLAYS",
+            os.getenv("MAX_RESUME_REPLAYS", "3"),
+            minimum=0,
+        )
+
 
 settings = Settings()
 
