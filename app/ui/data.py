@@ -16,9 +16,11 @@ from pathlib import Path
 import time
 from typing import Any
 
+from app.core import config_spec
 from app.core.config import settings
 from app.core.relay import relay
 from app.providers.availability import GLYPH
+from app.providers.factory import resolve_provider_key
 from app.providers.registry import PROVIDER_MENU, PROVIDER_REGISTRY
 from app.security.auth import auth_configured
 from app.services import config_store as config_store_module
@@ -35,6 +37,7 @@ from app.services.ops_store import ops_store
 from app.services.redaction import redact_dict, redact_text
 from app.services.reload import reload_config
 from app.setup import persistence
+from app.setup.key_validation import mask_key
 from app.setup.scan import ScanEngine
 
 
@@ -167,10 +170,13 @@ class ConfigField:
 
     ``kind`` is ``"bool"``, ``"text"``, or ``"csv"``. Exactly one of
     ``reloadable`` / ``restart_required`` / ``informational`` describes how
-    the field takes effect. No secret or API-key field is ever exposed here.
+    the field takes effect. ``secret`` rows carry a masked display value in
+    ``value`` (raw key material never enters a widget) and are never
+    editable. ``env`` is empty for informational fields with no env var.
     """
 
     env: str
+    attr: str
     label: str
     value: str
     kind: str
@@ -180,6 +186,7 @@ class ConfigField:
     restart_required: bool
     informational: bool
     hint: str = ""
+    secret: bool = False
 
 
 @dataclass(frozen=True)
@@ -230,44 +237,12 @@ class AuthStatus:
 
 
 # ------------------------------------------------------------------ config
-
-# (env, settings attr, kind, group, editable, reloadable, restart_required,
-#  informational, label, hint). No secret/API-key fields appear here; keys
-# stay managed by the Providers flow and never reach the Configuration UI.
-_CONFIG_ROWS = (
-    ("TASK_ROUTING_ENABLED", "task_routing_enabled", "bool", "routing", True, True, False, False, "Enable task routing", "Route requests by task category using the TASK_* model preferences."),
-    ("CROSS_PROVIDER_MODEL_SELECTION", "cross_provider_model_selection", "bool", "routing", True, True, False, False, "Cross-provider model selection", "Allow a bare model reference to match every provider that has it."),
-    ("TASK_CODING", "task_coding", "csv", "routing", True, True, False, False, "Coding models", "Comma-separated model refs (model or Provider:model)."),
-    ("TASK_VISION", "task_vision", "csv", "routing", True, True, False, False, "Vision models", "Comma-separated model refs (model or Provider:model)."),
-    ("TASK_REASONING", "task_reasoning", "csv", "routing", True, True, False, False, "Reasoning models", "Comma-separated model refs (model or Provider:model)."),
-    ("TASK_GENERAL", "task_general", "csv", "routing", True, True, False, False, "General models", "Comma-separated model refs (model or Provider:model)."),
-    ("TASK_CREATIVE", "task_creative", "csv", "routing", True, True, False, False, "Creative models", "Comma-separated model refs (model or Provider:model)."),
-    ("TASK_TRANSLATION", "task_translation", "csv", "routing", True, True, False, False, "Translation models", "Comma-separated model refs (model or Provider:model)."),
-    ("REQUEST_TIMEOUT", "request_timeout", "text", "failover", True, True, False, False, "Request timeout (s)", "Seconds before a provider request times out."),
-    ("MAX_RETRIES", "max_retries", "text", "failover", True, True, False, False, "Max retries", "Retries across fallback candidates."),
-    ("RETRY_HONOR_RETRY_AFTER", "retry_honor_retry_after", "bool", "failover", True, True, False, False, "Honor Retry-After", "Wait for a provider's Retry-After on rate-limit responses."),
-    ("RETRY_AFTER_MAX_SECONDS", "retry_after_max_seconds", "text", "failover", True, True, False, False, "Retry-After cap (s)", "Upper bound for a Retry-After wait."),
-    ("RETRY_BACKOFF_BASE_SECONDS", "retry_backoff_base_seconds", "text", "failover", True, True, False, False, "Backoff base (s)", "Exponential backoff base between retries (0 = immediate)."),
-    ("RETRY_BACKOFF_MAX_SECONDS", "retry_backoff_max_seconds", "text", "failover", True, True, False, False, "Backoff max (s)", "Cap for exponential backoff."),
-    ("REQUEST_TIMEOUT_BUDGET_SECONDS", "request_timeout_budget_seconds", "text", "failover", True, True, False, False, "Request budget (s)", "Overall wall-clock budget for a chat request (0 = off)."),
-    ("RELAY_HOST", "relay_host", "text", "restart", False, False, True, False, "Host", "Server bind host. Restart required."),
-    ("RELAY_PORT", "relay_port", "text", "restart", False, False, True, False, "Port", "Server bind port. Restart required."),
-    ("PERSISTENCE_ENABLED", "persistence_enabled", "bool", "restart", False, False, True, False, "Persistence", "Learned-state persistence. Restart required."),
-    ("PERSISTENCE_PATH", "persistence_path", "text", "restart", False, False, True, False, "Persistence path", "State store path. Restart required."),
-    ("PERSISTENCE_FLUSH_INTERVAL_SECONDS", "persistence_flush_interval_seconds", "text", "restart", False, False, True, False, "Flush interval (s)", "State flush cadence. Restart required."),
-    ("LOG_LEVEL", "log_level", "text", "restart", False, False, True, False, "Log level", "Logging verbosity. Restart required."),
-    ("LOG_FILE", "log_file", "text", "restart", False, False, True, False, "Log file", "JSON log file path. Restart required."),
-    ("LMSTUDIO_BASE_URL", "lmstudio_base_url", "text", "restart", False, False, True, False, "LM Studio URL", "LM Studio server base URL. Restart required."),
-)
-
-_EDITABLE_FIELDS = frozenset(row[0] for row in _CONFIG_ROWS if row[4])
-_RESTART_FIELDS = frozenset(row[0] for row in _CONFIG_ROWS if row[6])
-_GROUP_TITLES = {
-    "routing": "Routing (TASK_*) — applied live",
-    "failover": "Failover & retry — applied live",
-    "restart": "Restart required (read-only)",
-    "info": "Informational (read-only)",
-}
+#
+# The Configuration form has no row table of its own (P7.3): every field is
+# derived from ``app.core.config_spec`` (display group, kind, editability,
+# labels, hints) and values are read from the live ``settings`` singleton
+# via ``config_form``. Writing is routed through the P7.2 mutation layer in
+# ``save_config``.
 
 
 def _tail_lines(path: Path, *, max_bytes: int = 65536, limit: int = 50) -> list[str]:
@@ -646,26 +621,48 @@ class ServiceFacade:
 
     # ------------------------------------------------------ configuration
 
+    def config_groups(self) -> list[str]:
+        """
+        Configuration panel display groups in render order. Screens consume
+        this instead of importing ``app.core`` directly (boundary rule).
+        """
+        return list(config_spec.DISPLAY_GROUPS)
+
     def config_form(self) -> list[ConfigField]:
         """
-        Current Configuration form values with their live/restart/
-        informational classification. No secret fields are included.
+        Current Configuration form values, derived entirely from
+        ``app.core.config_spec`` (P7.3). Rows appear in registry order and
+        carry their stable display group, kind, editability, and hint.
+        Secret rows render a masked display string in ``value``.
         """
-        return [
-            ConfigField(
-                env=env,
-                label=label,
-                value=self._field_value(attr, kind),
-                kind=kind,
-                group=group,
-                editable=editable,
-                reloadable=reloadable,
-                restart_required=restart_required,
-                informational=informational,
-                hint=hint,
+        form: list[ConfigField] = []
+
+        for spec in config_spec.SPECS:
+            kind = config_spec.tui_kind_for(spec)
+
+            if spec.secret:
+                value = self._secret_display(spec)
+            else:
+                value = self._field_value(spec.attr, kind)
+
+            form.append(
+                ConfigField(
+                    env=spec.env or "",
+                    attr=spec.attr,
+                    label=config_spec.label_for(spec),
+                    value=value,
+                    kind=kind,
+                    group=config_spec.tui_group_for(spec),
+                    editable=config_spec.tui_editable_for(spec),
+                    reloadable=spec.reloadable,
+                    restart_required=spec.restart_required,
+                    informational=spec.informational,
+                    hint=config_spec.hint_for(spec),
+                    secret=spec.secret,
+                )
             )
-            for env, attr, kind, group, editable, reloadable, restart_required, informational, label, hint in _CONFIG_ROWS
-        ]
+
+        return form
 
     def _field_value(self, attr: str, kind: str) -> str:
         value = getattr(settings, attr, "")
@@ -678,60 +675,178 @@ class ServiceFacade:
 
         return str(value)
 
+    def _secret_display(self, spec) -> str:
+        """
+        Masked display string for a secret row (raw key material only flows
+        through ``mask_key`` and never into a widget). Provider keys resolve
+        from the keyring boundary first; the auth key reads the store.
+        """
+        value = ""
+
+        if spec.attr != "relay_api_key":
+            for defn in PROVIDER_REGISTRY.values():
+                if defn.key_env == spec.env:
+                    try:
+                        value = resolve_provider_key(defn)
+                    except Exception:  # noqa: BLE001 - display must not crash
+                        value = ""
+                    break
+
+        if not value:
+            value = self._store.get_env(spec.env, None) or ""
+
+        if not value:
+            return "(unset)"
+
+        return mask_key(value)
+
     def config_restart_required_fields(self) -> list[str]:
         """
-        Env names that never change without a restart (server bind,
-        persistence, logging, LM Studio URL). Read-only in the form.
+        Env names that only change when the process restarts. The full
+        panel is now editable, so this is reported (not a read-only gate);
+        saves that touch only these fields write and never live-apply.
         """
-        return sorted(_RESTART_FIELDS)
+        return sorted(
+            spec.env
+            for spec in config_spec.SPECS
+            if spec.restart_required and spec.env is not None
+        )
 
     def save_config(self, changes: dict[str, str]) -> dict:
         """
-        Save a Configuration change through the single writer.
+        Save Configuration changes through the P7.2 mutation layer.
 
-        Flow: write via ``config_store`` -> validate with a dry-run reload
-        -> apply with a real reload -> report. On any validation/apply
-        failure the previous ``.env`` values are restored so the file and
-        the in-process state stay consistent. Secret fields are not
-        accepted here (they are managed by the provider flows).
+        Flow: resolve every change against the registry and validate it
+        with a dry-run ``set_setting`` (zero writes on refusal) -> persist
+        through the single writer -> live-apply with the full reload engine
+        when any changed field is live. A failed apply rolls the ``.env``
+        originals back and emits audit events; restart-only saves are
+        written but never live-applied. Secret fields are refused here
+        (they are managed by the provider/keyring flows).
         """
         if not changes:
             return {"saved": False, "error": "No changes to save."}
 
-        unknown = sorted(set(changes) - _EDITABLE_FIELDS)
+        from app.services import config_mutation
+        from app.services.config_mutation import ConfigUsageError
 
-        if unknown:
+        specs: dict[str, object] = {}
+        refused: list[str] = []
+
+        for env in changes:
+            spec = config_spec.SPEC_BY_ENV.get(env)
+
+            if spec is None or spec.env is None or spec.secret:
+                refused.append(env)
+            else:
+                specs[env] = spec
+
+        if refused:
             return {
                 "saved": False,
                 "error": (
                     "Read-only or unknown field(s): "
-                    + ", ".join(unknown)
-                    + ". Restart-required and informational settings are "
-                    "read-only; secrets are managed on the Providers screen."
+                    + ", ".join(sorted(refused))
+                    + ". Secrets are managed on the Providers screen; "
+                    "informational fields have no env var to write."
                 ),
             }
 
-        originals = {key: self._store.get_env(key, None) for key in changes}
+        for env, value in changes.items():
+            try:
+                config_mutation.set_setting(env, value, reload=False, dry_run=True)
+            except ConfigUsageError as exc:
+                self._emit_config_set([env], outcome="failed")
+                return {
+                    "saved": False,
+                    "error": f"Invalid value for '{env}': {exc}",
+                }
+
+        originals = {env: self._store.get_env(env, None) for env in changes}
 
         try:
-            for key, value in changes.items():
-                self._store.set_env(key, value)
+            for env, value in changes.items():
+                self._store.set_env(env, value)
 
-            dry = self._reload_call(dry_run=True)
+            restart_fields = sorted(
+                env for env, spec in specs.items() if spec.restart_required
+            )
+            any_live = any(spec.reloadable for spec in specs.values())
 
-            if not dry.get("reloaded"):
-                self._restore_env(originals)
-                return {"saved": False, **dry}
+            if not any_live:
+                self._emit_config_set(sorted(changes), outcome="ok")
+                return {
+                    "saved": True,
+                    "applied": False,
+                    "restart_required": restart_fields,
+                    "message": (
+                        "Saved (takes effect after restart)."
+                        if restart_fields
+                        else "Saved."
+                    ),
+                }
 
             report = self._reload_call()
 
             if not report.get("reloaded"):
                 self._restore_env(originals)
+                self._emit_config_set(sorted(changes), outcome="failed")
+                return {"saved": False, **report}
 
-            return {"saved": bool(report.get("reloaded")), **report}
+            self._emit_config_set(sorted(changes), outcome="ok")
+            self._emit_config_reload(report)
+            return {"saved": True, **report, "restart_required": restart_fields}
         except Exception as exc:  # noqa: BLE001 - surface in the status line
             self._restore_env(originals)
+            self._emit_config_set(sorted(changes), outcome="failed")
             return {"saved": False, "error": f"Reload failed: {exc}"}
+
+    def _emit_config_set(
+        self, envs: list[str], *, outcome: str = "ok"
+    ) -> None:
+        """
+        Best-effort audit event for a batch of TUI config writes. Counts
+        only — never field values or keys. A failed audit write is ignored
+        (the save result is reported in the status line instead).
+        """
+        self._emit_audit(
+            "config.set",
+            actor="tui",
+            outcome=outcome,
+            detail={"fields": len(envs)},
+        )
+
+    def _emit_config_reload(self, report: dict) -> None:
+        self._emit_audit(
+            "config.reload",
+            actor="tui",
+            outcome="failed" if not report.get("reloaded") else "ok",
+            detail={
+                "applied": len(report.get("applied", [])),
+                "unchanged": len(report.get("unchanged", [])),
+                "restored": bool(report.get("restored")),
+            },
+        )
+
+    def _emit_audit(
+        self,
+        action: str,
+        *,
+        actor: str,
+        outcome: str,
+        detail: dict | None = None,
+    ) -> None:
+        from app.services.event_log import event_log
+
+        try:
+            event_log().emit(
+                action,
+                actor=actor,
+                outcome=outcome,
+                detail=detail,
+            )
+        except Exception:  # noqa: BLE001 - audit must never break the TUI
+            pass
 
     def _reload_call(self, **kwargs) -> dict:
         env_file = getattr(self._store, "env_file", None)

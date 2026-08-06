@@ -3,16 +3,19 @@ Declarative settings registry (P7.1).
 
 The single source of truth describing every Relay setting: env var, type,
 default, description, category, secret flag, effect (live / restart /
-info), validation constraints, CLI visibility, and the TUI Configuration
-form metadata for the fields it exposes.
+info), validation constraints, and CLI visibility.
+
+The TUI Configuration panel derives entirely from this module (P7.3): the
+display grouping, field kinds, editability, and labels are computed by the
+``tui_*`` helpers, so the UI cannot drift from the settings that actually
+run. ``app.ui.data`` consumes ``SPECS`` and the helpers below.
 
 ``Settings.__init__`` in ``app.core.config`` is intentionally **not**
 rewritten: it stays the executable parser, and this module is the
 declarative mirror. ``tests/test_config_spec.py`` asserts a 1:1 mapping
 between ``vars(Settings())`` and ``SPECS`` plus exact reproduction of the
-reload allowlist (``app.services.reload``), the reload secret set, and the
-TUI config rows (``app.ui.data._CONFIG_ROWS``), so the registry cannot
-drift from the code that actually runs.
+reload allowlist (``app.services.reload``) and the reload secret set, so
+the registry cannot drift from the code that actually runs.
 
 The reloadable field tuples are reproduced **in the same order** the
 runtime builds them, so ``app.services.reload`` can consume this module
@@ -63,13 +66,6 @@ class SettingSpec:
     maximum: float | None = None
     # CLI visibility.
     cli_visible: bool = True
-    # TUI Configuration form metadata (only the fields _CONFIG_ROWS lists).
-    tui: bool = False
-    tui_kind: str | None = None    # bool | text | csv
-    tui_group: str | None = None   # routing | failover | restart | info
-    tui_editable: bool = False
-    label: str | None = None
-    hint: str | None = None
 
     @property
     def reloadable(self) -> bool:
@@ -522,91 +518,122 @@ _RAW_SPECS = (
 )
 
 # ---------------------------------------------------------------------------
-# TUI Configuration form metadata (mirrors app/ui/data.py _CONFIG_ROWS).
-# Attached here so the golden tests can prove 1:1 parity and P7.3 can derive
-# the form from this registry.
+# TUI Configuration form derivation (P7.3).
+#
+# The Configuration panel consumes SPECS directly and never carries its own
+# row table. Display grouping is a stable, ordered overlay: every spec
+# resolves to exactly one DISPLAY_GROUPS entry, and rows render in
+# DISPLAY_GROUPS order (then registry order), so the panel stays grouped and
+# deterministic without duplicating metadata in the UI layer.
 # ---------------------------------------------------------------------------
-_TUI_META = {
-    "TASK_ROUTING_ENABLED": ("bool", "routing", True, "Enable task routing",
-                             "Route requests by task category using the TASK_* model preferences."),
-    "CROSS_PROVIDER_MODEL_SELECTION": ("bool", "routing", True,
-                                       "Cross-provider model selection",
-                                       "Allow a bare model reference to match every provider that has it."),
-    "TASK_CODING": ("csv", "routing", True, "Coding models",
-                    "Comma-separated model refs (model or Provider:model)."),
-    "TASK_VISION": ("csv", "routing", True, "Vision models",
-                    "Comma-separated model refs (model or Provider:model)."),
-    "TASK_REASONING": ("csv", "routing", True, "Reasoning models",
-                       "Comma-separated model refs (model or Provider:model)."),
-    "TASK_GENERAL": ("csv", "routing", True, "General models",
-                     "Comma-separated model refs (model or Provider:model)."),
-    "TASK_CREATIVE": ("csv", "routing", True, "Creative models",
-                      "Comma-separated model refs (model or Provider:model)."),
-    "TASK_TRANSLATION": ("csv", "routing", True, "Translation models",
-                         "Comma-separated model refs (model or Provider:model)."),
-    "REQUEST_TIMEOUT": ("text", "failover", True, "Request timeout (s)",
-                        "Seconds before a provider request times out."),
-    "MAX_RETRIES": ("text", "failover", True, "Max retries",
-                    "Retries across fallback candidates."),
-    "RETRY_HONOR_RETRY_AFTER": ("bool", "failover", True, "Honor Retry-After",
-                                "Wait for a provider's Retry-After on rate-limit responses."),
-    "RETRY_AFTER_MAX_SECONDS": ("text", "failover", True, "Retry-After cap (s)",
-                                "Upper bound for a Retry-After wait."),
-    "RETRY_BACKOFF_BASE_SECONDS": ("text", "failover", True, "Backoff base (s)",
-                                   "Exponential backoff base between retries (0 = immediate)."),
-    "RETRY_BACKOFF_MAX_SECONDS": ("text", "failover", True, "Backoff max (s)",
-                                  "Cap for exponential backoff."),
-    "REQUEST_TIMEOUT_BUDGET_SECONDS": ("text", "failover", True,
-                                       "Request budget (s)",
-                                       "Overall wall-clock budget for a chat request (0 = off)."),
-    "RELAY_HOST": ("text", "restart", False, "Host",
-                   "Server bind host. Restart required."),
-    "RELAY_PORT": ("text", "restart", False, "Port",
-                   "Server bind port. Restart required."),
-    "PERSISTENCE_ENABLED": ("bool", "restart", False, "Persistence",
-                            "Learned-state persistence. Restart required."),
-    "PERSISTENCE_PATH": ("text", "restart", False, "Persistence path",
-                         "State store path. Restart required."),
-    "PERSISTENCE_FLUSH_INTERVAL_SECONDS": ("text", "restart", False,
-                                           "Flush interval (s)",
-                                           "State flush cadence. Restart required."),
-    "LOG_LEVEL": ("text", "restart", False, "Log level",
-                  "Logging verbosity. Restart required."),
-    "LOG_FILE": ("text", "restart", False, "Log file",
-                 "JSON log file path. Restart required."),
-    "LMSTUDIO_BASE_URL": ("text", "restart", False, "LM Studio URL",
-                          "LM Studio server base URL. Restart required."),
+DISPLAY_GROUPS = (
+    "Runtime",
+    "Network",
+    "Providers",
+    "Security",
+    "Storage",
+    "Logging",
+    "UI",
+)
+
+# category -> display group. Categories that belong to no group at all are
+# impossible: ``tui_group_for`` raises on an unknown category so a new spec
+# category can never silently vanish from the Configuration panel.
+_CATEGORY_TO_GROUP = {
+    "general": "Runtime",
+    "relay": "Network",
+    "proxy": "Network",
+    "providers": "Providers",
+    "auth": "Security",
+    "persistence": "Storage",
+    "logging": "Logging",
+    "request_log": "Logging",
+    "task_routing": "Runtime",
+    "task_catalog": "Runtime",
+    "task_classification": "Runtime",
+    "health": "Runtime",
+    "scoring": "Runtime",
+    "quality": "Runtime",
+    "adaptive": "Runtime",
+    "decision": "Runtime",
+    "observability": "Runtime",
+    "telemetry": "Runtime",
 }
 
-# Attach TUI metadata to the matching spec entries by rebuilding the tuple.
-def _with_tui(spec: SettingSpec) -> SettingSpec:
-    kind, group, editable, label, hint = _TUI_META[spec.env]
-    return SettingSpec(
-        env=spec.env,
-        attr=spec.attr,
-        type=spec.type,
-        default=spec.default,
-        description=spec.description,
-        category=spec.category,
-        secret=spec.secret,
-        effect=spec.effect,
-        provider=spec.provider,
-        minimum=spec.minimum,
-        exclusive_minimum=spec.exclusive_minimum,
-        maximum=spec.maximum,
-        cli_visible=spec.cli_visible,
-        tui=True,
-        tui_kind=kind,
-        tui_group=group,
-        tui_editable=editable,
-        label=label,
-        hint=hint,
+# Per-env overrides keep a handful of settings under the group that matches
+# how operators actually think about them rather than their spec category.
+_TUI_GROUP_OVERRIDE = {
+    "RELAY_HOST": "Network",
+    "RELAY_PORT": "Network",
+    "RELAY_KEYRING": "Security",
+    "RELAY_KEYRING_BACKEND": "Security",
+    "RELAY_TUI_NO_EMBED": "UI",
+    "NVIDIA_API_KEY": "Security",
+    "OPENAI_API_KEY": "Security",
+    "ANTHROPIC_API_KEY": "Security",
+    "OPENROUTER_API_KEY": "Security",
+    "GEMINI_API_KEY": "Security",
+    "GROQ_API_KEY": "Security",
+    "LMSTUDIO_API_KEY": "Security",
+    "RELAY_API_KEY": "Security",
+}
+
+
+def tui_group_for(spec: SettingSpec) -> str:
+    """Stable display group for a spec (always one of ``DISPLAY_GROUPS``)."""
+    if spec.env in _TUI_GROUP_OVERRIDE:
+        return _TUI_GROUP_OVERRIDE[spec.env]
+    if spec.category in _CATEGORY_TO_GROUP:
+        return _CATEGORY_TO_GROUP[spec.category]
+    raise AssertionError(
+        f"config_spec: no display group for category {spec.category!r} "
+        f"({spec.attr}); add it to _CATEGORY_TO_GROUP"
     )
 
 
-SPECS = tuple(
-    _with_tui(spec) if spec.env in _TUI_META else spec for spec in _RAW_SPECS
-)
+def tui_kind_for(spec: SettingSpec) -> str:
+    """Form widget kind: ``bool`` (checkbox), ``csv`` (comma list), ``text``."""
+    if spec.type == "bool":
+        return "bool"
+    if spec.type == "csv":
+        return "csv"
+    return "text"
+
+
+def tui_editable_for(spec: SettingSpec) -> bool:
+    """A row is editable unless it is secret or has no env var to write."""
+    if spec.secret:
+        return False
+    if spec.env is None:
+        return False
+    return True
+
+
+def label_for(spec: SettingSpec) -> str:
+    """Short human label for a row (falls back to the attribute name)."""
+    if spec.secret:
+        return spec.attr.replace("_", " ").title().replace("Api Key", "API Key")
+    return spec.attr.replace("_", " ").title()
+
+
+def hint_for(spec: SettingSpec) -> str:
+    """Row hint text; always non-empty so every row explains itself."""
+    hint = spec.description.strip()
+    if not hint:
+        return "See the manual for this setting."
+    return hint
+
+
+def tui_fields() -> tuple[SettingSpec, ...]:
+    """
+    Every spec the Configuration panel renders, in registry order. The panel
+    walks ``DISPLAY_GROUPS`` and renders each group's fields in this order,
+    so it exposes the full surface and stays grouped without a row table.
+    """
+    return SPECS
+
+
+SPECS = _RAW_SPECS
 
 # ---------------------------------------------------------------------------
 # Lookup maps.
@@ -676,11 +703,6 @@ def reloadable_fields() -> tuple[str, ...]:
 def secret_fields() -> tuple[str, ...]:
     """Every field whose value must never be displayed in raw form."""
     return tuple(spec.attr for spec in SPECS if spec.secret)
-
-
-def tui_fields() -> tuple[SettingSpec, ...]:
-    """The spec entries surfaced by the TUI Configuration form."""
-    return tuple(spec for spec in SPECS if spec.tui)
 
 
 # ---------------------------------------------------------------------------

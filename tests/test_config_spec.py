@@ -4,10 +4,12 @@ Golden/coverage tests for the P7.1 settings registry.
 These tests lock ``app/core/config_spec.py`` to the code that actually runs:
 every ``Settings`` attribute has exactly one spec entry, the derived reload
 allowlist / secret set / provider triplets reproduce ``app.services.reload``
-byte-for-byte (names **and order**), the TUI Configuration rows reproduce
-``app.ui.data._CONFIG_ROWS``, and the validation helpers reuse the same
-bounds ``Settings.__init__`` enforces. Any drift fails here first, so new
-settings must be added to the registry (and these tests) rather than to a
+byte-for-byte (names **and order**), and the validation helpers reuse the
+same bounds ``Settings.__init__`` enforces. The TUI Configuration panel
+derives from this registry (P7.3): these tests lock the derivation surface
+(``tui_fields``, display groups, kinds, editability, labels, hints) so the
+UI cannot drift from the settings that actually run. Any drift fails here
+first, so new settings must be added to the registry rather than to a
 hand-maintained list.
 """
 
@@ -18,6 +20,7 @@ from app.core.config_spec import (
     SPECS,
     SPEC_BY_ATTR,
     SPEC_BY_ENV,
+    DISPLAY_GROUPS,
     INFO,
     LIVE,
     RESTART,
@@ -27,7 +30,10 @@ from app.core.config_spec import (
     reload_secret_fields,
     secret_fields,
     simple_reloadable_fields,
+    tui_editable_for,
     tui_fields,
+    tui_group_for,
+    tui_kind_for,
     validate_value,
 )
 from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
@@ -166,11 +172,10 @@ def test_every_reload_secret_is_marked_secret():
 def test_secret_fields_are_reported_and_masked():
     # The CLI masks everything in secret_fields(); the reload engine
     # additionally only ever reports secrets by name. A secret must never be
-    # tui-visible and never a plain editable config row.
+    # an editable Configuration row.
     for spec in SPECS:
         if spec.secret:
-            assert not spec.tui
-            assert not spec.tui_editable
+            assert not tui_editable_for(spec)
 
 
 def test_provider_fields_follow_prefix_suffix_convention():
@@ -248,39 +253,63 @@ def test_attributed_tuning_groups_stay_reloadable():
         assert attr in live, attr
 
 
-def test_tui_rows_reproduce_ui_config_rows():
-    from app.ui.data import _CONFIG_ROWS
-
-    rows = {row[0]: row for row in _CONFIG_ROWS}
-
-    assert len(tui_fields()) == len(rows) == 23
-
-    for env, row in rows.items():
-        _, attr, kind, group, editable, reloadable, restart, info, label, hint = row
-        spec = SPEC_BY_ENV[env]
-
-        assert spec.attr == attr
-        assert spec.tui
-        assert spec.tui_kind == kind
-        assert spec.tui_group == group
-        assert spec.tui_editable == editable
-        assert spec.reloadable is reloadable
-        assert spec.restart_required is restart
-        assert spec.informational is info
-        assert spec.label == label
-        assert spec.hint == hint
-        assert not spec.secret
+def test_tui_fields_expose_every_spec():
+    # P7.3: the Configuration panel is the full settings surface — there is
+    # no separate, hand-maintained row table to drift from the registry.
+    assert tuple(tui_fields()) == SPECS
 
 
-def test_tui_fields_are_exactly_the_config_rows():
-    from app.ui.data import _CONFIG_ROWS
+def test_every_spec_has_a_stable_display_group():
+    # A spec category must always resolve to one of DISPLAY_GROUPS;
+    # tui_group_for raises on unknown categories so a new spec can never
+    # silently vanish from the Configuration panel.
+    seen = set()
+    for spec in SPECS:
+        group = tui_group_for(spec)
+        assert group in DISPLAY_GROUPS, (spec.attr, group)
+        seen.add(group)
+    assert set(DISPLAY_GROUPS) == seen
 
-    row_envs = {row[0] for row in _CONFIG_ROWS}
-    assert {spec.env for spec in tui_fields()} == row_envs
+
+def test_display_groups_are_stable_and_logically_ordered():
+    assert DISPLAY_GROUPS == (
+        "Runtime",
+        "Network",
+        "Providers",
+        "Security",
+        "Storage",
+        "Logging",
+        "UI",
+    )
 
 
-def test_no_tui_field_is_secret():
-    assert not any(spec.secret for spec in tui_fields())
+def test_tui_kind_derivation_matches_spec_type():
+    for spec in SPECS:
+        kind = tui_kind_for(spec)
+        assert kind in ("bool", "csv", "text")
+        if spec.type == "bool":
+            assert kind == "bool"
+        elif spec.type == "csv":
+            assert kind == "csv"
+        else:
+            assert kind == "text"
+
+
+def test_tui_editability_rules():
+    for spec in SPECS:
+        editable = tui_editable_for(spec)
+        if spec.secret or spec.env is None:
+            assert not editable
+        else:
+            assert editable
+
+
+def test_every_spec_has_label_and_hint():
+    from app.core.config_spec import hint_for, label_for
+
+    for spec in SPECS:
+        assert label_for(spec).strip()
+        assert hint_for(spec).strip()
 
 
 def test_cli_visibility_only_for_env_backed_settings():

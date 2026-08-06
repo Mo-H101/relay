@@ -187,8 +187,27 @@ class RelayApp(App[None]):
         margin-top: 1;
     }}
 
-    #config-root Input, #config-root Checkbox {{
+    .config-field {{
         margin-bottom: 1;
+    }}
+
+    .config-row {{
+        height: auto;
+    }}
+
+    .config-label {{
+        width: 32;
+        color: {theme.text_bright};
+        padding: 0 1 0 0;
+    }}
+
+    .config-hint {{
+        color: {theme.muted};
+        height: 1;
+    }}
+
+    .config-secret {{
+        color: {theme.warn};
     }}
 
     #config-controls, #applications-controls, #diag-controls, #diag-probe-controls {{
