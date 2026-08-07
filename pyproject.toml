@@ -9,10 +9,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dynamic = ["version"]
+keywords = ["ai", "gateway", "llm", "proxy", "fastapi", "openai"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
     "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+    "Framework :: FastAPI",
 ]
 dependencies = [
     "fastapi==0.116.1",

@@ -44,6 +44,8 @@ class ProvidersScreen(Screen):
         self._facade = facade
         self._selected: str | None = None
         self._busy = False
+        self._run_token: object | None = None
+        self._scan_token: object | None = None
 
     # ------------------------------------------------------------- layout
 
@@ -92,7 +94,11 @@ class ProvidersScreen(Screen):
     def append_status(self, text: str) -> None:
         """
         Wizard notice sink, invoked on the UI thread by the SetupAdapter.
+        Stale notices queued after a wizard run has finished are dropped so
+        they cannot clobber the final status line.
         """
+        if self._run_token is None:
+            return
         self._set_status(text)
 
     def _refresh(self) -> None:
@@ -184,6 +190,7 @@ class ProvidersScreen(Screen):
 
         self._set_busy(True)
         self._set_status("Setup wizard running\u2026")
+        self._run_token = object()
         adapter = SetupAdapter(self, on_notice=self.append_status)
         try:
             result = await asyncio.to_thread(
@@ -194,6 +201,7 @@ class ProvidersScreen(Screen):
         else:
             self._show_setup_result(result)
         finally:
+            self._run_token = None
             self._set_busy(False)
             self._refresh()
 
@@ -216,9 +224,21 @@ class ProvidersScreen(Screen):
 
         self._set_busy(True)
         self._set_status("Scanning provider\u2026")
+        self._scan_token = object()
+        scan_token = self._scan_token
+
+        def _progress(done, total, current) -> None:
+            if self._scan_token is not scan_token:
+                return
+            if done == total or done % 10 == 0 or done == 1:
+                self.app.call_from_thread(
+                    self._set_status,
+                    f"Scanning {current} ({done}/{total})\u2026",
+                )
+
         try:
             report = await asyncio.to_thread(
-                self._facade.rescan_models, self._selected
+                self._facade.rescan_models, self._selected, _progress
             )
         except Exception as exc:  # noqa: BLE001 - surface in the status line
             self._set_status(f"Scan failed: {exc}")
@@ -231,6 +251,7 @@ class ProvidersScreen(Screen):
             else:
                 self._set_status(f"Scan failed: {report.get('error')}")
         finally:
+            self._scan_token = None
             self._set_busy(False)
             self._refresh()
 

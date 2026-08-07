@@ -64,6 +64,44 @@ def _resolve_env_file() -> Path:
 env_file = _resolve_env_file()
 load_dotenv(env_file)
 
+
+def _env_parse_errors(path: Path) -> list[str]:
+    """
+    Problems in ``path`` that python-dotenv's parser cannot handle.
+
+    ``load_dotenv``/``dotenv_values`` skip such lines with a
+    ``python-dotenv`` logger warning, which is easy to miss: the process
+    keeps running on partial defaults. Re-running the exact same parser
+    lets us surface them. A missing or unreadable file is not corruption
+    and reports nothing.
+    """
+    import io
+
+    from dotenv.parser import parse_stream
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    except UnicodeDecodeError:
+        return ["the file is not valid UTF-8 text"]
+
+    errors: list[str] = []
+
+    try:
+        for binding in parse_stream(io.StringIO(text)):
+            if binding.error:
+                errors.append(f"line {binding.original.line}")
+    except Exception:
+        return ["the file could not be parsed"]
+
+    return errors
+
+
+def _active_env_parse_errors() -> list[str]:
+    """Problems in the active ``.env`` that python-dotenv cannot handle."""
+    return _env_parse_errors(env_file)
+
 # Setup/state storage directory. Holds first-run and setup state so Relay
 # can distinguish "never configured" from "configured and ready".
 def _resolve_state_dir() -> Path:
@@ -833,7 +871,54 @@ class Settings:
         )
 
 
-settings = Settings()
+class ConfigLoadError(RuntimeError):
+    """
+    Raised when the active configuration could not be validated.
+
+    ``Settings`` construction is strict: an invalid value (bad integer,
+    malformed URL, ...) raises ``ValueError``. The module-level
+    ``settings`` singleton captures that error so tooling (notably ``relay
+    config validate``) can still import the package and report the problem
+    clearly instead of dying with a raw traceback.
+    """
+
+
+def _config_load_failure_message() -> str:
+    detail = config_load_error or "unknown configuration error"
+    return (
+        f"Relay configuration could not be loaded: {detail}\n"
+        "Fix the value in the active .env file, or run "
+        "'relay config validate' to see the offending field."
+    )
+
+
+# Build the module singleton defensively: a broken .env must not prevent
+# the CLI from importing, because the CLI is the recovery path (``relay
+# config validate`` and the setup wizard must still work). While the file
+# is invalid, ``settings`` is ``None`` and ``config_load_error`` carries
+# the validation message; commands that need real settings are expected to
+# check ``config_load_error`` (``reload_settings`` raises
+# ``ConfigLoadError`` when the singleton is missing).
+try:
+    settings = Settings()
+    config_load_error: str | None = None
+except ValueError as exc:
+    settings = None
+    config_load_error = str(exc)
+
+# Surface unparseable lines in the active .env: python-dotenv silently
+# ignores them (a hard-to-notice logger warning), leaving the operator with
+# partial defaults. Validation errors keep precedence because they name a
+# specific setting; the corruption note is appended when present.
+_parse_errors = _active_env_parse_errors()
+if _parse_errors:
+    _corrupt = (
+        "the .env file has unparseable line(s) being ignored: "
+        + ", ".join(_parse_errors)
+    )
+    config_load_error = (
+        _corrupt if config_load_error is None else f"{config_load_error}\n{_corrupt}"
+    )
 
 
 def reload_settings() -> Settings:
@@ -846,7 +931,11 @@ def reload_settings() -> Settings:
     keeps the same object, so no re-import is needed. ``load_dotenv`` is
     called with ``override=True`` because ``dotenv.set_key`` (used by the
     config store) never touches ``os.environ``.
+
+    Raises ``ConfigLoadError`` when the active file does not validate.
     """
+    if settings is None:
+        raise ConfigLoadError(_config_load_failure_message())
     load_dotenv(env_file, override=True)
     settings.__init__()
     return settings

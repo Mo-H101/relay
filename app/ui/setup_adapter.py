@@ -18,6 +18,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, List
 
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -76,6 +77,12 @@ class PromptScreen(ModalScreen[str]):
         margin-top: 1;
     }}
 
+    #prompt-error {{
+        color: {theme.error};
+        margin-top: 1;
+        height: 1;
+    }}
+
     #prompt-ok {{
         margin-top: 1;
         width: 100%;
@@ -114,6 +121,7 @@ class PromptScreen(ModalScreen[str]):
                 id="prompt-input",
                 password=self._secret,
             )
+            yield Static("", id="prompt-error")
         yield Button("OK", id="prompt-ok")
 
     def on_mount(self) -> None:
@@ -122,10 +130,20 @@ class PromptScreen(ModalScreen[str]):
     def _submit(self) -> None:
         answer = self._answer()
         if answer is None:
-            self.query_one("#prompt-input", Input).value = ""
+            self.query_one("#prompt-error", Static).update(self._invalid_hint())
+            self.query_one("#prompt-input", Input).focus()
             return
         self._resolver(answer)
         self.app.pop_screen()
+
+    def _invalid_hint(self) -> str:
+        if self._kind == "yes_no":
+            return "Please answer y or n."
+        if self._kind == "menu":
+            return f"Enter a number between 1 and {len(self._options)}."
+        if self._kind == "retry":
+            return "Enter r to retry or s to skip."
+        return "Please enter a value."
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "prompt-ok":
@@ -133,6 +151,10 @@ class PromptScreen(ModalScreen[str]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._submit()
+
+    @on(Input.Changed, "#prompt-input")
+    def _on_input_changed(self) -> None:
+        self.query_one("#prompt-error", Static).update("")
 
     def action_cancel(self) -> None:
         self._resolver(None)
@@ -163,6 +185,39 @@ class PromptScreen(ModalScreen[str]):
         return value
 
 
+class _TuiProgressReporter(RecordingReporter):
+    """
+    Recording reporter that also mirrors scan progress into wizard notices
+    so a long availability scan is visible in the TUI status line.
+
+    Notices are throttled (first result, every tenth, and the last) to
+    avoid flooding the UI thread with one update per model.
+    """
+
+    def __init__(self, adapter: "SetupAdapter") -> None:
+        super().__init__()
+        self._adapter = adapter
+
+    def update(self, done, total, current, recent) -> None:
+        super().update(done, total, current, recent)
+        if done == total or done % 10 == 0 or done == 1:
+            self._adapter.notice(
+                f"Scanning availability: {done}/{total} \u2014 {current}"
+            )
+
+    def end_scan(self, results) -> None:
+        super().end_scan(results)
+        summary = self.summary
+        if summary is not None:
+            line = (
+                f"Scan complete: {summary.available} available, "
+                f"{summary.unavailable} unavailable"
+            )
+            if summary.overloaded:
+                line += f", {summary.overloaded} overloaded"
+            self._adapter.notice(line)
+
+
 class SetupAdapter:
     """
     ``app.setup.ui.UI`` implementation backed by modal prompts.
@@ -182,7 +237,7 @@ class SetupAdapter:
         self._event = threading.Event()
         self._answer: Any = None
         self.notices: List[str] = []
-        self.reporter = RecordingReporter()
+        self.reporter = _TuiProgressReporter(self)
 
     # ------------------------------------------------------ UI protocol
 

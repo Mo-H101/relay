@@ -63,10 +63,10 @@ run `relay serve`.
 
 ## 3. The seven screens
 
-`1`–`7` switch tabs; `q` (or `Ctrl+C`) quits. While a text input or
-the model picker holds focus the plain digit keys are typed normally, so
-navigate with the `Ctrl` variants — `Ctrl+1`–`Ctrl+7` switch tabs and
-`Ctrl+Q` quits, and they work from anywhere, even mid-edit. `Escape`
+`1`–`7` switch tabs (the plain digits are typed normally while a text
+input or the model picker holds focus); `q` (or `Ctrl+C`) quits. Use the
+`Ctrl` variants — `Ctrl+1`–`Ctrl+7` switch tabs and `Ctrl+Q` quits — and
+they work from anywhere, even mid-edit. `Escape`
 returns to the Dashboard from any screen (the Chat tab also has a
 visible "Back to Dashboard" button).
 

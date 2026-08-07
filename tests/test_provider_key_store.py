@@ -108,6 +108,62 @@ def test_override_backend_env_get_returns_empty(monkeypatch):
     assert store.get("nvidia") == ""
 
 
+def test_get_failure_records_diagnostics(monkeypatch):
+    monkeypatch.setenv("RELAY_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    store = ProviderKeyStore()
+
+    assert store.get("nvidia") == ""  # recovery behavior preserved
+    health = store.diagnostics()
+
+    assert health["ok"] is False
+    assert health["error"] is not None
+    assert "nvidia" in health["error"]
+    assert "Keyring" in health["error"]
+    assert health["error_age_ms"] is not None
+
+
+def test_get_failure_logs_warning(monkeypatch, caplog):
+    monkeypatch.setenv("RELAY_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    store = ProviderKeyStore()
+
+    with caplog.at_level("WARNING", logger="relay"):
+        store.get("nvidia")
+
+    assert any(
+        record.levelname == "WARNING"
+        and "keyring read" in record.getMessage()
+        and "nvidia" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_get_success_clears_diagnostics(monkeypatch):
+    monkeypatch.setenv("RELAY_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    store = ProviderKeyStore()
+    assert store.get("nvidia") == ""
+    assert store.diagnostics()["ok"] is False
+
+    monkeypatch.setenv("RELAY_KEYRING_BACKEND", "")
+    monkeypatch.setattr(
+        "app.services.provider_key_store.keyring",
+        _FakeBackendModule(),
+    )
+
+    assert store.get("nvidia") == ""
+    assert store.diagnostics()["ok"] is True
+    assert store.last_error is None
+
+
+class _FakeBackendModule:
+    """Minimal keyring-module stand-in for the success-path test."""
+
+    def get_password(self, service, username):
+        return None
+
+    def set_keyring(self, backend):
+        pass
+
+
 def test_configured_backend_none_by_default(monkeypatch):
     monkeypatch.delenv("RELAY_KEYRING_BACKEND", raising=False)
     assert _configured_backend() is None

@@ -690,6 +690,108 @@ class TestClientTracking:
         assert "Bearer" not in rendered
 
 
+class TestBodySizeLimit:
+    def test_declared_content_length_over_limit_rejected(self):
+        import asyncio
+
+        from app.api.middleware import BodySizeLimitMiddleware
+
+        async def run():
+            received = []
+
+            async def receive():
+                received.append(True)
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            sent = []
+
+            async def send(message):
+                sent.append(message)
+
+            async def inner(scope, recv, send):
+                await send(
+                    {"type": "http.response.start", "status": 200, "headers": []}
+                )
+                await send({"type": "http.response.body", "body": b"ok"})
+
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "headers": [(b"content-length", b"1000000")],
+            }
+            mw = BodySizeLimitMiddleware(inner, max_bytes=1024)
+            await mw(scope, receive, send)
+            return sent, received
+
+        sent, received = asyncio.run(run())
+
+        assert sent[0]["status"] == 413
+        assert received == []
+
+    def test_chunked_body_over_limit_rejected(self):
+        import asyncio
+
+        from app.api.middleware import BodySizeLimitMiddleware
+
+        async def run():
+            sent = []
+
+            async def receive():
+                return {"type": "http.request", "body": b"x" * 4096, "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            async def inner(scope, recv, send):
+                await recv()
+                await send(
+                    {"type": "http.response.start", "status": 200, "headers": []}
+                )
+                await send({"type": "http.response.body", "body": b"ok"})
+
+            scope = {"type": "http", "method": "POST", "headers": []}
+            mw = BodySizeLimitMiddleware(inner, max_bytes=1024)
+            await mw(scope, receive, send)
+            return sent
+
+        sent = asyncio.run(run())
+
+        assert sent[0]["status"] == 413
+
+    def test_body_under_limit_passes_through(self):
+        import asyncio
+
+        from app.api.middleware import BodySizeLimitMiddleware
+
+        async def run():
+            sent = []
+
+            async def receive():
+                return {"type": "http.request", "body": b"small", "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            async def inner(scope, recv, send):
+                await send(
+                    {"type": "http.response.start", "status": 200, "headers": []}
+                )
+                await send({"type": "http.response.body", "body": b"ok"})
+
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "headers": [(b"content-length", b"5")],
+            }
+            mw = BodySizeLimitMiddleware(inner, max_bytes=1024)
+            await mw(scope, receive, send)
+            return sent
+
+        sent = asyncio.run(run())
+
+        assert sent[0]["status"] == 200
+
+
 class FakeResponse:
     def __init__(self, status_code=200, json_data=None, text=""):
         self.status_code = status_code

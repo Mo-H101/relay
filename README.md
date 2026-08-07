@@ -191,7 +191,9 @@ dependency notes.
 
 ## Installation
 
-Install Relay in a virtual environment, then start it by typing `relay`:
+Requires **Python 3.10 or newer** (the test suite additionally needs 3.11+
+language features, e.g. `tomllib`). Install Relay in a virtual environment,
+then start it by typing `relay`:
 
 ```bash
 # From PyPI (once published)
@@ -221,6 +223,42 @@ On Windows, if a new terminal still reports `'relay' is not recognized`,
 open one as administrator and run
 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned`
 (process-local, not persisted) before re-running the installer.
+
+### Upgrading
+
+- **From PyPI:** `python -m pip install --upgrade relay`.
+- **From GitHub:** re-run
+  `python -m pip install --upgrade git+https://github.com/<org>/<repo>.git`.
+- **From a checkout:** `git pull`, reinstall dependencies if the lockfile
+  changed (`python -m pip install -r requirements.txt`), then restart.
+- **One-command installers:** re-run `install.cmd` / `install.ps1` /
+  `install.sh`; each reinstalls into the same venv (`%USERPROFILE%\.relay`
+  on Windows, `~/.relay` elsewhere) and refreshes the `relay` entry point.
+
+Your configuration (`.env`), learned state (`platform.db`), and setup
+marker live in your user-data directory (or next to the checkout when
+running from source), **not** inside the installed package, so upgrading
+never touches them. If a release needs a schema or config change it is
+applied on startup or via `relay migrate`. To revert an upgrade, see
+[docs/rollback-procedure.md](docs/rollback-procedure.md).
+
+### Uninstalling
+
+- **From PyPI/GitHub:** `python -m pip uninstall relay`.
+- **One-command installers:** remove the venv and the PATH entry the
+  installer added — on Windows `%USERPROFILE%\.relay\Scripts` (remove it
+  from your user PATH under System Properties → Environment Variables); on
+  macOS/Linux remove `~/.relay` and the `~/.local/bin/relay` symlink (or
+  the `export PATH="$HOME/.relay/bin:$PATH"` line in your shell profile).
+
+Uninstalling the package never deletes your data. To remove it too,
+delete the user-data directory shown on the TUI Dashboard (`Env file` /
+`State dir` tiles): `%LOCALAPPDATA%\relay` on Windows,
+`~/.local/share/relay` on Linux, `~/Library/Application Support/relay` on
+macOS (or the `.env` / `.relay` files next to a source checkout). Keys
+stored in the OS keyring (service name `relay`) are separate — remove them
+with `relay provider keys remove <provider>` or your operating system's
+credential manager.
 
 First launch detects a missing or incomplete configuration and walks you
 through provider setup. After setup completes, running `relay` opens the
@@ -259,6 +297,11 @@ Windows Terminal (ConPTY), PowerShell, VS Code, or a conhost console; see
 - `6` Applications — client activity and endpoint/auth status
 - `7` Diagnostics — operations tail, health, and export
 - `q` quit
+
+While the Chat message box (or any text input / picker) is focused, the
+plain digit keys are typed normally instead of switching tabs — use the
+`Ctrl+1`–`Ctrl+7` variants, which work from anywhere, even mid-edit; see
+[docs/tui-guide.md](docs/tui-guide.md) for the full keymap.
 
 Set `RELAY_TUI_NO_EMBED=1` to run the TUI against a separately managed
 `relay serve` instead of the embedded server. A complete walkthrough of

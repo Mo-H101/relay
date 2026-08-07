@@ -101,6 +101,7 @@ class DiagnosticsScreen(Screen):
     def _refresh_summary(self) -> None:
         stats = self._facade.ops_stats()
         auth = self._facade.auth_status()
+        keyring_health = self._facade.keyring_health()
 
         self.query_one("#diag-summary", Static).update(
             f"Ops window: {stats.get('requests', 0)} requests, "
@@ -108,6 +109,11 @@ class DiagnosticsScreen(Screen):
             f"{stats.get('chats', 0)} chats, "
             f"{int(auth.failures)} auth failures, "
             f"persistence {'enabled' if self._facade.persistence_enabled() else 'disabled'}"
+            + (
+                f"   keyring error: {keyring_health['error']}"
+                if not keyring_health["ok"]
+                else ""
+            )
         )
 
     def _refresh_ops_table(self) -> None:

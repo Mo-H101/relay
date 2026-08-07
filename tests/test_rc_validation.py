@@ -15,6 +15,10 @@ both cloud providers enabled, API-key auth, health-aware routing, adaptive
 routing, quality feedback, the decision engine, telemetry, and SQLite
 persistence. Local providers stay disabled (deferred after the cloud
 gateway is stable).
+
+This is a release gate: if the ``openai`` SDK (a pinned dev dependency)
+is missing, this suite fails collection with ``RuntimeError`` instead of
+silently skipping, so a broken test environment can never pass the gate.
 """
 
 import asyncio
@@ -22,7 +26,14 @@ import time
 
 import pytest
 
-openai = pytest.importorskip("openai")
+try:
+    import openai  # required gate dependency (pinned in requirements-dev.txt)
+except ImportError as exc:  # pragma: no cover - release-gate failure path
+    raise RuntimeError(
+        "RC validation gate requires the 'openai' SDK (pinned in "
+        "requirements-dev.txt as openai==2.52.0). The gate must never skip "
+        "silently: install the dev dependencies and re-run this suite."
+    ) from exc
 
 import httpx
 from fastapi.testclient import TestClient

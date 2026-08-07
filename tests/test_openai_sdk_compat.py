@@ -7,13 +7,22 @@ wired to Relay's ASGI app purely to avoid a real socket; the wire
 protocol is unchanged, and Relay still makes real HTTP calls to the
 mock upstream provider.
 
-Skipped automatically when the openai package is not installed.
+Fails collection when the openai package is not installed (a pinned dev
+dependency): a missing SDK must fail this release conformance check, not
+skip it.
 """
 import asyncio
 
 import pytest
 
-openai = pytest.importorskip("openai")
+try:
+    import openai  # required conformance dependency (pinned in requirements-dev.txt)
+except ImportError as exc:  # pragma: no cover - missing-dev-dep failure path
+    raise RuntimeError(
+        "OpenAI SDK conformance suite requires the 'openai' SDK (pinned in "
+        "requirements-dev.txt as openai==2.52.0); a missing SDK must fail "
+        "this release check, not skip it. Install dev dependencies and re-run."
+    ) from exc
 
 import httpx
 

@@ -17,13 +17,17 @@ result as "no stored key" and falls back to the environment value.
 from __future__ import annotations
 
 import importlib
+import logging
 import os
+import time
 
 import keyring
 
 SERVICE_NAME = "relay"
 
 _BACKEND_ENV = "RELAY_KEYRING_BACKEND"
+
+_logger = logging.getLogger("relay")
 
 
 class ProviderKeyStore:
@@ -33,17 +37,27 @@ class ProviderKeyStore:
 
     def __init__(self, service: str | None = None) -> None:
         self._service = service or SERVICE_NAME
+        self.last_error: str | None = None
+        self.last_error_at: float | None = None
 
     def get(self, provider_id: str) -> str:
         """
         Return the stored key for a provider, or ``""`` when absent or
         when the keyring is unavailable.
+
+        A keyring failure is never silent: it is logged as a warning and
+        recorded in ``last_error`` / ``diagnostics()`` so callers and the
+        diagnostics surface can distinguish "no stored key" from "keyring
+        broken". The ``""`` fallback is preserved so the request path can
+        keep recovering to the environment value.
         """
         try:
             value = _keyring().get_password(self._service, provider_id)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - surface, never crash
+            self._record_failure(provider_id, exc)
             return ""
 
+        self._clear_failure()
         return value or ""
 
     def set(self, provider_id: str, value: str) -> None:
@@ -62,6 +76,35 @@ class ProviderKeyStore:
             _keyring().delete_password(self._service, provider_id)
         except keyring.errors.PasswordDeleteError:
             pass
+
+    def diagnostics(self) -> dict:
+        """
+        Keyring health for the diagnostics surface. ``ok`` is False only
+        when the most recent ``get`` raised; the error text never contains
+        key material.
+        """
+        if self.last_error is None:
+            return {"ok": True, "error": None, "error_age_ms": None}
+
+        age_ms = None
+        if self.last_error_at is not None:
+            age_ms = int((time.monotonic() - self.last_error_at) * 1000)
+
+        return {"ok": False, "error": self.last_error, "error_age_ms": age_ms}
+
+    def _record_failure(self, provider_id: str, exc: Exception) -> None:
+        detail = f"{type(exc).__name__}: {exc}"
+        self.last_error = f"keyring read for '{provider_id}' failed: {detail}"
+        self.last_error_at = time.monotonic()
+        _logger.warning(
+            "provider keyring read failed for '%s': %s",
+            provider_id,
+            detail,
+        )
+
+    def _clear_failure(self) -> None:
+        self.last_error = None
+        self.last_error_at = None
 
 
 def _keyring():

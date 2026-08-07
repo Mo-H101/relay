@@ -1,0 +1,14 @@
+# Keep the source distribution to the application package plus standard
+# project metadata. Tests, benchmarks, docs, tooling, and build artifacts
+# are not needed to build or install Relay from an sdist.
+prune tests
+prune bench
+prune docs
+prune .github
+prune .agents
+prune .pytest_cache
+prune .venv
+prune .relay
+prune build
+prune dist
+prune relay.egg-info

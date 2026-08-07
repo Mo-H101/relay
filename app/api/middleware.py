@@ -1,11 +1,16 @@
 """
-Pure-ASGI middleware for HTTP-level metrics and operations events.
+Pure-ASGI middleware for HTTP-level metrics, operations events, and
+request-size hardening.
 
 Records request count/success/failure, latency to completion,
 time-to-first-byte, and the active-request gauge, plus a rolling
 metadata event for diagnostics. It never buffers the response body,
 never inspects payloads, and never raises. Unmatched routes are labeled
 "unmatched" to keep the label set bounded.
+
+``BodySizeLimitMiddleware`` bounds request bodies (declared
+Content-Length and chunked transfers) with a 413 so a runaway or hostile
+client cannot force the process to buffer unbounded input.
 """
 
 import time
@@ -17,6 +22,79 @@ from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
 
 UNMATCHED_ROUTE = "unmatched"
+
+# Generous ceiling for a single request body (chat payloads, base64
+# image parts, long-context replays); far above any legitimate gateway
+# load, purely a memory-hardening floor.
+REQUEST_BODY_MAX_BYTES = 64 * 1024 * 1024
+
+
+class _BodyTooLarge(Exception):
+    """Internal signal: the request body exceeded the configured limit."""
+
+
+async def _send_413(send, max_bytes: int) -> None:
+    body = b"request body too large"
+    headers = [(b"content-type", b"text/plain; charset=utf-8")]
+    headers.append((b"content-length", str(len(body)).encode("ascii")))
+    await send({"type": "http.response.start", "status": 413, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
+class BodySizeLimitMiddleware:
+    """
+    Reject request bodies larger than ``max_bytes`` with 413.
+
+    A declared Content-Length over the limit fails fast; otherwise the
+    receive stream is wrapped so a chunked transfer that grows past the
+    limit aborts with 413 before any response bytes are sent. Bodies under
+    the limit flow through untouched.
+    """
+
+    def __init__(self, app, max_bytes: int = REQUEST_BODY_MAX_BYTES):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        declared = None
+        for name, value in scope.get("headers") or []:
+            if name.lower() == b"content-length":
+                try:
+                    declared = int(value)
+                except (TypeError, ValueError):
+                    declared = None
+                break
+
+        if declared is not None and declared > self.max_bytes:
+            await _send_413(send, self.max_bytes)
+            return
+
+        received = 0
+        started = False
+
+        async def guarded_send(message):
+            nonlocal started
+            if message.get("type") == "http.response.start":
+                started = True
+            await send(message)
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request" and message.get("body"):
+                received += len(message["body"])
+                if received > self.max_bytes:
+                    raise _BodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except _BodyTooLarge:
+            if not started:
+                await _send_413(send, self.max_bytes)
 
 
 def _scope_headers(scope) -> dict[str, str]:

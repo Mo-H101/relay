@@ -100,5 +100,8 @@ class DashboardScreen(Screen):
             f"[{theme.muted}]API:[/] {summary.server.url}"
             + (f"   [{theme.warn}]persistence error:[/] {summary.persistence_error}"
                if summary.persistence_error else "")
+            + (f"   [{theme.warn}]WARNING: API authentication is disabled"
+               f" (no RELAY_API_KEY, RELAY_AUTH_STORE off)[/]"
+               if not summary.auth_enabled else "")
         )
         self.query_one("#dashboard-status", Static).update(status)

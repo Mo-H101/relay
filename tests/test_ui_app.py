@@ -32,16 +32,16 @@ async def test_boots_to_dashboard_and_walks_all_tabs():
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
 
-        expected = {
-            "2": ChatScreen,
-            "3": ModelsScreen,
-            "4": ProvidersScreen,
-            "5": ConfigurationScreen,
-            "6": ApplicationsScreen,
-            "7": DiagnosticsScreen,
-            "1": DashboardScreen,
-        }
-        for key, screen_cls in expected.items():
+        sequence = [
+            ("2", ChatScreen),
+            ("ctrl+3", ModelsScreen),
+            ("ctrl+4", ProvidersScreen),
+            ("ctrl+5", ConfigurationScreen),
+            ("ctrl+6", ApplicationsScreen),
+            ("ctrl+7", DiagnosticsScreen),
+            ("ctrl+1", DashboardScreen),
+        ]
+        for key, screen_cls in sequence:
             await pilot.press(key)
             await pilot.pause()
             assert isinstance(app.screen, screen_cls), key
@@ -90,5 +90,53 @@ async def test_no_embed_flag_prevents_embedded_server(monkeypatch):
     ) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_warns_when_auth_disabled(monkeypatch, tmp_path):
+    from app.core import config as config_mod
+    from textual.widgets import Static
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    monkeypatch.setattr(config_mod.settings, "relay_api_key", "")
+    monkeypatch.setattr(config_mod.settings, "relay_auth_store", False)
+
+    facade = ServiceFacade(relay_instance=make_relay([]))
+    app = RelayApp(facade=facade, start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        text = str(screen.query_one("#dashboard-status", Static).render())
+        assert "authentication is disabled" in text.lower()
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_omits_warning_when_auth_enabled(monkeypatch, tmp_path):
+    from app.core import config as config_mod
+    from textual.widgets import Static
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    monkeypatch.setattr(config_mod.settings, "relay_api_key", "sk-test")
+    monkeypatch.setattr(config_mod.settings, "relay_auth_store", False)
+
+    facade = ServiceFacade(relay_instance=make_relay([]))
+    app = RelayApp(facade=facade, start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        text = str(screen.query_one("#dashboard-status", Static).render())
+        assert "authentication is disabled" not in text.lower()
         await pilot.press("q")
         await pilot.pause()

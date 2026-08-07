@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import sysconfig
+import tarfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -494,3 +495,46 @@ def test_installed_cli_runs_from_arbitrary_cwd_with_stable_state(
     assert write.returncode == 0, write.stderr
     assert (data_dir / "state.json").exists()
     assert (data_dir / "platform.db").exists()
+
+
+def test_manifest_prunes_tests_and_build_artifacts():
+    """
+    MANIFEST.in must keep the sdist to the source package and standard
+    metadata: the test suite, benchmarks, docs, and build artifacts are
+    not needed to build or install Relay from an sdist.
+    """
+    manifest = (PROJECT_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    for entry in ("prune tests", "prune bench", "prune docs", "prune dist"):
+        assert entry in manifest, entry
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_PACKAGING_SMOKE") == "0",
+    reason="disabled via RUN_PACKAGING_SMOKE=0",
+)
+def test_sdist_build_excludes_tests_and_bench(tmp_path_factory):
+    pytest.importorskip("build")
+
+    out_dir = tmp_path_factory.mktemp("sdist")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "build",
+            "--sdist", "--no-isolation",
+            "--outdir", str(out_dir), ".",
+        ],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    sdists = sorted(out_dir.glob("relay-*.tar.gz"))
+    assert sdists, "no sdist produced"
+
+    with tarfile.open(sdists[-1]) as tf:
+        names = tf.getnames()
+
+    assert not any("/tests/" in name for name in names)
+    assert not any("/bench/" in name for name in names)
+    assert not any("/docs/" in name for name in names)
+    assert any(name.startswith("relay-") and "/app/" in name for name in names)  # source present

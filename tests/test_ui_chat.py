@@ -137,7 +137,7 @@ async def test_chat_specific_mode_streams(monkeypatch, tmp_path):
     ) as pilot:
         screen = await _open_chat(pilot, facade)
 
-        await pilot.press("m")
+        screen.action_mode_model()
         await pilot.pause()
 
         picker = screen.query_one("#model-picker", Select)
@@ -181,7 +181,7 @@ async def test_chat_specific_mode_unavailable_model(monkeypatch, tmp_path):
     ) as pilot:
         screen = await _open_chat(pilot, facade)
 
-        await pilot.press("m")
+        screen.action_mode_model()
         await pilot.pause()
 
         picker = screen.query_one("#model-picker", Select)
@@ -216,7 +216,7 @@ async def test_chat_picker_shows_availability_glyphs(monkeypatch, tmp_path):
     ) as pilot:
         screen = await _open_chat(pilot, facade)
 
-        await pilot.press("m")
+        screen.action_mode_model()
         await pilot.pause()
 
         picker = screen.query_one("#model-picker", Select)
@@ -251,7 +251,7 @@ async def test_inline_probe_updates_status(monkeypatch, tmp_path):
     ) as pilot:
         screen = await _open_chat(pilot, facade)
 
-        await pilot.press("m")
+        screen.action_mode_model()
         await pilot.pause()
 
         picker = screen.query_one("#model-picker", Select)
@@ -307,6 +307,31 @@ async def test_ctrl_digit_navigates_while_input_focused(monkeypatch, tmp_path):
         from app.ui.screens.dashboard import DashboardScreen
 
         assert isinstance(app.screen, DashboardScreen)
+
+
+@pytest.mark.asyncio
+async def test_chat_input_focused_on_entry(monkeypatch, tmp_path):
+    from app.ui.screens.dashboard import DashboardScreen
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+    app = RelayApp(facade=facade, start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_chat(pilot, facade)
+        assert app.focused is screen.query_one("#chat-input", Input)
+
+        await pilot.press("ctrl+1")
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)
+
+        await pilot.press("2")
+        await pilot.pause()
+        assert isinstance(app.screen, ChatScreen)
+        assert app.focused is app.screen.query_one("#chat-input", Input)
 
 
 @pytest.mark.asyncio

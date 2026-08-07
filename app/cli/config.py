@@ -26,8 +26,9 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from app.cli import _require_config
 from app.cli.provider_keys import _confirm_write, _emit, _read_stdin
-from app.core.config import settings
+from app.core.config import _env_parse_errors, settings
 from app.core.config_spec import (
     SPECS,
     INFO,
@@ -199,6 +200,8 @@ def _display_value(attr: str, spec) -> str:
 
 def _cmd_config_show(args) -> None:
     """``relay config show``: every env-backed setting, masked secrets."""
+    _require_config()
+
     rows = []
 
     for spec in SPECS:
@@ -246,11 +249,17 @@ def _cmd_config_show(args) -> None:
 def _validate_file(path: Path) -> list[str]:
     """
     Validate every present value in ``path`` against the registry. Returns a
-    redacted error message (field name only) per invalid value; never a raw
-    value.
+    redacted error message (field name only) per invalid value, plus one
+    message per unparseable line; never a raw value.
     """
     values = dotenv_values(str(path))
     errors: list[str] = []
+
+    for problem in _env_parse_errors(path):
+        if problem.startswith("line "):
+            errors.append(f"{problem}: not a valid KEY=VALUE statement")
+        else:
+            errors.append(problem)
 
     for spec in SPECS:
         if spec.env is None:
@@ -463,6 +472,9 @@ def _cmd_config_diff(args, parser) -> None:
 
         _print_diff(_collect_diff(rows_a, rows_b, env_specs, mode="file-file"))
         return
+
+    # Comparing against the running process requires valid settings.
+    _require_config()
 
     target = (
         Path(args.files[0])
@@ -677,6 +689,8 @@ def _cmd_config_unset(args, parser) -> None:
 
 def _cmd_config_reload(args, parser) -> None:
     """``relay config reload``: re-read .env in-process, report field names."""
+    _require_config()
+
     from app.services import config_mutation
 
     try:

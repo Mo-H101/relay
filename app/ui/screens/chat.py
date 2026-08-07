@@ -109,9 +109,11 @@ class ChatScreen(Screen):
 
     def on_mount(self) -> None:
         self._refresh_picker()
+        self._input().focus()
 
     def on_screen_resume(self) -> None:
         self._refresh_picker()
+        self._input().focus()
 
     # ------------------------------------------------------------- helpers
 

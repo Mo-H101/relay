@@ -1,10 +1,31 @@
 import argparse
+import sys
 
 from app import __version__
-from app.core import terminal
-from app.core.config import reload_settings, settings
+from app.core import config as config_module, terminal
+from app.core.config import (
+    _config_load_failure_message,
+    reload_settings,
+    settings,
+)
 from app.providers.registry import PROVIDER_REGISTRY
 from app.services.setup_state import read_setup_state
+
+
+def _require_config() -> None:
+    """
+    Fail with a clear, actionable message when the active configuration
+    could not be validated.
+
+    Commands that need real settings (TUI, serve, show/diff/reload against
+    the running process) call this so a broken ``.env`` produces a helpful
+    diagnostic instead of a raw traceback. Recovery commands deliberately
+    do not: ``relay config validate`` reports the offending field and
+    ``relay config set`` can repair it.
+    """
+    if config_module.config_load_error is not None:
+        print(_config_load_failure_message(), file=sys.stderr)
+        raise SystemExit(1)
 
 
 def _has_usable_provider() -> bool:
@@ -14,6 +35,9 @@ def _has_usable_provider() -> bool:
     adding a provider is a registry entry, not a new branch here.
     """
     from app.providers.factory import resolve_provider_key
+
+    if settings is None:
+        return False
 
     for defn in PROVIDER_REGISTRY.values():
         if not getattr(settings, defn.enabled_attr):
@@ -52,6 +76,7 @@ def _cmd_tui() -> None:
         terminal.print_tui_guidance(reason)
         raise SystemExit(0)
 
+    _require_config()
     reload_settings()
 
     from app.core.server import EmbeddedServer
@@ -69,6 +94,7 @@ def _cmd_setup(args) -> None:
     Interactive setup wizard. On a completed, usable setup it hands off
     straight to the TUI (no second `relay` run needed).
     """
+    _require_config()
     from app.setup.ui import TerminalUI
     from app.setup.wizard import run_setup
 
@@ -98,11 +124,33 @@ def _cmd_serve() -> None:
     """Launch the Relay API server with uvicorn."""
     import uvicorn
 
+    _require_config()
+
     host = settings.relay_host
     port = settings.relay_port
 
     print(f"Starting Relay at http://{host}:{port}")
+    _warn_if_auth_disabled()
     uvicorn.run("app.main:app", host=host, port=port)
+
+
+def _warn_if_auth_disabled() -> None:
+    """
+    Warn on stderr when the API accepts requests without a credential.
+
+    Imported lazily so the fastapi dependency only loads on the serve
+    path. The warning is advisory only; the fail-open default is kept.
+    """
+    from app.security.auth import auth_configured
+
+    if not auth_configured():
+        print(
+            "WARNING: API authentication is disabled - no RELAY_API_KEY is "
+            "set and RELAY_AUTH_STORE is off. Every request will be "
+            "accepted without a credential. Set RELAY_API_KEY or enable "
+            "RELAY_AUTH_STORE to require a key.",
+            file=sys.stderr,
+        )
 
 
 def main(argv=None) -> None:

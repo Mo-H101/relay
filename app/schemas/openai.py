@@ -11,9 +11,16 @@ assistant tool-call messages.
 """
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 import uuid
 import time
+
+
+# Generous input guards: far above any legitimate gateway load, purely a
+# memory/bounds hardening floor. Long-context agents that replay large
+# conversation histories are unaffected.
+MAX_MESSAGES = 10_000
+MAX_OUTPUT_TOKENS = 1_000_000
 
 
 class ContentPart(BaseModel):
@@ -90,7 +97,9 @@ class OpenAIChatCompletionRequest(BaseModel):
     messages: List[ChatMessageObject]
     temperature: Optional[float] = None
     top_p: Optional[float] = None
-    max_tokens: Optional[int] = None
+    max_tokens: Optional[int] = Field(
+        default=None, ge=1, le=MAX_OUTPUT_TOKENS
+    )
     stream: bool = False
     stop: Optional[Union[str, List[str]]] = None
     frequency_penalty: Optional[float] = None
@@ -100,6 +109,17 @@ class OpenAIChatCompletionRequest(BaseModel):
     tools: Optional[List[ToolDefinition]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
     stream_options: Optional[Dict[str, Any]] = None
+
+    @field_validator("messages")
+    @classmethod
+    def _bounded_message_count(
+        cls, value: List[ChatMessageObject]
+    ) -> List[ChatMessageObject]:
+        if len(value) > MAX_MESSAGES:
+            raise ValueError(
+                f"messages exceeds the {MAX_MESSAGES}-message limit"
+            )
+        return value
 
     def to_provider_payload(self) -> dict:
         """

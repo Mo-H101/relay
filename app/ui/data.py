@@ -34,6 +34,7 @@ from app.services.capabilities import is_chat_testable
 from app.services.diagnostics import DiagnosticsService
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
+from app.services.provider_key_store import provider_key_store
 from app.services.redaction import redact_dict, redact_text
 from app.services.reload import reload_config
 from app.setup import persistence
@@ -159,6 +160,7 @@ class DashboardSummary:
     chat_attempts: int
     persistence_enabled: bool
     persistence_error: str
+    auth_enabled: bool
     env_file: str
     state_dir: str
 
@@ -538,11 +540,13 @@ class ServiceFacade:
         self._store.set_provider_config(defn, priority_models=priority)
         return self._reload(self._relay)
 
-    def rescan_models(self, defn_id: str) -> dict:
+    def rescan_models(self, defn_id: str, on_progress=None) -> dict:
         """
         Re-run the availability scan for one provider and write a fresh
         snapshot. The Models screen picks the new statuses up from the
-        snapshot merge on its next refresh.
+        snapshot merge on its next refresh. ``on_progress(done, total,
+        model)`` receives one callback per completed probe, mirroring the
+        chat facade's ``on_progress`` convention.
         """
         defn = PROVIDER_REGISTRY.get(defn_id)
 
@@ -572,7 +576,14 @@ class ServiceFacade:
             }
 
         engine = ScanEngine()
-        results = engine.scan(client, provider, list(provider.models))
+
+        def _on_update(done, total, result):
+            if on_progress is not None:
+                on_progress(done, total, result.model)
+
+        results = engine.scan(
+            client, provider, list(provider.models), on_update=_on_update
+        )
         persistence.write_model_status(defn.id, results)
 
         available = sum(1 for result in results if result.status != "unavailable")
@@ -931,6 +942,14 @@ class ServiceFacade:
             },
             presented=apps_auth_totals(),
         )
+
+    def keyring_health(self) -> dict:
+        """
+        Provider-keyring health for the diagnostics surface. Returns the
+        store's last-failure diagnostic; ``ok`` is True when the most
+        recent keyring read succeeded. Never contains key material.
+        """
+        return provider_key_store.diagnostics()
 
     def endpoint_status(self) -> dict:
         """
@@ -1413,6 +1432,7 @@ class ServiceFacade:
             chat_attempts=stats.get("chat_attempts", 0),
             persistence_enabled=self.persistence_enabled(),
             persistence_error=self._relay.persistence_init_error or "",
+            auth_enabled=auth_configured(),
             env_file=self.env_file_path(),
             state_dir=self.state_dir_path(),
         )

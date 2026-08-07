@@ -134,6 +134,17 @@ def test_dashboard_server_url_loopback(monkeypatch):
     assert summary.server.port == 8123
 
 
+def test_dashboard_summary_reports_auth_posture(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "")
+    monkeypatch.setattr(settings, "relay_auth_store", False)
+    assert _facade(FakeRelay()).dashboard_summary().auth_enabled is False
+
+    monkeypatch.setattr(settings, "relay_api_key", "sk-test")
+    assert _facade(FakeRelay()).dashboard_summary().auth_enabled is True
+
+
 def test_server_running_reflects_marker(monkeypatch):
     relay = FakeRelay()
     facade = _facade(relay)
@@ -523,6 +534,35 @@ def test_rescan_models_writes_snapshot(isolated_state):
 
     statuses = persistence.read_model_status(isolated_state / "platform.db")
     assert statuses == {"nvidia": {"m1": "available", "m2": "available"}}
+
+
+def test_rescan_models_reports_progress(isolated_state):
+    relay = make_relay([FakeProvider("NVIDIA", api_key="k", models=["m1", "m2"])])
+    relay.chat_service.registry.register(
+        "NVIDIA", FakeClient(probe_result=ModelProbe(True, 12))
+    )
+
+    updates = []
+    report = _facade(relay).rescan_models(
+        "nvidia", on_progress=lambda done, total, model: updates.append((done, total, model))
+    )
+
+    assert report["ok"] is True
+    assert [done for done, _, _ in updates] == [1, 2]
+    assert all(total == 2 for _, total, _ in updates)
+    assert {model for _, _, model in updates} == {"m1", "m2"}
+
+
+def test_rescan_models_without_progress_is_unchanged(isolated_state):
+    relay = make_relay([FakeProvider("NVIDIA", api_key="k", models=["m1"])])
+    relay.chat_service.registry.register(
+        "NVIDIA", FakeClient(probe_result=ModelProbe(True, 12))
+    )
+
+    report = _facade(relay).rescan_models("nvidia")
+
+    assert report["ok"] is True
+    assert report["models"] == 1
 
 
 def test_rescan_not_configured():

@@ -228,6 +228,60 @@ def test_validate_masks_secret_values(capsys, tmp_path):
     assert "sk-secret-value-abc" not in out + err
 
 
+def test_validate_flags_unparseable_lines(capsys, tmp_path):
+    target = tmp_path / "test.env"
+    target.write_text(
+        "MAX_RETRIES=3\nBROKEN LINE WITHOUT EQUALS\n", encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "validate", "--env-file", str(target)])
+
+    out, err = capsys.readouterr()
+
+    assert exc.value.code == 2
+    assert "line 2" in err
+    assert "KEY=VALUE" in err
+    assert "Config OK" not in out
+
+
+def test_serve_warns_when_auth_disabled(monkeypatch, capsys):
+    import app.cli as cli_module
+
+    monkeypatch.setattr("app.security.auth.auth_configured", lambda: False)
+    cli_module._warn_if_auth_disabled()
+    _, err = capsys.readouterr()
+    assert "authentication is disabled" in err
+    assert "RELAY_API_KEY" in err
+
+
+def test_serve_silent_when_auth_enabled(monkeypatch, capsys):
+    import app.cli as cli_module
+
+    monkeypatch.setattr("app.security.auth.auth_configured", lambda: True)
+    cli_module._warn_if_auth_disabled()
+    _, err = capsys.readouterr()
+    assert err == ""
+
+
+def test_env_parse_errors_reports_bad_line(tmp_path):
+    from app.core.config import _env_parse_errors
+
+    target = tmp_path / "test.env"
+    target.write_text("A=1\nNOT A KEY VALUE PAIR\n", encoding="utf-8")
+
+    assert _env_parse_errors(target) == ["line 2"]
+
+
+def test_env_parse_errors_clean_file_is_empty(tmp_path):
+    from app.core.config import _env_parse_errors
+
+    target = tmp_path / "test.env"
+    target.write_text("A=1\n# comment\nB=two\n", encoding="utf-8")
+
+    assert _env_parse_errors(target) == []
+
+
 # ---------------------------------------------------------------------- diff
 
 def test_diff_file_process_reports_changed(capsys, tmp_path):
@@ -631,3 +685,101 @@ def test_config_set_reload_failure_emits_failed_audit(
     assert len(events) == 1
     assert events[0]["outcome"] == "failed"
     assert events[0]["detail"] == {"reloaded": False, "restored": True}
+
+
+# ------------------------------------------------ broken-config recovery (P8)
+
+def test_broken_config_show_fails_with_actionable_error(capsys, monkeypatch):
+    """Commands that need settings fail with a clear diagnostic (never a
+    traceback) when the active configuration is invalid."""
+    from app.core import config as config_module
+
+    monkeypatch.setattr(
+        config_module,
+        "config_load_error",
+        "Invalid value for RELAY_PORT: 'oops' (expected an integer).",
+    )
+    monkeypatch.setattr(config_module, "settings", None)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "show"])
+
+    out, err = capsys.readouterr()
+
+    assert exc.value.code == 1
+    assert "Relay configuration could not be loaded" in err
+    assert "RELAY_PORT" in err
+    assert "config validate" in err
+    assert "Traceback" not in out + err
+
+
+def test_broken_config_diff_process_fails_with_actionable_error(
+    capsys, monkeypatch, tmp_path
+):
+    from app.core import config as config_module
+
+    monkeypatch.setattr(config_module, "config_load_error", "broken")
+
+    target = _write_env(tmp_path, {"MAX_RETRIES": "3"})
+
+    with pytest.raises(SystemExit) as exc:
+        main(["config", "diff", str(target)])
+
+    out, err = capsys.readouterr()
+
+    assert exc.value.code == 1
+    assert "Relay configuration could not be loaded" in err
+
+
+def test_broken_config_diff_file_file_still_works(capsys, monkeypatch, tmp_path):
+    """File-to-file diff never needs the running settings."""
+    from app.core import config as config_module
+
+    monkeypatch.setattr(config_module, "config_load_error", "broken")
+
+    path_a = _write_env(tmp_path, {"MAX_RETRIES": "3"}, name="a.env")
+    path_b = _write_env(tmp_path, {"MAX_RETRIES": "9"}, name="b.env")
+
+    main(["config", "diff", str(path_a), str(path_b)])
+
+    out, err = capsys.readouterr()
+
+    assert "CHANGED" in out
+    assert err == ""
+
+
+def test_broken_config_validate_still_works(capsys, monkeypatch, tmp_path):
+    """Validate is the recovery path: it must run against a broken active
+    configuration and never trip the settings guard."""
+    from app.core import config as config_module
+
+    monkeypatch.setattr(config_module, "config_load_error", "broken")
+
+    target = _write_env(tmp_path, {"MAX_RETRIES": "3", "LOG_LEVEL": "DEBUG"})
+
+    main(["config", "validate", "--env-file", str(target)])
+
+    out, err = capsys.readouterr()
+
+    assert "Config OK" in out
+    assert err == ""
+
+
+def test_set_repairs_broken_file_when_singleton_missing(
+    mutation_env, capsys, monkeypatch
+):
+    """``config set`` is a recovery path: fixing the invalid value works
+    even when the process started against a broken configuration and the
+    in-process singleton is missing."""
+    from app.services import config_mutation as mutation_module
+
+    mutation_env.write_text("REQUEST_TIMEOUT=abc\n", encoding="utf-8")
+    monkeypatch.setattr(mutation_module, "settings", None)
+
+    main(["config", "set", "REQUEST_TIMEOUT", "30", "--yes"])
+
+    out, err = capsys.readouterr()
+
+    assert "REQUEST_TIMEOUT saved" in out
+    assert "REQUEST_TIMEOUT='30'" in mutation_env.read_text(encoding="utf-8")
+    assert "Traceback" not in out + err

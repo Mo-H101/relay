@@ -364,6 +364,29 @@ class TestLifespan:
             for entry in store.load_telemetry()
         )
 
+    def test_lifespan_shutdown_closes_request_log(self, monkeypatch):
+        from app.services import request_log as request_log_module
+
+        closed = []
+
+        class FakeRequestLog:
+            def close(self):
+                closed.append(True)
+
+        test_relay = Relay()
+        monkeypatch.setattr(app_main, "relay", test_relay)
+        monkeypatch.setattr(
+            request_log_module, "request_log", lambda: FakeRequestLog()
+        )
+
+        async def run_lifespan():
+            async with app_main.lifespan(app_main.app):
+                pass
+
+        asyncio.run(run_lifespan())
+
+        assert closed == [True]
+
 
 class FakeRefreshable:
     def refresh(self):

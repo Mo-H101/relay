@@ -63,6 +63,13 @@ def _apply_settings_reload(dotenv_path: str) -> None:
     with _env_overlay(dotenv_path):
         candidate = Settings()
 
+    # The singleton may be missing when the CLI started against a broken
+    # .env (config.py builds it defensively). The file has just validated
+    # -- that is the fix -- and this one-shot process is about to exit, so
+    # there is nothing to apply in place.
+    if settings is None:
+        return
+
     for field in reloadable_fields():
         if hasattr(candidate, field):
             setattr(settings, field, getattr(candidate, field))

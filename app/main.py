@@ -6,6 +6,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 
 from app.core.config import settings
 from app.core.relay import relay
+from app.services import request_log as request_log_module
 from app.api.providers import router as provider_router
 from app.api.health import router as health_router
 from app.api.decision import router as decision_router
@@ -16,7 +17,7 @@ from app.api.admin import router as admin_router
 from app.api.keys import router as keys_router
 from app.api.feedback import router as feedback_router
 from app.security.auth import require_api_key
-from app.api.middleware import MetricsMiddleware
+from app.api.middleware import BodySizeLimitMiddleware, MetricsMiddleware
 from app.api.metrics import router as metrics_router
 
 _logger = logging.getLogger("relay")
@@ -85,6 +86,14 @@ async def lifespan(fastapi_app: FastAPI):
             except Exception:
                 _logger.exception("shutdown continuity flush failed")
 
+        # Drain the request-log write-behind buffer and release its SQLite
+        # connection; without this the daemon flusher dies on process exit
+        # with up to one flush interval of buffered rows never persisted.
+        try:
+            request_log_module.request_log().close()
+        except Exception:
+            _logger.exception("shutdown request-log flush failed")
+
 
 app = FastAPI(
     title="Relay",
@@ -96,6 +105,7 @@ app = FastAPI(
 )
 
 app.add_middleware(MetricsMiddleware)
+app.add_middleware(BodySizeLimitMiddleware)
 
 app.include_router(provider_router)
 app.include_router(health_router)

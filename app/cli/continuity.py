@@ -105,6 +105,10 @@ def add_continuity_parser(parser) -> None:
 
 def _run_continuity(args, parser) -> None:
     """``relay conversations``: metadata-only continuity surfaces."""
+    from app.cli import _require_config
+
+    _require_config()
+
     if not settings.continuity_enabled:
         print("continuity disabled")
         return

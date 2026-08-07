@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Union, List
 
 
@@ -7,7 +7,7 @@ class ChatRequest(BaseModel):
     task: str | None = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
-    max_tokens: Optional[int] = None
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=1_000_000)
     stop: Optional[Union[str, List[str]]] = None
     frequency_penalty: Optional[float] = None
     presence_penalty: Optional[float] = None

@@ -199,6 +199,72 @@ async def test_rescan_selected_provider_writes_snapshot(monkeypatch, tmp_path):
         assert statuses == {"nvidia": {"m1": "available", "m2": "available"}}
 
 
+def test_setup_adapter_progress_emits_notices():
+    from app.providers.availability import AVAILABLE, UNAVAILABLE
+    from app.setup.scan import ScanResult
+
+    adapter = SetupAdapter(object())  # type: ignore[arg-type]
+    reporter = adapter.progress()
+
+    reporter.begin_scan(3)
+    reporter.update(1, 3, "m1", [])
+    reporter.update(2, 3, "m2", [])
+    reporter.update(3, 3, "m3", [])
+
+    results = [
+        ScanResult(model="m1", status=AVAILABLE, latency_ms=1, status_code=200, error=None),
+        ScanResult(model="m2", status=UNAVAILABLE, latency_ms=0, status_code=None, error="boom"),
+        ScanResult(model="m3", status=AVAILABLE, latency_ms=2, status_code=200, error=None),
+    ]
+    reporter.end_scan(results)
+
+    assert "Scanning availability: 1/3 \u2014 m1" in adapter.notices
+    assert "Scanning availability: 3/3 \u2014 m3" in adapter.notices
+    assert not any("m2" in line for line in adapter.notices)  # throttled mid-update
+    assert "Scan complete: 2 available, 1 unavailable" in adapter.notices
+    assert ("update", 2, 3, "m2") in reporter.transcript  # recording preserved
+
+
+@pytest.mark.asyncio
+async def test_rescan_progress_does_not_clobber_final_status(monkeypatch, tmp_path):
+    from app.services import setup_state
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    facade = ServiceFacade(relay_instance=make_relay(
+        [FakeProvider("NVIDIA", api_key="k", models=["m1", "m2"])]
+    ))
+
+    delivered = []
+
+    def fake_rescan(defn_id, on_progress=None):
+        assert callable(on_progress)
+        on_progress(1, 2, "m1")
+        on_progress(2, 2, "m2")
+        delivered.append(True)
+        return {
+            "ok": True,
+            "provider": "NVIDIA NIM",
+            "models": 2,
+            "available": 2,
+            "unavailable": 0,
+        }
+
+    monkeypatch.setattr(facade, "rescan_models", fake_rescan)
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_providers(pilot, facade)
+        await screen._on_rescan()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert delivered
+        # queued progress updates must not overwrite the final result
+        assert "Scanned NVIDIA NIM: 2/2 available." in _status_text(screen)
+
+
 @pytest.mark.asyncio
 async def test_toggle_provider_persists(monkeypatch, tmp_path):
     monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
@@ -281,6 +347,41 @@ async def test_setup_adapter_masks_key_input(monkeypatch, tmp_path):
 
         result = await asyncio.wait_for(future, timeout=5.0)
         assert result == ""  # cancel resolves as an empty key
+        assert isinstance(app.screen, ProvidersScreen)
+
+
+@pytest.mark.asyncio
+async def test_setup_adapter_invalid_input_shows_feedback(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    facade = ServiceFacade(relay_instance=make_relay([]))
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_providers(pilot, facade)
+        adapter = SetupAdapter(screen)
+        loop = asyncio.get_event_loop()
+        future = loop.run_in_executor(
+            None, lambda: adapter.ask_yes_no("Enable nvidia?", True)
+        )
+
+        await _wait_until(pilot, lambda: isinstance(app.screen, PromptScreen))
+        modal = app.screen
+        await pilot.press("x")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        error = modal.query_one("#prompt-error", Static)
+        assert "y or n" in str(error.render())
+        assert isinstance(app.screen, PromptScreen)  # modal stays open
+
+        await pilot.press("backspace")  # clear the invalid "x", value kept
+        await pilot.press("y")
+        await pilot.press("enter")
+
+        result = await asyncio.wait_for(future, timeout=5.0)
+        assert result is True
         assert isinstance(app.screen, ProvidersScreen)
 
 

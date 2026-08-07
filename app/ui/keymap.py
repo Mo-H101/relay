@@ -1,8 +1,11 @@
 """
 Global keymap constants for the Relay TUI (P9 seam).
 
-Bindings are declared in one place so the keymap is easy to customize
-without editing individual screens.
+Tab digits and the quit key are shared here. Screen-specific shortcuts
+(such as ``r`` refresh, ``m`` model mode, ``ctrl+s`` save) are declared
+inline in each screen's ``BINDINGS``, and the app-level tab-switching,
+quitting, and escape bindings live in ``RelayApp.BINDINGS`` — so changing
+a shortcut means editing that screen's binding list, not this module.
 """
 
 from __future__ import annotations

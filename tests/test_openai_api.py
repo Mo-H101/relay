@@ -427,6 +427,44 @@ def client():
         yield test_client
 
 
+class TestOpenAIInputGuards:
+    def test_max_tokens_above_cap_rejected(self, client):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "a-1",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 1_000_001,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_too_many_messages_rejected(self, client):
+        messages = [{"role": "user", "content": "m"} for _ in range(10_001)]
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "a-1", "messages": messages},
+        )
+
+        assert response.status_code == 422
+
+    def test_max_tokens_at_cap_passes_validation(self, client):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "a-1",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 1_000_000,
+            },
+        )
+
+        # Passed pydantic validation: without any wired provider the
+        # endpoint reports "no providers available" (400), never a 422.
+        assert response.status_code == 400
+
+
 class TestOpenAIChatCompletions:
     def test_success_basic(self, wired_relay, fake_registry, client):
         provider = make_provider("A", ["a-1", "a-2"])
