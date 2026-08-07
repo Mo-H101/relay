@@ -27,6 +27,12 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# Tree of the last release before the v1.0.0-rc.1 version bump: its
+# ``app/__version__.py`` is ``0.1.0``. The upgrade regression check rebuilds
+# it into a wheel so a genuine previous release can be installed and then
+# upgraded over, rather than simulating the old install.
+_PREVIOUS_RELEASE_TREE = "dbc2902e0177610cda456d848972470b13863019"
+
 
 def _version():
     from app import __version__
@@ -400,6 +406,96 @@ def _inherit_host_site_packages(venv_python):
     )
 
 
+@pytest.fixture(scope="module")
+def upgrade_env(tmp_path_factory):
+    """
+    Build the previous release wheel (0.1.0, from the pre-bump git tree) and
+    the current wheel, then prepare one isolated venv so the upgrade test can
+    install the previous release and pip-upgrade to the current one.
+
+    Mirrors ``installed_env``: the venv inherits the host test environment's
+    third-party dependencies through a ``.pth`` file so ``relay --version``
+    works without a network install.
+    """
+    pytest.importorskip("setuptools")
+    pytest.importorskip("wheel")
+
+    old_wheel_dir = tmp_path_factory.mktemp("upgrade-old-wheels")
+    new_wheel_dir = tmp_path_factory.mktemp("upgrade-new-wheels")
+
+    old_src = tmp_path_factory.mktemp("upgrade-old-src")
+    archive = old_src / "relay-0.1.0-src.zip"
+    proc = subprocess.run(
+        ["git", "archive", "--format=zip", "--output", str(archive),
+         _PREVIOUS_RELEASE_TREE],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (
+        f"git archive of the previous release tree failed: {proc.stderr}"
+    )
+    with zipfile.ZipFile(archive) as zf:
+        zf.extractall(old_src)
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pip", "wheel",
+         "--no-build-isolation", "--no-deps",
+         "-w", str(old_wheel_dir), str(old_src)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    old_wheels = sorted(old_wheel_dir.glob("relay-*.whl"))
+    assert old_wheels and "relay-0.1.0" in old_wheels[-1].name, (
+        "previous release wheel not produced"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pip", "wheel",
+         "--no-build-isolation", "--no-deps",
+         "-w", str(new_wheel_dir), "."],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    new_wheels = sorted(new_wheel_dir.glob("relay-*.whl"))
+    assert new_wheels and _version() in new_wheels[-1].name, (
+        "current release wheel not produced"
+    )
+
+    venv_dir = tmp_path_factory.mktemp("upgrade-venv")
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(venv_dir)],
+        check=True,
+        capture_output=True,
+    )
+    venv_python = venv_dir / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    _inherit_host_site_packages(venv_python)
+
+    probe = subprocess.run(
+        [str(venv_python), "-c",
+         "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    site_packages = Path(probe.stdout.strip())
+
+    return {
+        "old_wheel": old_wheels[-1],
+        "new_wheel": new_wheels[-1],
+        "venv_python": venv_python,
+        "relay_exe": venv_dir / (
+            "Scripts/relay.exe" if os.name == "nt" else "bin/relay"
+        ),
+        "site_packages": site_packages,
+    }
+
+
 @pytest.mark.skipif(
     os.environ.get("RUN_PACKAGING_SMOKE") == "0",
     reason="disabled via RUN_PACKAGING_SMOKE=0",
@@ -538,3 +634,98 @@ def test_sdist_build_excludes_tests_and_bench(tmp_path_factory):
     assert not any("/bench/" in name for name in names)
     assert not any("/docs/" in name for name in names)
     assert any(name.startswith("relay-") and "/app/" in name for name in names)  # source present
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_PACKAGING_SMOKE") == "0",
+    reason="disabled via RUN_PACKAGING_SMOKE=0",
+)
+def test_wheel_upgrade_from_previous_release(upgrade_env, tmp_path):
+    """
+    Upgrade-install regression check.
+
+    Installs the previous release wheel (0.1.0) into a fresh venv, then pip-
+    installs the current release wheel over it, and verifies the upgrade
+    leaves exactly one clean install:
+
+    - ``relay --version`` reports the current version
+    - the console entry point targets the current package
+    - no stale ``relay-0.1.0.dist-info`` remains
+    - ``pip show relay`` reports the current version
+    """
+    old_wheel = upgrade_env["old_wheel"]
+    new_wheel = upgrade_env["new_wheel"]
+    venv_python = upgrade_env["venv_python"]
+    relay_exe = upgrade_env["relay_exe"]
+    site_packages = upgrade_env["site_packages"]
+    version = _version()
+    old_version = "0.1.0"
+
+    arbitrary_cwd = tmp_path / "arbitrary"
+    arbitrary_cwd.mkdir()
+
+    def _run(cmd):
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        return subprocess.run(
+            cmd,
+            cwd=str(arbitrary_cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+    def _pip_show_version():
+        proc = _run([str(venv_python), "-m", "pip", "show", "relay"])
+        assert proc.returncode == 0, proc.stderr
+        match = re.search(r"^Version: (.*)$", proc.stdout, re.MULTILINE)
+        assert match, proc.stdout
+        return match.group(1)
+
+    def _relay_version():
+        proc = _run([str(relay_exe), "--version"])
+        assert proc.returncode == 0, proc.stderr
+        return (proc.stdout + proc.stderr).strip()
+
+    # step 1: install the previous release (--ignore-installed so a host copy
+    # inherited through the .pth file can never satisfy the request).
+    proc = _run(
+        [str(venv_python), "-m", "pip", "install",
+         "--ignore-installed", "--no-deps",
+         "--disable-pip-version-check", str(old_wheel)]
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert _relay_version().endswith(old_version), "previous release not live"
+    assert _pip_show_version() == old_version
+    assert (site_packages / "relay-0.1.0.dist-info").is_dir()
+
+    # step 2: pip-upgrade to the current release over it.
+    proc = _run(
+        [str(venv_python), "-m", "pip", "install",
+         "--no-deps", "--disable-pip-version-check", str(new_wheel)]
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    # relay --version reports the current version.
+    assert _relay_version().endswith(version)
+
+    # console entry point points at the current package.
+    ep_files = list(site_packages.glob("relay-*.dist-info/entry_points.txt"))
+    assert len(ep_files) == 1, ep_files
+    assert "relay = app.cli:main" in ep_files[0].read_text(encoding="utf-8")
+    probe = _run(
+        [str(venv_python), "-c",
+         "import app; print(app.__version__); print(app.__file__)"]
+    )
+    assert probe.returncode == 0, probe.stderr
+    lines = probe.stdout.splitlines()
+    assert lines[0] == version
+    assert str(site_packages) in lines[1], "import resolved outside the venv"
+
+    # no stale dist-info remains.
+    dist_infos = [p.name for p in site_packages.glob("relay-*.dist-info")]
+    assert dist_infos == [f"relay-{version}.dist-info"], dist_infos
+
+    # pip show reports the current version.
+    assert _pip_show_version() == version
