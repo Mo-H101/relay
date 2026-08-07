@@ -11,11 +11,11 @@ providers remain disabled (deferred until the cloud gateway is stable).
 |---|---|---|
 | `tests/test_rc_validation.py` | Full production-profile gateway behavior against scripted loopback upstreams standing in for NVIDIA/OpenAI (deterministic, repeatable) | **28 passed** |
 | `tests/run_live_smoke.py` | Real cloud connectivity through the real server using live `.env` keys | **6/6 vs NVIDIA** |
-| Full regression `pytest tests -q` | No behavior change outside the gateway surface | **2360 passed, 22 skipped** |
+| Full regression `pytest tests -q` | No behavior change outside the gateway surface | **2399 passed, 20 skipped** |
 | CI (`.github/workflows/ci.yml`) | Full suite + compile check on Linux (Python 3.11/3.12) and Windows (Python 3.12); sdist/wheel build + fresh-venv install smoke on Linux | Pass on merge gate |
 
-The 2360/22 count is the post-R2 baseline (post-P9 was 2338/22; P6.4 was
-1916/18, originally 821/5). The suite is
+The 2399/20 count is the RC1 tag baseline (post-R2 was 2360/22; post-P9
+was 2338/22; P6.4 was 1916/18, originally 821/5). The suite is
 run as a merge gate by CI, so the regression row is verified on every
 push.
 
@@ -118,9 +118,34 @@ targets (see `tests/run_live_smoke.py`).
 - [x] `docs/v1.0.0-readiness-report.md` — final audit gate: checklist,
       verification evidence, remaining risks, required actions
 
+## 6. RC1 stage execution (2026-08-07)
+
+RC1 stage run against the `v1.0.0-rc.1` tag (package `1.0.0rc1`), per the
+hardening-plan §7 gate. Decisions recorded in `docs/release-decisions.md`
+(R2–R3 / RC1 closure): **NVIDIA-ready-only RC1** (D11) — OpenAI quota is a
+documented release caveat, not a gate.
+
+| Check | Result | Evidence |
+|---|---|---|
+| sdist + wheel build | PASS | `python -m build` → `relay-1.0.0rc1.tar.gz` + `relay-1.0.0rc1-py3-none-any.whl`; metadata `Name: relay / Version: 1.0.0rc1 / License: MIT / Requires-Python: >=3.10` |
+| Fresh install (Windows venv) | PASS | Wheel installed into a clean venv with all deps; `pip check` clean; `relay --help` shows the full subcommand surface |
+| `relay --version` | PASS | `relay 1.0.0rc1` |
+| Full regression (tag baseline) | PASS | **2399 passed, 20 skipped, 0 failed** (240.56s); `python -m compileall -q app tests` clean |
+| RC offline suite + adversarial | PASS | `test_rc_validation.py` + `test_continuity_adversarial.py`: **108 passed** (39.26s) |
+| Security review suites | PASS | auth / key-auth / hardening / retry-hardening / memory-contract / security-hardening: **117 passed, 3 skipped** |
+| Deployed profile (`/diagnostics`) | PASS | Booted `relay serve` from the installed wheel with the hardened profile: persistence `enabled=True, available=True, schema v8, status=ok`; NVIDIA `healthy` (1 healthy model) with live `/v1/chat/completions` round trip; OpenAI `degraded` + `rate_limited` (429 quota, B1 as documented); `/admin` POST **401** without key, **200** with bootstrap key; scoped key (`chat,v1`) chats and is **403** on `/admin` |
+| Migration upgrade drill | PASS | `relay migrate --state-dir <scratch> --dry-run` (plan correct) → `--yes` (backup + platform.db v8 + integrity ok + verified row counts; expired key pruned by the 30-day grace window) → re-run reports "Already migrated" |
+| Migration rollback drill | PASS | `relay migrate --rollback last` restored all legacy sources and removed `platform.db`; re-migrate succeeds after rollback (full round trip) |
+| Windows smoke | PASS | Live `/v1` non-stream through the deployed profile (NVIDIA `meta/llama-3.1-8b-instruct`) |
+| Linux smoke + CI matrix on the tag | CI-pending | Local equivalents green (Windows 3.12 full suite, build, wheel install). Linux 3.11/3.12 + packaging job run on the tag when pushed (CI workflow unchanged; `on: push` is `main` only) |
+
 ## Sign-off state
 
-The gateway is **release-candidate ready with one environment blocker**:
-the OpenAI key has no quota. NVIDIA traffic is fully validated. See
-`docs/blockers-before-public-release.md` for the exact steps before
+RC1 stage is **passing on all runnable checks**. One environment blocker
+remains documented: the OpenAI key has no quota (B1), so the release is
+**NVIDIA-ready-only** with OpenAI as a documented caveat and a future
+validation item (re-run `tests/run_live_smoke.py` once the key has quota).
+The only remaining gate action before the `v1.0.0` tag is the Linux/CI
+matrix on the tag, which requires pushing the branch/tag to the remote.
+See `docs/blockers-before-public-release.md` for the exact steps before
 general availability.
