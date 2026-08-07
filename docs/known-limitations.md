@@ -115,5 +115,31 @@ Project continuity is **off by default** and additive when enabled
 - Clients that do not send `X-Relay-Conversation-Id` /
   `X-Relay-Project-Id` see no continuity behavior and no storage.
 - The durable replay tracker only covers the resume path: it is not a
-  general rate limiter on `validate_resume` (see
-  `docs/v1-release-hardening-plan.md` §5.1).
+  general rate limiter on `validate_resume`. RC1 decision (D13): **no
+  dedicated rate limiter on the resume path for v1.0.0** — the 256-bit
+  conversation/token space and the durable replay cap bound abuse
+  (document-only disposition, revisit post-v1).
+
+## 9. RC1 release-caveat record (decisions D11–D15)
+
+Recorded at the RC1 decision closure (`docs/release-decisions.md` §R2–R3 /
+RC1):
+
+- **OpenAI quota (B1) — NVIDIA-ready-only RC1.** The `.env` OpenAI key is
+  out of quota (HTTP 429 on every completion). RC1 and the `v1.0.0` release
+  proceed **NVIDIA-ready-only**; the quota is a documented release caveat,
+  not a gate. The OpenAI live smoke (`tests/run_live_smoke.py`) is a
+  **future validation item** to be re-run when the key has quota. The quota
+  error path itself is proven correct live (correct `502` + `provider_error`
+  shape).
+- **Dormant paths reserved (D12).** `ContextOverflowSignal` /
+  `should_retry_compacted` and `summarize_and_persist` have no production
+  call site and are **accepted as reserved** for v1.0.0. The live compaction
+  path is preflight compaction via the envelope builder
+  (`handoff.py:673`); overflow wiring is a post-v1 candidate if live soak
+  shows overflow.
+- **Known timing flake accepted (D14).** One pre-existing timing flake,
+  baseline-reproduced at `d344116`, is **excluded from every measured
+  baseline** (2360/22 → 2399/20) and accepted as a known limitation for the
+  tag; it is not a P0–P8 regression and is tracked for a post-v1
+  stabilization pass.

@@ -311,3 +311,83 @@ disposition) are captured under **D9** below as release actions.
   D7 env-retirement audit, D8 baseline renumbering, and §2 documentation
   completion (architecture/configuration/deployment/known-limitations).
   `PROJECT_LOG.md` remains untouched until the release commit.
+
+---
+
+## R2–R3 / RC1 decision closure
+
+Status: **APPROVED 2026-08-07. R2 (`93a16d3`) and R3 (`e23ac78`) executed.**
+R2 landed D1/D5/D7/D8 + §2 docs + §5.2 key variants + §6 artifacts.
+R3 landed the §1 live continuity validation (28/28) plus the
+restart-resume seq-stall fix (`docs/v1-live-continuity-validation.md`).
+This section records the final pre-RC1 decisions.
+
+### D11 — B1 release decision: NVIDIA-ready-only RC1
+
+- **Current state:** the OpenAI key is out of quota (`HTTP 429` on every
+  completion). This is the sole external blocker (`docs/blockers-before-public-release.md`
+  §1). Waiting for quota holds the entire release without a completion
+  estimate.
+- **Options:**
+  - (a) Block RC1/tagging until OpenAI quota is restored.
+  - (b) Cut RC1 **NVIDIA-ready-only**: proceed with RC1 and tagging; record
+    the OpenAI quota as a documented release caveat and a future validation
+    item; re-run the two-provider live smoke when the key has quota.
+- **Final decision:** **(b) NVIDIA-ready-only RC1.** The RC1 stage does not
+  block on OpenAI quota. The quota is recorded in `known-limitations.md` and
+  `docs/release-candidate-checklist.md` as a documented caveat, and the
+  OpenAI live-smoke re-run is tracked as a future validation item. The error
+  path itself is proven correct (quota 429s surface the correct `502` +
+  `provider_error` shape live).
+- **Impact:** unblocks the release pipeline; the only residual is the
+  documented caveat. Switching semantics for a second provider remain
+  evidenced by the deterministic `tests/test_continuity_http.py` suite.
+
+### D12 — Dormant-path disposition (hardening plan §1.5)
+
+- **Current state:** `ContextOverflowSignal`/`should_retry_compacted`
+  (`context_manager.py:318-334`) and `summarize_and_persist`
+  (`summarizer.py:256-361`) have no production call site (tests only).
+- **Options:**
+  - (a) **Accept for v1.0.0** — document as reserved paths; the request path
+    never fails on compaction today because preflight compaction via the
+    envelope builder (`handoff.py:673`) is the live path.
+  - (b) Wire before v1.0.0 (separate code change + approval).
+- **Final decision:** **(a) accept as reserved.** Recorded in
+  `known-limitations.md`. If the §1.2 long-running soak shows overflow in
+  practice, promote (b) to a post-v1.0.1 fix.
+
+### D13 — `validate_resume` rate limiting (hardening plan §5.1)
+
+- **Current state:** no per-key rate limit on the resume path itself;
+  protection relies on the 256-bit conversation/token space plus the durable
+  replay cap (`MAX_RESUME_REPLAYS`, default 3).
+- **Options:**
+  - (a) Config-guarded counter on `validate_resume` (code change).
+  - (b) **Document-only** — the replay cap and fail-closed store behavior
+    already bound abuse.
+- **Final decision:** **(b) document-only for v1.0.0.** Recorded in
+  `known-limitations.md`; revisit post-v1 if live operation shows
+  resume-path abuse.
+
+### D14 — Known timing flake disposition
+
+- **Current state:** one pre-existing timing flake, baseline-reproduced at
+  `d344116`, excluded from the baseline counts (2360/22 → 2399/20).
+- **Final decision:** **record as an accepted known limitation.** It is
+  excluded from every measured baseline, is not a P0–P8 regression, and does
+  not gate the tag; it remains tracked for a post-v1 stabilization pass.
+  Recorded in `known-limitations.md`.
+
+### D15 — Plan/audit doc disposition (D9)
+
+- **Current state:** 28 untracked plan/audit docs (P4–P9) sit in `docs/`.
+  Policy deferred committing them through the phases.
+- **Options:**
+  - (a) Commit them with the release history (attribution, audit trail, one
+    authoritative history).
+  - (b) Keep untracked (policy as-was).
+- **Final decision:** **(a) commit the P4–P9 plan/audit documents** with the
+  release history at the RC1 decision-closure commit. They are the recorded
+  provenance for the decisions in this document; leaving them untracked
+  would orphan the audit trail.
