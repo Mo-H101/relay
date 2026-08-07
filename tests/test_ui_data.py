@@ -214,6 +214,77 @@ def test_random_chat_no_chat_models_returns_error():
     assert "chat-testable" in result["error"]
 
 
+def test_start_random_stream_builds_chat_candidates():
+    relay = make_relay(
+        [FakeProvider("p1", api_key="k", models=["m1", "embedding-1"])]
+    )
+
+    result = _facade(relay).start_random_stream("hi")
+
+    assert result["success"] is True
+    assert result["provider"] == "p1"
+    assert result["model"] == "m1"
+    assert result["timing"]["candidate_count"] == 1
+
+    chunks = list(result["stream_gen"])
+    assert "".join(c["choices"][0]["delta"].get("content", "") for c in chunks) == "hello world"
+
+
+def test_start_random_stream_skips_unavailable_models():
+    relay = make_relay(
+        [FakeProvider("p1", api_key="k", models=["good-model", "dead-model"])]
+    )
+    relay.health_store.set(
+        FakeReport(
+            "p1",
+            [
+                FakeHealthModel("good-model", "healthy", latency_ms=5),
+                FakeHealthModel("dead-model", "unavailable", latency_ms=0, error="404"),
+            ],
+        )
+    )
+
+    result = _facade(relay).start_random_stream("hi")
+
+    assert result["success"] is True
+    assert result["model"] == "good-model"
+
+
+def test_start_random_stream_reports_failover_progress():
+    relay = make_relay(
+        [
+            FakeProvider("p1", api_key="k", models=["dead-model"]),
+            FakeProvider("p2", api_key="k", models=["good-model"]),
+        ]
+    )
+    relay.health_store.set(
+        FakeReport("p1", [FakeHealthModel("dead-model", "unavailable")])
+    )
+
+    facade = _facade(relay)
+    events = []
+
+    def on_progress(update: dict) -> None:
+        events.append(update)
+
+    result = facade.start_random_stream("hi", on_progress=on_progress)
+
+    assert result["success"] is True
+    stages = [event["stage"] for event in events]
+    assert "attempt" in stages
+    assert "started" in stages
+    assert result["provider"] == "p2"
+
+
+def test_start_random_stream_no_provider_returns_error():
+    relay = FakeRelay()
+
+    result = _facade(relay).start_random_stream("hi")
+
+    assert result["success"] is False
+    assert "No provider" in result["error"]
+
+
 def test_specific_chat_targets_provider_and_model():
     relay = make_relay([FakeProvider("p1", api_key="k", models=["m1", "m2"])])
 

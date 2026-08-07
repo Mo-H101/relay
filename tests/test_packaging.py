@@ -41,6 +41,27 @@ def test_version_is_pep440():
     )
 
 
+def test_dist_artifacts_match_current_version():
+    """
+    Stale-dist guard: any built artifacts under ``dist/`` must carry the
+    current package version. A leftover artifact from an older release
+    (e.g. ``relay-0.1.0``) would otherwise risk being published or
+    installed in place of the real build.
+    """
+    dist_dir = PROJECT_ROOT / "dist"
+    if not dist_dir.is_dir():
+        return
+
+    version = _version()
+    files = list(dist_dir.iterdir())
+    assert files, "dist/ exists but is empty"
+
+    for f in files:
+        assert f.name.startswith(f"relay-{version}"), (
+            f"stale artifact in dist/: {f.name} (current version {version})"
+        )
+
+
 def test_pyproject_declares_relay_console_script():
     with open(PROJECT_ROOT / "pyproject.toml", "rb") as fh:
         data = tomllib.load(fh)

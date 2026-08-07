@@ -115,6 +115,9 @@ class ConfigurationScreen(Screen):
     def on_mount(self) -> None:
         self._refresh_values()
 
+    def on_screen_resume(self) -> None:
+        self._refresh_values()
+
     # ------------------------------------------------------------- helpers
 
     def _status(self) -> Static:

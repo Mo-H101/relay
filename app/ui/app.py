@@ -57,6 +57,17 @@ class RelayApp(App[None]):
         Binding("6", "tab('applications')", "Applications"),
         Binding("7", "tab('diagnostics')", "Diagnostics"),
         Binding("q", "quit", "Quit"),
+        Binding("escape", "go_dashboard", "Back to Dashboard"),
+        # Priority variants navigate even while an Input or Select holds
+        # focus and would otherwise consume the plain digit keys.
+        Binding("ctrl+1", "tab('dashboard')", "Dashboard", priority=True, show=False),
+        Binding("ctrl+2", "tab('chat')", "Chat", priority=True, show=False),
+        Binding("ctrl+3", "tab('models')", "Models", priority=True, show=False),
+        Binding("ctrl+4", "tab('providers')", "Providers", priority=True, show=False),
+        Binding("ctrl+5", "tab('configuration')", "Configuration", priority=True, show=False),
+        Binding("ctrl+6", "tab('applications')", "Applications", priority=True, show=False),
+        Binding("ctrl+7", "tab('diagnostics')", "Diagnostics", priority=True, show=False),
+        Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+c", "quit", "Quit", priority=True),
     ]
 
@@ -269,6 +280,16 @@ class RelayApp(App[None]):
         }
 
     async def on_mount(self) -> None:
+        # Install the screens so switching tabs suspends/resumes them
+        # instead of removing them from the DOM. Removing a screen on
+        # switch would (a) deadlock when the switch originates from a
+        # Button.Pressed handler on that screen (the removal waits on the
+        # screen's message pump while the handler awaits the removal) and
+        # (b) discard every screen's transient state, e.g. the chat
+        # transcript, on each tab switch.
+        for name, screen in self._screens.items():
+            self.install_screen(screen, name)
+
         if self._start_server and not self._server.running:
             try:
                 await asyncio.to_thread(self._server.start)
@@ -284,6 +305,9 @@ class RelayApp(App[None]):
 
     async def action_tab(self, name: str) -> None:
         await self.switch_screen(self._screens[name])
+
+    async def action_go_dashboard(self) -> None:
+        await self.switch_screen(self._screens["dashboard"])
 
     def _mark_server_running(self, running: bool) -> None:
         self._facade._relay._embedded_server_running = bool(running)

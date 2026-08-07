@@ -26,6 +26,14 @@ class StreamChunk(Message):
         self.text = text
 
 
+class StreamStatus(Message):
+    """Failover progress update raised by the facade worker thread."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
+
 class StreamError(Message):
     """The stream raised while being consumed."""
 
@@ -37,9 +45,19 @@ class StreamError(Message):
 class StreamFinished(Message):
     """The stream ended cleanly."""
 
-    def __init__(self, latency_ms: int) -> None:
+    def __init__(
+        self,
+        latency_ms: int,
+        *,
+        first_token_ms: int | None = None,
+        render_ms: int | None = None,
+        overhead_ms: int | None = None,
+    ) -> None:
         super().__init__()
         self.latency_ms = latency_ms
+        self.first_token_ms = first_token_ms
+        self.render_ms = render_ms
+        self.overhead_ms = overhead_ms
 
 
 class ChatScreen(Screen):
@@ -84,11 +102,15 @@ class ChatScreen(Screen):
                 )
                 yield Button("Send", id="send", variant="success")
                 yield Button("Test model", id="probe")
+                yield Button("Back to Dashboard", id="back-to-dashboard")
             yield ChatView(id="chat-view")
             yield Static("", id="chat-status")
         yield Footer()
 
     def on_mount(self) -> None:
+        self._refresh_picker()
+
+    def on_screen_resume(self) -> None:
         self._refresh_picker()
 
     # ------------------------------------------------------------- helpers
@@ -207,6 +229,10 @@ class ChatScreen(Screen):
     async def _on_probe(self) -> None:
         await self._probe_selected()
 
+    @on(Button.Pressed, "#back-to-dashboard")
+    async def _on_back_to_dashboard(self) -> None:
+        await self.app.action_tab("dashboard")
+
     @on(Select.Changed, "#model-picker")
     def _on_picker_changed(self, event: Select.Changed) -> None:
         self._selected = event.value if isinstance(event.value, tuple) else None
@@ -233,16 +259,53 @@ class ChatScreen(Screen):
 
     async def _send_random(self, message: str) -> None:
         self._set_busy(True)
+        request_started = time.perf_counter()
         self._set_status("Waiting for a provider\u2026")
+
+        def _progress(update: dict) -> None:
+            stage = update.get("stage")
+            index = update.get("index")
+            total = update.get("total")
+            provider = update.get("provider")
+            model = update.get("model")
+
+            if stage == "attempt":
+                text = (
+                    f"Trying {model} ({provider}) "
+                    f"\u2014 candidate {index}/{total}\u2026"
+                )
+            elif stage == "failed":
+                text = "Provider unavailable, switching\u2026"
+            elif stage == "started":
+                text = f"Streaming from {provider} / {model}\u2026"
+            else:
+                return
+            self.app.call_from_thread(self.post_message, StreamStatus(text))
+
         try:
-            result = await asyncio.to_thread(self._facade.random_chat, message)
+            result = await asyncio.to_thread(
+                self._facade.start_random_stream, message, _progress
+            )
         except Exception as exc:  # noqa: BLE001 - surface in the transcript
             self._view().add_error(f"Chat failed: {exc}")
-        else:
-            self._handle_result(result)
-        finally:
             self._set_busy(False)
             self._set_status("")
+            return
+
+        if not result.get("success"):
+            self._view().add_error(result.get("error") or "No provider could start.")
+            self._set_busy(False)
+            self._set_status("")
+            return
+
+        overhead_ms = (result.get("timing") or {}).get("request_ms")
+        await self._consume_stream(
+            result.get("stream_gen"),
+            result.get("provider", ""),
+            result.get("model", ""),
+            request_started=request_started,
+            overhead_ms=overhead_ms,
+        )
 
     async def _send_specific(self, message: str) -> None:
         if self._selected is None:
@@ -253,6 +316,7 @@ class ChatScreen(Screen):
 
         provider, model = self._selected
         self._set_busy(True)
+        request_started = time.perf_counter()
         self._set_status("Starting stream\u2026")
         try:
             result = await asyncio.to_thread(
@@ -275,27 +339,26 @@ class ChatScreen(Screen):
             stream_gen,
             result.get("provider", provider),
             result.get("model", model),
+            request_started=request_started,
         )
-
-    def _handle_result(self, result: dict) -> None:
-        if result.get("success"):
-            self._view().add_assistant(
-                result["provider"],
-                result["model"],
-                result["response"],
-                latency_ms=result.get("latency_ms"),
-                status="healthy",
-            )
-        else:
-            self._view().add_error(result.get("error") or "Chat failed.")
 
     # ------------------------------------------------------------ streaming
 
-    async def _consume_stream(self, stream_gen, provider: str, model: str) -> None:
+    async def _consume_stream(
+        self,
+        stream_gen,
+        provider: str,
+        model: str,
+        *,
+        request_started: float | None = None,
+        overhead_ms: int | None = None,
+    ) -> None:
         self._view().begin_stream(provider, model)
         started = time.perf_counter()
+        first_token_at: float | None = None
 
         def _run() -> None:
+            nonlocal first_token_at
             try:
                 for chunk in stream_gen:
                     pieces = []
@@ -305,12 +368,32 @@ class ChatScreen(Screen):
                         if content:
                             pieces.append(content)
                     if pieces:
+                        if first_token_at is None:
+                            first_token_at = time.perf_counter()
                         self.app.call_from_thread(
                             self.post_message, StreamChunk("".join(pieces))
                         )
-                latency_ms = int((time.perf_counter() - started) * 1000)
+                finished = time.perf_counter()
+                base = request_started or started
+                total_ms = int((finished - base) * 1000)
+                first_token_ms = (
+                    int((first_token_at - base) * 1000)
+                    if first_token_at is not None
+                    else None
+                )
+                render_ms = (
+                    int((finished - first_token_at) * 1000)
+                    if first_token_at is not None
+                    else None
+                )
                 self.app.call_from_thread(
-                    self.post_message, StreamFinished(latency_ms)
+                    self.post_message,
+                    StreamFinished(
+                        total_ms,
+                        first_token_ms=first_token_ms,
+                        render_ms=render_ms,
+                        overhead_ms=overhead_ms,
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001 - surface in the transcript
                 self.app.call_from_thread(
@@ -322,13 +405,28 @@ class ChatScreen(Screen):
     def on_stream_chunk(self, event: StreamChunk) -> None:
         self._view().append_stream(event.text)
 
+    def on_stream_status(self, event: StreamStatus) -> None:
+        self._set_status(event.text)
+
     def on_stream_finished(self, event: StreamFinished) -> None:
         self._view().finalize_stream(latency_ms=event.latency_ms)
         self._stream_teardown()
+        self._set_timing_status(event)
 
     def on_stream_error(self, event: StreamError) -> None:
         self._view().finalize_stream(error=event.text)
         self._stream_teardown()
+
+    def _set_timing_status(self, event: StreamFinished) -> None:
+        parts = []
+        if event.overhead_ms is not None:
+            parts.append(f"provider start {event.overhead_ms}ms")
+        if event.first_token_ms is not None:
+            parts.append(f"first token {event.first_token_ms}ms")
+        parts.append(f"total {event.latency_ms}ms")
+        if event.render_ms is not None:
+            parts.append(f"render {event.render_ms}ms")
+        self._set_status(" \u00b7 ".join(parts))
 
     def _stream_teardown(self) -> None:
         self._set_busy(False)

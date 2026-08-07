@@ -10,7 +10,7 @@ import pytest
 from app.providers.availability import AVAILABLE, UNAVAILABLE
 from app.providers.base import ModelProbe
 from app.providers.registry import ProviderDefinition
-from app.setup.ui import ScriptedUI
+from app.setup.ui import ScriptedUI, TerminalUI
 from app.setup.wizard import SetupResult, run_setup
 
 
@@ -274,6 +274,66 @@ def test_script_exhaustion_fails_loudly(isolated_state):
 
     with pytest.raises(RuntimeError, match="script exhausted"):
         run_setup(ui, menu=menu, store=FakeStore())
+
+
+# --------------------------------------------------------- menu validation UI
+
+def test_menu_non_digit_input_shows_clear_guidance(monkeypatch, capsys):
+    ui = TerminalUI()
+    answers = iter(["abc", "1"])
+    monkeypatch.setattr(
+        "app.setup.ui._read", lambda prompt: next(answers)
+    )
+
+    choice = ui.menu(["OpenAI", "Finish setup", "Quit"], "Select a provider")
+
+    assert choice == 1
+    out = capsys.readouterr().out
+    assert "Invalid selection." not in out
+    assert "between 1 and 3" in out
+    assert "press Enter to cancel" in out
+
+
+def test_menu_out_of_range_input_shows_clear_guidance(monkeypatch, capsys):
+    ui = TerminalUI()
+    answers = iter(["9", "0", "2"])
+    monkeypatch.setattr(
+        "app.setup.ui._read", lambda prompt: next(answers)
+    )
+
+    choice = ui.menu(["OpenAI", "Finish setup", "Quit"], "Select a provider")
+
+    assert choice == 2
+    out = capsys.readouterr().out
+    assert "between 1 and 3" in out
+
+
+def test_menu_blank_cancels_without_error(monkeypatch, capsys):
+    ui = TerminalUI()
+    answers = iter([""])
+    monkeypatch.setattr(
+        "app.setup.ui._read", lambda prompt: next(answers)
+    )
+
+    assert ui.menu(["OpenAI", "Finish setup", "Quit"], "Select a provider") is None
+
+
+def test_single_provider_menu_is_numbered_loop(isolated_state):
+    """
+    The spec's numbered provider menu: with one provider the options stay
+    1..N + Finish + Quit and the wizard loops back to the menu after each
+    provider, so several providers can be configured in one run.
+    """
+    openai = make_defn("openai", "OpenAI", make_client())
+    ollama = make_defn("ollama", "Ollama (local)", make_client(), kind="local")
+    store = FakeStore()
+    # provider 1 (OpenAI), provider 2 (Ollama), then Finish (option 3)
+    ui = ScriptedUI([1, "sk-test", "n", "n", 2, "n", "n", 3])
+
+    result = run_setup(ui, menu=[openai, ollama], store=store)
+
+    assert result.usable
+    assert result.configured == ["ollama", "openai"]
 
 
 # ------------------------------------------------------------------ CLI handoff

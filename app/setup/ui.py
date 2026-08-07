@@ -91,17 +91,14 @@ class TerminalUI:
 
             if not raw:
                 return None
-            if not raw.isdigit():
-                print("  Invalid selection.")
-                continue
 
-            number = int(raw)
+            if raw.isdigit() and 1 <= int(raw) <= len(options):
+                return int(raw)
 
-            if not (1 <= number <= len(options)):
-                print(f"  Choose 1-{len(options)}.")
-                continue
-
-            return number
+            print(
+                f"  Please enter a number between 1 and {len(options)}, "
+                "or press Enter to cancel."
+            )
 
     def confirm(self, prompt: str, default: bool) -> bool:
         return self.ask_yes_no(prompt, default)

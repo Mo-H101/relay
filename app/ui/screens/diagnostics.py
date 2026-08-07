@@ -72,6 +72,9 @@ class DiagnosticsScreen(Screen):
         self.query_one("#export-path", Input).value = self._default_export_path()
         self._refresh_all()
 
+    def on_screen_resume(self) -> None:
+        self._refresh_all()
+
     # ------------------------------------------------------------- helpers
 
     def _default_export_path(self) -> str:

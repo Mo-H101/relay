@@ -1239,6 +1239,68 @@ class ServiceFacade:
             **generation_kwargs,
         )
 
+    def start_random_stream(
+        self,
+        message: str,
+        on_progress=None,
+        **generation_kwargs: Any,
+    ) -> dict:
+        """
+        Stream a chat using the same candidate selection as /chat
+        (health-aware filtering/ordering via the candidate builder),
+        failing over across candidates until one starts.
+
+        Returns the chat_across_stream_messages result dict; on success
+        ``stream_gen`` yields parsed chunk dicts and the callers consumes
+        it off the UI thread. ``on_progress`` receives per-candidate
+        failover updates. Never raises.
+        """
+        entry = time.perf_counter()
+
+        providers = self._relay.provider_manager.ranked()
+
+        if not providers:
+            return {
+                "success": False,
+                "stream_gen": None,
+                "error": "No provider available. Configure a provider first.",
+                "attempts": [],
+            }
+
+        candidates = self._relay.candidate_builder.build(providers, task=None)
+
+        if not candidates:
+            return {
+                "success": False,
+                "stream_gen": None,
+                "error": "No chat-testable models available.",
+                "attempts": [],
+            }
+
+        provider_started = time.perf_counter()
+
+        payload: dict[str, Any] = {
+            "messages": [{"role": "user", "content": message}],
+            "stream": True,
+        }
+        for key in ("temperature", "top_p", "max_tokens"):
+            if key in generation_kwargs and generation_kwargs[key] is not None:
+                payload[key] = generation_kwargs[key]
+
+        result = self._relay.chat_service.chat_across_stream_messages(
+            candidates,
+            payload,
+            max_retries=settings.max_retries,
+            on_progress=on_progress,
+        )
+
+        result["timing"] = {
+            "request_ms": int((provider_started - entry) * 1000),
+            "candidate_count": len(candidates),
+        }
+
+        return result
+
     def specific_chat(
         self,
         provider_name: str,

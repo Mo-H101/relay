@@ -63,17 +63,26 @@ run `relay serve`.
 
 ## 3. The seven screens
 
-`1`–`7` switch tabs; `q` (or `Ctrl+C`) quits.
+`1`–`7` switch tabs; `q` (or `Ctrl+C`) quits. While a text input or
+the model picker holds focus the plain digit keys are typed normally, so
+navigate with the `Ctrl` variants — `Ctrl+1`–`Ctrl+7` switch tabs and
+`Ctrl+Q` quits, and they work from anywhere, even mid-edit. `Escape`
+returns to the Dashboard from any screen (the Chat tab also has a
+visible "Back to Dashboard" button).
 
 | Key | Screen | What it shows |
 | --- | --- | --- |
-| `1` | Dashboard | Server state, provider/model availability, recent activity, persistence status. |
-| `2` | Chat | Random or specific-model chat with streaming, plus an inline model availability test. |
-| `3` | Models | Model availability and priority controls. |
-| `4` | Providers | Provider keys, scanning, and setup. |
-| `5` | Configuration | Routing, failover, and server settings. |
-| `6` | Applications | Client activity and endpoint/auth status. |
-| `7` | Diagnostics | Operations tail, health, and export. |
+| `1` / `Ctrl+1` | Dashboard | Server state, provider/model availability, recent activity, persistence status. |
+| `2` / `Ctrl+2` | Chat | Random or specific-model chat with streaming, plus an inline model availability test. |
+| `3` / `Ctrl+3` | Models | Model availability and priority controls. |
+| `4` / `Ctrl+4` | Providers | Provider keys, scanning, and setup. |
+| `5` / `Ctrl+5` | Configuration | Routing, failover, and server settings. |
+| `6` / `Ctrl+6` | Applications | Client activity and endpoint/auth status. |
+| `7` / `Ctrl+7` | Diagnostics | Operations tail, health, and export. |
+
+Screens are kept in memory across tab switches, so state such as the chat
+transcript and form edits survives moving between tabs and refreshes
+automatically when you return.
 
 ## 4. Configuration screen (tab 5)
 

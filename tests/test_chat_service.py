@@ -664,3 +664,114 @@ class TestConvenienceChat:
             service.chat(provider, "hello")
 
         assert "bad request" in str(excinfo.value)
+
+
+class FakeStreamMessagesClient:
+    """
+    Sync streaming-messages client: per-model outcomes that are either
+    an Exception (raised on stream start) or a list of parsed chunk
+    dicts yielded in order.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self._outcomes = {}
+
+    def set_outcomes(self, model, outcomes):
+        self._outcomes[model] = list(outcomes)
+
+    def chat_stream_messages(self, provider, payload):
+        self.calls.append((provider.name, payload["model"]))
+        outcome = self._outcomes[payload["model"]][0]
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        for chunk in outcome:
+            yield chunk
+
+
+def make_stream_messages_client(holder, name, outcomes_by_model):
+    client = FakeStreamMessagesClient()
+
+    for model, outcomes in outcomes_by_model.items():
+        client.set_outcomes(model, outcomes)
+
+    holder[name] = client
+    return client
+
+
+class TestStreamMessagesProgress:
+    def test_on_progress_reports_attempt_failed_started(self, fake_registry):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_stream_messages_client(
+            fake_registry,
+            "A",
+            {
+                "a-1": [ProviderHTTPError(500, "boom")],
+                "a-2": [[{"choices": [{"delta": {"content": "ok"}}]}]],
+            },
+        )
+        service = ChatService()
+        events = []
+
+        result = service.chat_across_stream_messages(
+            [(provider, "a-1"), (provider, "a-2")],
+            {"messages": [], "stream": True},
+            on_progress=events.append,
+        )
+
+        assert result["success"] is True
+        assert result["provider"] == "A"
+        assert result["model"] == "a-2"
+
+        assert events[0]["stage"] == "attempt"
+        assert events[0]["index"] == 1
+        assert events[0]["total"] == 2
+        assert events[1]["stage"] == "failed"
+        assert "boom" in events[1]["reason"]
+        assert events[2]["stage"] == "attempt"
+        assert events[2]["index"] == 2
+        assert events[3]["stage"] == "started"
+        assert events[3]["model"] == "a-2"
+
+    def test_on_progress_reports_failure_when_all_candidates_fail(
+        self, fake_registry
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_stream_messages_client(
+            fake_registry,
+            "A",
+            {"a-1": [ProviderHTTPError(503, "down")]},
+        )
+        service = ChatService()
+        events = []
+
+        result = service.chat_across_stream_messages(
+            [(provider, "a-1")],
+            {"messages": [], "stream": True},
+            on_progress=events.append,
+        )
+
+        assert result["success"] is False
+        assert events[0]["stage"] == "attempt"
+        assert events[1]["stage"] == "failed"
+        assert "down" in events[1]["reason"]
+
+    def test_on_progress_omitted_still_streams(self, fake_registry):
+        provider = make_provider("A", ["a-1"])
+        make_stream_messages_client(
+            fake_registry,
+            "A",
+            {"a-1": [[{"choices": [{"delta": {"content": "ok"}}]}]]},
+        )
+        service = ChatService()
+
+        result = service.chat_across_stream_messages(
+            [(provider, "a-1")],
+            {"messages": [], "stream": True},
+        )
+
+        assert result["success"] is True
+        chunks = list(result["stream_gen"])
+        assert chunks[0]["choices"][0]["delta"]["content"] == "ok"

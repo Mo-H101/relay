@@ -47,6 +47,9 @@ class DashboardScreen(Screen):
     async def on_mount(self) -> None:
         await self.refresh_summary()
 
+    async def on_screen_resume(self) -> None:
+        await self.refresh_summary()
+
     async def refresh_summary(self) -> None:
         summary = self._facade.dashboard_summary()
         self._render_summary(summary)

@@ -9,6 +9,8 @@ module-level singleton or doing any network I/O.
 
 from __future__ import annotations
 
+from app.services.capabilities import is_chat_testable
+
 
 class FakeProvider:
     def __init__(
@@ -150,6 +152,13 @@ class FakeChatService:
             yield {"choices": [{"delta": {"content": "hello"}}]}
             yield {"choices": [{"delta": {"content": " world"}}]}
 
+        on_progress = kwargs.get("on_progress")
+        if on_progress is not None:
+            on_progress({"stage": "attempt", "index": 1, "total": len(candidates),
+                         "provider": provider.name, "model": model})
+            on_progress({"stage": "started", "index": 1, "total": len(candidates),
+                         "provider": provider.name, "model": model})
+
         return {
             "success": True,
             "provider": provider.name,
@@ -158,6 +167,32 @@ class FakeChatService:
             "error": None,
             "attempts": [],
         }
+
+
+class FakeCandidateBuilder:
+    """
+    Mirrors the real CandidateBuilder's health filtering for the TUI
+    fakes: models whose health snapshot marks them unavailable (or that
+    are not chat-testable) are left out of the candidate list.
+    """
+
+    def __init__(self, relay) -> None:
+        self._relay = relay
+
+    def build(self, providers, task=None):
+        candidates = []
+        for provider in providers:
+            report = self._relay.health_store.get(provider.name)
+            status_by_model = {}
+            if report is not None:
+                status_by_model = {m.name: m.status for m in report.models}
+            for model in provider.models:
+                if not is_chat_testable(model):
+                    continue
+                if status_by_model.get(model) == "unavailable":
+                    continue
+                candidates.append((provider, model))
+        return candidates
 
 
 class FakeRelay:
@@ -169,6 +204,7 @@ class FakeRelay:
         self.state_store = None
         self.state_flusher = None
         self.persistence_init_error: str | None = None
+        self.candidate_builder = FakeCandidateBuilder(self)
 
     def choose_provider(self) -> FakeProvider | None:
         for provider in self.provider_manager.enabled():

@@ -5,6 +5,7 @@ Covers random-mode chat, specific-model streaming, unavailable-model
 handling, picker availability glyphs, and the inline probe.
 """
 
+import asyncio
 import time
 
 import pytest
@@ -59,22 +60,27 @@ async def _type_message(pilot, text: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_random_mode_sends_and_renders(monkeypatch, tmp_path):
+async def test_chat_random_mode_streams_and_renders(monkeypatch, tmp_path):
     monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
     relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
     facade = ServiceFacade(relay_instance=relay)
-    monkeypatch.setattr(
-        facade,
-        "random_chat",
-        lambda message: {
+
+    def fake_start_random_stream(message, on_progress=None, **kwargs):
+        def gen():
+            yield {"choices": [{"delta": {"content": "hello"}}]}
+            yield {"choices": [{"delta": {"content": " back"}}]}
+
+        return {
             "success": True,
             "provider": "p1",
             "model": "m1",
-            "response": "hello back",
-            "latency_ms": 7,
+            "stream_gen": gen(),
+            "error": None,
             "attempts": [],
-        },
-    )
+            "timing": {"request_ms": 5, "candidate_count": 1},
+        }
+
+    monkeypatch.setattr(facade, "start_random_stream", fake_start_random_stream)
 
     app = RelayApp(facade=facade, start_server=False)
     async with app.run_test(
@@ -89,7 +95,12 @@ async def test_chat_random_mode_sends_and_renders(monkeypatch, tmp_path):
         assert "You" in transcript
         assert "hello" in transcript
         assert "[p1 \u00b7 m1]" in transcript
-        assert "7ms" in transcript
+        assert "\u258d" not in transcript  # stream marker cleared
+
+        status = _status_text(app.screen)
+        assert "provider start" in status
+        assert "first token" in status
+        assert "total" in status
 
 
 @pytest.mark.asyncio
@@ -258,3 +269,145 @@ async def test_inline_probe_updates_status(monkeypatch, tmp_path):
         assert "p1 / m1" in status
         assert "available" in status
         assert "12ms" in status
+
+
+# ----------------------------------------------------------- navigation
+
+
+async def _focus_chat_input(screen, pilot) -> None:
+    screen.query_one("#chat-input", Input).focus()
+    await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_ctrl_digit_navigates_while_input_focused(monkeypatch, tmp_path):
+    from app.ui.screens.models import ModelsScreen
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+    app = RelayApp(facade=facade, start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_chat(pilot, facade)
+        await _focus_chat_input(screen, pilot)
+
+        await pilot.press("ctrl+3")
+        await pilot.pause()
+        assert isinstance(app.screen, ModelsScreen)
+
+        await pilot.press("ctrl+2")
+        await pilot.pause()
+        assert isinstance(app.screen, ChatScreen)
+
+        await pilot.press("ctrl+1")
+        await pilot.pause()
+        from app.ui.screens.dashboard import DashboardScreen
+
+        assert isinstance(app.screen, DashboardScreen)
+
+
+@pytest.mark.asyncio
+async def test_plain_digit_types_in_focused_input(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+    app = RelayApp(facade=facade, start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_chat(pilot, facade)
+        input_widget = screen.query_one("#chat-input", Input)
+        input_widget.focus()
+        await pilot.pause()
+
+        await pilot.press("3", "1")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ChatScreen)
+        assert input_widget.value == "31"
+
+
+@pytest.mark.asyncio
+async def test_escape_returns_to_dashboard_while_input_focused(monkeypatch, tmp_path):
+    from app.ui.screens.dashboard import DashboardScreen
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+    app = RelayApp(facade=facade, start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_chat(pilot, facade)
+        await _focus_chat_input(screen, pilot)
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert isinstance(app.screen, DashboardScreen)
+
+
+@pytest.mark.asyncio
+async def test_back_to_dashboard_button(monkeypatch, tmp_path):
+    from app.ui.screens.dashboard import DashboardScreen
+    from textual.widgets import Button
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+    app = RelayApp(facade=facade, start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_chat(pilot, facade)
+        screen.query_one("#back-to-dashboard", Button).focus()
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, DashboardScreen)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_nav_works_after_send(monkeypatch, tmp_path):
+    from app.ui.screens.dashboard import DashboardScreen
+
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+
+    def fake_start_random_stream(message, on_progress=None, **kwargs):
+        def gen():
+            yield {"choices": [{"delta": {"content": "hello back"}}]}
+
+        return {
+            "success": True,
+            "provider": "p1",
+            "model": "m1",
+            "stream_gen": gen(),
+            "error": None,
+            "attempts": [],
+        }
+
+    monkeypatch.setattr(facade, "start_random_stream", fake_start_random_stream)
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await _open_chat(pilot, facade)
+        await _type_message(pilot, "hello")
+
+        await _wait_until(pilot, lambda: "hello back" in _transcript(app.screen))
+
+        await pilot.press("ctrl+1")
+        await pilot.pause()
+
+        assert isinstance(app.screen, DashboardScreen)

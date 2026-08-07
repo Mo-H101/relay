@@ -611,6 +611,7 @@ class ChatService:
         max_retries: int = 1,
         *,
         turn=None,
+        on_progress=None,
     ) -> dict:
         """
         Try candidates in order to start a streaming chat with a full
@@ -626,20 +627,37 @@ class ChatService:
         Streaming start failures are not retried: the candidate list is
         the failover path. No exception is raised; the caller decides the
         HTTP mapping.
+
+        ``on_progress`` is an optional callback invoked as candidates are
+        attempted so long-running failovers can be surfaced to the user.
+        It receives a dict with stage ("attempt" | "failed" | "started"),
+        the 1-based candidate index, total candidate count, provider and
+        model names, and (for "failed") the reason. The default path is
+        unchanged when it is omitted.
         """
         attempts: List[dict] = []
         errors: List[str] = []
         skip_providers = set()
+        total = len(candidates)
 
         if turn is not None:
             payload = turn.inject_payload(payload)
 
         last_key = None
 
-        for provider, model in candidates:
+        for index, (provider, model) in enumerate(candidates, start=1):
 
             if provider.name in skip_providers:
                 continue
+
+            if on_progress is not None:
+                on_progress({
+                    "stage": "attempt",
+                    "index": index,
+                    "total": total,
+                    "provider": provider.name,
+                    "model": model,
+                })
 
             if (
                 turn is not None
@@ -659,6 +677,9 @@ class ChatService:
             start = time.perf_counter()
 
             try:
+                # The shared payload is rebound to the candidate model so
+                # each attempt targets the correct endpoint.
+                payload["model"] = model
                 stream_gen = self._try_stream_once_messages(
                     provider,
                     model,
@@ -674,6 +695,15 @@ class ChatService:
                     "reason": "stream ended before producing content",
                 })
                 errors.append(f"{model} ({provider.name}): empty stream")
+                if on_progress is not None:
+                    on_progress({
+                        "stage": "failed",
+                        "index": index,
+                        "total": total,
+                        "provider": provider.name,
+                        "model": model,
+                        "reason": "stream ended before producing content",
+                    })
                 last_key = (provider.name, model)
                 continue
             except Exception as exc:
@@ -686,11 +716,29 @@ class ChatService:
                     "reason": str(exc),
                 })
                 errors.append(f"{model} ({provider.name}): {exc}")
+                if on_progress is not None:
+                    on_progress({
+                        "stage": "failed",
+                        "index": index,
+                        "total": total,
+                        "provider": provider.name,
+                        "model": model,
+                        "reason": str(exc),
+                    })
 
                 if kind in PROVIDER_LEVEL:
                     skip_providers.add(provider.name)
                 last_key = (provider.name, model)
                 continue
+
+            if on_progress is not None:
+                on_progress({
+                    "stage": "started",
+                    "index": index,
+                    "total": total,
+                    "provider": provider.name,
+                    "model": model,
+                })
 
             def gen() -> Generator[dict, None, None]:
                 yield first_chunk

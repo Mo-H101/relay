@@ -54,6 +54,9 @@ class ApplicationsScreen(Screen):
     def on_mount(self) -> None:
         self._refresh_all()
 
+    def on_screen_resume(self) -> None:
+        self._refresh_all()
+
     # ------------------------------------------------------------- helpers
 
     def _refresh_all(self) -> None:

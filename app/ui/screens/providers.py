@@ -64,6 +64,9 @@ class ProvidersScreen(Screen):
     def on_mount(self) -> None:
         self._refresh()
 
+    def on_screen_resume(self) -> None:
+        self._refresh()
+
     # ------------------------------------------------------------- helpers
 
     def _table(self) -> DataTable:
