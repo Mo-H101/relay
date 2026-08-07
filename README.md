@@ -7,8 +7,9 @@ from real request outcomes to keep routing smart over time.
 
 - OpenAI-compatible endpoint (`/v1/chat/completions`) plus a native
   `/chat` endpoint.
-- Multiple backends: NVIDIA NIM, OpenAI, and local LM Studio (OpenAI-
-  compatible local servers work through the LM Studio client).
+- Multiple backends: NVIDIA NIM, OpenAI, Anthropic, Google Gemini, and the
+  local LM Studio and Ollama servers (OpenAI-compatible local servers work
+  through the LM Studio client).
 - **Async-first API hot path** — both endpoints are `async def` with
   non-blocking provider I/O via `httpx.AsyncClient`; sync path retained
   as fallback.

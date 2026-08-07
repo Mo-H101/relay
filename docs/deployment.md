@@ -81,7 +81,7 @@ see below); **enable continuity only when intended** — it is additive
 # --- Identity & transport ---
 RELAY_API_KEY=<long-random-value>
 RELAY_AUTH_STORE=true                  # per-client scoped keys (D6)
-HOST=0.0.0.0                           # TLS at the reverse proxy
+RELAY_HOST=0.0.0.0                     # TLS at the reverse proxy
 
 # --- Persistence (single SQLite file) ---
 PERSISTENCE_ENABLED=true
