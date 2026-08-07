@@ -14,6 +14,9 @@ through ``enqueue()`` and the flusher drains them on its thread, applying
 each to the matching ``ConversationStore`` method. A create that collides
 with an existing row (a conversation resumed across processes) is treated
 as idempotent so later turns still append to the existing conversation.
+R3: a ``turn.append`` whose ``(conversation_id, seq)`` row already exists
+is likewise idempotent -- it is already durable -- so one stale-seq turn
+can never stall the write-behind queue for the whole project.
 """
 
 from __future__ import annotations
@@ -121,7 +124,7 @@ class ContinuityFlusher:
         outage is counted and degraded instead, and drained rows are
         counted per operation.
         """
-        self._drain_queue()
+        clean = self._drain_queue()
         pruned = 0
 
         try:
@@ -129,11 +132,19 @@ class ContinuityFlusher:
                 pruned = self._store.prune_retention(self._retention_days)
         except Exception as exc:
             self._record_flush_error(exc)
+            clean = False
         else:
-            self._consecutive_flush_failures = 0
             with self._lock:
                 self._last_flush_at = time.time()
                 self._flush_count += 1
+
+        # The consecutive-failure streak must only reset when this pass
+        # drained cleanly. The old reset lived in the prune ``else`` and
+        # ran even when ``_drain_queue`` had retained a poison row, so the
+        # >=5 warning never fired while failures kept incrementing (R3
+        # live-validation fix).
+        if clean:
+            self._consecutive_flush_failures = 0
 
         relay_metrics.continuity_flushes.inc()
         relay_metrics.continuity_pruned.inc(pruned)
@@ -141,16 +152,23 @@ class ContinuityFlusher:
             self._pruned_total += pruned
         return pruned
 
-    def _drain_queue(self) -> int:
+    def _drain_queue(self) -> bool:
         """
         Apply every buffered row to the ConversationStore on this thread.
-        A ``conversation.create`` that collides with an existing row is
-        idempotent (the conversation predates this process); any other
-        failure is counted, the row is retained at the head of the queue,
-        and the drain stops so a transient store outage never loses
-        un-flushed turns (P9e, audit §3.4).
+        Returns True when the pass applied every row without a retained
+        failure.
+
+        Idempotent-skips: a ``conversation.create`` that collides with an
+        existing row (resumed across processes) and a ``turn.append`` whose
+        ``(conversation_id, seq)`` row already exists (already-durable,
+        e.g. a stale-seq turn from a restarted coordinator) are treated as
+        already applied and drained -- one duplicate row must never stall
+        the whole queue. Any other failure is counted, the row is retained
+        at the head of the queue, and the drain stops so a transient store
+        outage never loses un-flushed turns (P9e, audit §3.4).
         """
         drained = 0
+        clean = True
 
         while True:
             with self._lock:
@@ -174,19 +192,37 @@ class ContinuityFlusher:
                     drained += 1
                     self._on_op_drained(kwargs.get("conversation_id"))
                     continue
+                if operation == "turn.append":
+                    # Duplicate (conversation_id, seq): the turn is already
+                    # durable -- a coordinator restarted at seq 1 collides
+                    # with existing rows. Skip it and keep draining so a
+                    # single poison row can never block durability for the
+                    # entire project (R3 live-validation fix).
+                    _logger.warning(
+                        "continuity flush: skipping already-durable turn "
+                        "append (conversation_id=%s seq=%s): %s",
+                        kwargs.get("conversation_id"),
+                        kwargs.get("seq"),
+                        exc,
+                    )
+                    drained += 1
+                    self._on_op_drained(kwargs.get("conversation_id"))
+                    continue
                 self._record_flush_error(exc)
                 self._retain_row(operation, kwargs)
+                clean = False
                 break
             except Exception as exc:
                 self._record_flush_error(exc)
                 self._retain_row(operation, kwargs)
+                clean = False
                 break
 
         with self._lock:
             self._drained_count += drained
             relay_metrics.continuity_rows_queued.set(len(self._queue))
 
-        return drained
+        return clean
 
     def _retain_row(self, operation: str, kwargs: dict) -> None:
         """

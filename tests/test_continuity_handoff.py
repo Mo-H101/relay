@@ -386,6 +386,84 @@ class TestCommit:
         assert rec["seq"] == 2
         assert len(_operations(flusher, "turn.append")) == 2
 
+    def test_fresh_state_seeded_at_durable_last_seq_plus_one(self, tmp_path):
+        # R3 fix: a coordinator restarted after a denied resume must not
+        # restart an existing conversation at seq 1 (that would collide
+        # with UNIQUE (conversation_id, seq) and stall the flusher). The
+        # denied-resume last_seq seeds next_seq at last_seq + 1.
+        from app.services.continuity_recovery import ContinuityRecovery
+        from app.services.continuity_headers import derive_resume_token_hash
+
+        store = ConversationStore(str(tmp_path / "continuity.db"))
+        cid = "c" * 32
+        store.create(key_id="k", client_bucket="cli", project_key="pk",
+                     conversation_id=cid)
+        for seq in (1, 2, 3):
+            store.append_turn(
+                conversation_id=cid, key_id="k", seq=seq, outcome="ok",
+                provider="p", model="m1",
+                resume_token_hash=derive_resume_token_hash(f"tok{seq}"),
+            )
+        try:
+            recovery = ContinuityRecovery(store)
+            flusher = FakeFlusher()
+            coord = _coordinator(
+                flusher, recovery=recovery,
+            )
+
+            turn = coord.start(
+                key_id="k", client_bucket="cli", project_key="pk",
+                conversation_id=cid, resume_last_seq=3,
+            )
+            rec = coord.commit(turn, provider="p", model="m1")
+
+            assert rec["seq"] == 4
+            assert _operations(flusher, "turn.append")[-1]["seq"] == 4
+        finally:
+            store.close()
+
+    def test_fresh_state_falls_back_to_durable_read_on_no_token(self, tmp_path):
+        # R3 fix: a normal no-token turn on an existing conversation (the
+        # common post-restart path) has no resume_last_seq; the coordinator
+        # consults the recovery service's durable_last_seq to continue the
+        # conversation instead of restarting at seq 1.
+        from app.services.continuity_recovery import ContinuityRecovery
+
+        store = ConversationStore(str(tmp_path / "continuity.db"))
+        cid = "c" * 32
+        store.create(key_id="k", client_bucket="cli", project_key="pk",
+                     conversation_id=cid)
+        store.append_turn(conversation_id=cid, key_id="k", seq=1,
+                          outcome="ok", provider="p", model="m1")
+        store.append_turn(conversation_id=cid, key_id="k", seq=2,
+                          outcome="ok", provider="p", model="m1")
+        try:
+            recovery = ContinuityRecovery(store)
+            flusher = FakeFlusher()
+            coord = _coordinator(flusher, recovery=recovery)
+
+            turn = coord.start(
+                key_id="k", client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            rec = coord.commit(turn, provider="p", model="m1")
+
+            assert rec["seq"] == 3
+            assert _operations(flusher, "turn.append")[-1]["seq"] == 3
+        finally:
+            store.close()
+
+    def test_new_conversation_still_starts_at_seq_one(self):
+        flusher = FakeFlusher()
+        coord = _coordinator(flusher)
+        turn = coord.start(
+            key_id="k", client_bucket="cli", project_key="pk"
+        )
+
+        rec = coord.commit(turn, provider="p", model="m1")
+
+        assert rec["seq"] == 1
+
     def test_commit_updates_model_chain(self):
         flusher = FakeFlusher()
         coord = _coordinator(flusher)
@@ -684,6 +762,65 @@ class TestFlusherQueue:
 
         stats = flusher.flush_stats()
         assert stats["flush_errors"], "failure should be counted, not raised"
+        store.close()
+
+    def test_duplicate_seq_append_does_not_stall_queue(self, tmp_path):
+        # R3 fix: a turn.append whose (conversation_id, seq) row already
+        # exists is already durable -- it is skipped idempotently and the
+        # drain continues, so one stale-seq turn can never block
+        # durability for the whole project.
+        store, flusher = self._flusher(tmp_path)
+        cid = "c" * 32
+
+        flusher.enqueue(
+            "conversation.create", key_id="k", client_bucket="cli",
+            project_key="pk", conversation_id=cid,
+        )
+        flusher.enqueue(
+            "turn.append", conversation_id=cid, key_id="k", seq=1,
+            outcome="ok", provider="p", model="m1",
+        )
+        # Stale-seq turn assigned seq 1 by a restarted coordinator: the row
+        # already exists, so the flusher must skip it and keep draining.
+        flusher.enqueue(
+            "turn.append", conversation_id=cid, key_id="k", seq=1,
+            outcome="ok", provider="p", model="m1",
+        )
+        flusher.enqueue(
+            "turn.append", conversation_id=cid, key_id="k", seq=2,
+            outcome="ok", provider="p", model="m1",
+        )
+
+        flusher.flush()
+
+        assert flusher.queue_size == 0
+        assert [t["seq"] for t in store.turns(cid, "k")] == [1, 2]
+        assert flusher.flush_stats()["flush_errors"] == []
+        store.close()
+
+    def test_consecutive_failure_warning_fires_after_five(self, tmp_path, caplog):
+        import logging
+
+        # R3 fix: the consecutive-failure streak must not be reset by the
+        # prune path while the drain keeps failing, otherwise the >=5
+        # warning never fires. A poison row at the head of the queue now
+        # increments the streak every pass.
+        store, flusher = self._flusher(tmp_path)
+        flusher.enqueue(
+            "turn.append", conversation_id="z" * 32, key_id="k",
+            seq=1, outcome="ok",
+        )
+
+        caplog.set_level(logging.WARNING, logger="relay")
+        for _ in range(4):
+            flusher.flush()
+        assert not caplog.text
+        flusher.flush()
+
+        stats = flusher.flush_stats()
+        assert len(stats["flush_errors"]) == 5
+        assert "consecutive" in caplog.text
+        assert "failed 5 consecutive times" in caplog.text
         store.close()
 
     def test_enqueue_never_raises_when_store_unavailable(self, tmp_path):

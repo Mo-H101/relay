@@ -288,6 +288,40 @@ class TestPartialStreamThenResume:
         decision = recovery.validate_resume(cid, "k", "old-token")
         assert decision["valid"] is False
         assert decision["reason"] == "token_mismatch"
+        # R3 fix: the denial carries the durable last seq so a subsequent
+        # turn is seeded at last_seq + 1 instead of colliding at seq 1.
+        assert decision["last_seq"] == 2
+        store.close()
+
+    def test_no_token_turn_carries_durable_last_seq(self, tmp_path):
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        cid = _commit_turn(
+            store, seq=1,
+            resume_token_hash=derive_resume_token_hash("tok"),
+        )
+        _commit_turn(
+            store, seq=2, cid=cid,
+            resume_token_hash=derive_resume_token_hash("tok2"),
+        )
+        # A normal no-token turn (the common post-restart case) is not a
+        # denial attempt, but its decision must still report the durable
+        # last seq so the coordinator continues at seq 3.
+        decision = recovery.validate_resume(cid, "k", None)
+        assert decision["valid"] is False
+        assert decision["attempted"] is False
+        assert decision["reason"] == "no_token"
+        assert decision["last_seq"] == 2
+        assert relay_metrics.continuity_resume_denials.value() == 0
+        store.close()
+
+    def test_durable_last_seq_helper(self, tmp_path):
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        assert recovery.durable_last_seq("c" * 32, "k") is None
+        cid = _commit_turn(store, seq=1, resume_token_hash="x")
+        _commit_turn(store, seq=2, cid=cid, resume_token_hash="y")
+        assert recovery.durable_last_seq(cid, "k") == 2
         store.close()
 
 

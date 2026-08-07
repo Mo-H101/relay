@@ -310,6 +310,7 @@ class HandoffCoordinator:
         conversation_id: Optional[str] = None,
         token_budget: Optional[int] = None,
         resume: Optional[dict] = None,
+        resume_last_seq: Optional[int] = None,
     ) -> TurnContext:
         """
         Begin a turn, creating or reusing the conversation state.
@@ -328,6 +329,15 @@ class HandoffCoordinator:
         already carries prior context and already-acknowledged work is
         excluded from the envelope. A fresh one-time resume token is
         issued for the turn when a recovery service is wired.
+
+        R3 (live continuity fix): a fresh state for an *existing*
+        conversation is seeded at the durable ``last_seq + 1`` instead of
+        seq 1. ``resume_last_seq`` carries the decision's durable last seq
+        (valid or denied resume); when absent (a normal no-token turn) the
+        recovery service's ``durable_last_seq`` is consulted. Without this,
+        a conversation restarted after a hard kill would assign seq 1 to a
+        turn whose ``(conversation_id, seq)`` row already exists, collide
+        with the unique constraint, and stall the write-behind flusher.
         """
         cid = conversation_id or new_conversation_id()
         budget = (
@@ -340,6 +350,15 @@ class HandoffCoordinator:
             state = self._states.get(cid)
 
             if state is None:
+                if resume_last_seq:
+                    next_seq = max(1, int(resume_last_seq) + 1)
+                elif self._recovery is not None:
+                    durable = self._recovery.durable_last_seq(
+                        cid, str(key_id or "")
+                    )
+                    next_seq = durable + 1 if durable else 1
+                else:
+                    next_seq = 1
                 state = _ConversationState(
                     conversation_id=cid,
                     key_id=str(key_id or ""),
@@ -347,7 +366,7 @@ class HandoffCoordinator:
                     project_key=project_key or "",
                     token_budget=budget,
                     model_chain=[],
-                    next_seq=1,
+                    next_seq=next_seq,
                     committed_turns=[],
                     window=deque(),
                 )

@@ -202,6 +202,7 @@ class Relay:
                 conversation_id=continuity_scope.get("conversation_id"),
                 token_budget=continuity_scope.get("token_budget"),
                 resume=resume_envelope,
+                resume_last_seq=resume.get("last_seq"),
             )
         except Exception:  # noqa: BLE001 - continuity never breaks chat
             return None

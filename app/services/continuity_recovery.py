@@ -237,22 +237,39 @@ class ContinuityRecovery:
             return self._deny(
                 conversation_id, "no_conversation", attempted=True
             )
+
+        # The durable last turn is read up front so every decision carries
+        # the authoritative ``last_seq``. A denied resume must still let a
+        # later turn continue the conversation at ``last_seq + 1`` -- a
+        # blank ``next_seq=1`` on an existing conversation would collide
+        # with the ``UNIQUE (conversation_id, seq)`` constraint on the
+        # first append and block the whole write-behind flusher (R3 live
+        # validation fix).
+        try:
+            last = (
+                self._store.last_turn(conversation_id, key_id)
+                if self._store
+                else None
+            )
+        except Exception:  # noqa: BLE001 - recovery never breaks chat
+            last = None
+        last_seq = last["seq"] if last else None
+
         if not raw_token:
             return self._deny(
-                conversation_id, "no_token", attempted=False
+                conversation_id,
+                "no_token",
+                attempted=False,
+                last_seq=last_seq,
             )
 
         token_hash = derive_resume_token_hash(raw_token)
         if token_hash is None:
             return self._deny(
-                conversation_id, "malformed_token", attempted=True
-            )
-
-        try:
-            last = self._store.last_turn(conversation_id, key_id) if self._store else None
-        except Exception:  # noqa: BLE001 - recovery never breaks chat
-            return self._deny(
-                conversation_id, "store_unavailable", attempted=True
+                conversation_id,
+                "malformed_token",
+                attempted=True,
+                last_seq=last_seq,
             )
 
         # Confidence gating: no last safe point -> requires recovery
@@ -260,22 +277,34 @@ class ContinuityRecovery:
         if last is None:
             self.transition(conversation_id, "resume_denied")
             return self._deny(
-                conversation_id, "no_resume_point", attempted=True
+                conversation_id,
+                "no_resume_point",
+                attempted=True,
+                last_seq=last_seq,
             )
         if not last.get("resume_token_hash"):
             self.transition(conversation_id, "resume_denied")
             return self._deny(
-                conversation_id, "no_resume_token", attempted=True
+                conversation_id,
+                "no_resume_token",
+                attempted=True,
+                last_seq=last_seq,
             )
         if last.get("outcome") != "ok":
             self.transition(conversation_id, "resume_denied")
             return self._deny(
-                conversation_id, "last_turn_not_ok", attempted=True
+                conversation_id,
+                "last_turn_not_ok",
+                attempted=True,
+                last_seq=last_seq,
             )
 
         if last["resume_token_hash"] != token_hash:
             return self._deny(
-                conversation_id, "token_mismatch", attempted=True
+                conversation_id,
+                "token_mismatch",
+                attempted=True,
+                last_seq=last_seq,
             )
 
         # Durable replay counter (P9e): the attempt is recorded in
@@ -284,7 +313,10 @@ class ContinuityRecovery:
         # persisted: an untracked token is never honored.
         if self._store is None:
             return self._deny(
-                conversation_id, "store_unavailable", attempted=True
+                conversation_id,
+                "store_unavailable",
+                attempted=True,
+                last_seq=last_seq,
             )
         try:
             attempts = self._store.record_resume_replay_attempt(
@@ -292,12 +324,18 @@ class ContinuityRecovery:
             )
         except Exception:  # noqa: BLE001 - recovery never breaks chat
             return self._deny(
-                conversation_id, "replay_store_unavailable", attempted=True
+                conversation_id,
+                "replay_store_unavailable",
+                attempted=True,
+                last_seq=last_seq,
             )
 
         if attempts > self._max_resume_replays:
             return self._deny(
-                conversation_id, "replay_limit", attempted=True
+                conversation_id,
+                "replay_limit",
+                attempted=True,
+                last_seq=last_seq,
             )
 
         self.transition(conversation_id, "resume_valid")
@@ -311,7 +349,12 @@ class ContinuityRecovery:
         }
 
     def _deny(
-        self, conversation_id: str, reason: str, *, attempted: bool
+        self,
+        conversation_id: str,
+        reason: str,
+        *,
+        attempted: bool,
+        last_seq: Optional[int] = None,
     ) -> dict:
         # Only an actual resume attempt counts as a denial; an un-attempted
         # validation (e.g. no token presented on a normal turn) must not
@@ -323,10 +366,29 @@ class ContinuityRecovery:
             "valid": False,
             "reason": reason,
             "state": self.state(conversation_id),
-            "last_seq": None,
+            "last_seq": last_seq,
         }
 
     # ------------------------- resume envelope -------------------------
+
+    def durable_last_seq(
+        self, conversation_id: str, key_id: str
+    ) -> Optional[int]:
+        """
+        Best-effort durable max seq for a conversation: the seq of the last
+        committed turn, or None when the conversation has no durable turns
+        or the store is unavailable. Used to seed a fresh coordinator state
+        at ``last_seq + 1`` so a post-restart conversation never restarts at
+        seq 1 and collides with ``UNIQUE (conversation_id, seq)``. Never
+        raises.
+        """
+        if not conversation_id or self._store is None:
+            return None
+        try:
+            last = self._store.last_turn(conversation_id, key_id)
+        except Exception:  # noqa: BLE001 - recovery never breaks chat
+            return None
+        return last["seq"] if last else None
 
     def resume_envelope(
         self, conversation_id: str, key_id: str
