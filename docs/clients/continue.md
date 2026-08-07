@@ -37,6 +37,10 @@ Bootstrap alternative:
 # in .env:  RELAY_API_KEY=<long-random-value>
 ```
 
+The `.env` file is `%LOCALAPPDATA%\relay\.env` on Windows for an installed
+package, or `project-root/.env` for a source checkout (see
+[README Configuration](../../README.md#configuration)).
+
 If both are empty, auth is off and `apiKey` can be left out — but do not
 expose that instance beyond localhost.
 
@@ -63,7 +67,7 @@ models:
   - name: Relay
     provider: openai
     model: <MODEL_ID>
-    apiBase: http://localhost:8000/v1
+    apiBase: http://127.0.0.1:8000/v1
     apiKey: <KEY>
     roles:
       - chat

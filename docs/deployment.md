@@ -5,7 +5,10 @@
 Relay runs as an OpenAI-compatible cloud gateway: clients point their
 `base_url` at Relay's `/v1` and keep their existing OpenAI SDK/tooling.
 Provider credentials, enabled flags, and model priority live in `.env`
-(see [configuration.md](configuration.md)).
+(see [configuration.md](configuration.md)). The `.env` file is
+`%LOCALAPPDATA%\relay\.env` on Windows for an installed package, or
+`project-root/.env` for a source checkout (see
+[README Configuration](../README.md#configuration)).
 
 ```bash
 # Cloud providers
@@ -159,8 +162,12 @@ default-off retry policy and remaining limitations.
 ## Running the server
 
 ```bash
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+relay serve
 ```
+
+`relay serve` binds to `RELAY_HOST` / `RELAY_PORT` (defaults
+`127.0.0.1:8000`). To bind all interfaces, set `RELAY_HOST=0.0.0.0` before
+starting.
 
 **Run exactly one Relay process.** Learned state is stored in SQLite,
 which is single-process/single-writer (`app/services/state_store.py`), and
@@ -194,7 +201,7 @@ per-client credentials with scope enforcement:
 
 ```bash
 RELAY_AUTH_STORE=true
-relay keys add --label opencode
+relay keys add --label opencode --scopes chat,v1
 ```
 
 The bootstrap key always wins; see [security.md](security.md) for the

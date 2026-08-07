@@ -36,6 +36,10 @@ Bootstrap alternative:
 # in .env:  RELAY_API_KEY=<long-random-value>
 ```
 
+The `.env` file is `%LOCALAPPDATA%\relay\.env` on Windows for an installed
+package, or `project-root/.env` for a source checkout (see
+[README Configuration](../../README.md#configuration)).
+
 If you left both empty, auth is off and Cline's API Key field can be left
 blank — but do not expose that instance beyond localhost.
 
@@ -54,7 +58,7 @@ In Cline's settings, choose the **"OpenAI Compatible"** API provider and set:
 | Field | Value |
 | --- | --- |
 | API Provider | `OpenAI Compatible` |
-| Base URL | `http://localhost:8000/v1` (or `http://127.0.0.1:8000/v1`) |
+| Base URL | `http://127.0.0.1:8000/v1` |
 | API Key | the key from [Create a key](#create-a-key-for-cline) |
 | Model ID | a model id from `/v1/models` |
 
@@ -91,7 +95,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 
 | Symptom | Cause / fix |
 | --- | --- |
-| "invalid API key" | Key mismatch, key not sent, or the key was revoked. Re-run `relay keys add --label cline` and paste the new key; verify with `relay keys test <key>`. |
+| "invalid API key" | Key mismatch, key not sent, or the key was revoked. Re-run `relay keys add --label cline --scopes chat,v1` and paste the new key; verify with `relay keys test <key>`. |
 | "model not found" | Model ID does not match `/v1/models` exactly (case, prefix, slashes). |
 | Connection refused | Relay not running, or the Base URL host/port is wrong. Confirm with the curl check above. |
 | Requests go to Cline's own default provider | The settings were applied to the wrong provider slot; make sure API Provider is "OpenAI Compatible" and Base URL points at Relay. |

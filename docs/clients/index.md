@@ -45,15 +45,15 @@ curl/OpenAI SDK examples.
    relay setup
    ```
    or set provider keys in `.env` (see
-   [docs/configuration.md](../configuration.md) for every variable).
-3. **Start Relay** so clients can reach it. Two options:
+   [docs/configuration.md](../configuration.md) for every variable). For
+   local models (LM Studio / Ollama), see the
+   [local models walkthrough](../local-models.md).
+3. **Start Relay** so clients can reach it:
    ```bash
    # Terminal interface with an embedded API server (client-friendly):
    relay
    # Headless API server only:
    relay serve
-   # or explicitly:
-   python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
    Defaults are `127.0.0.1:8000` (`RELAY_HOST` / `RELAY_PORT` in
    [docs/configuration.md](../configuration.md#server-and-installation-state)).
@@ -71,8 +71,7 @@ curl/OpenAI SDK examples.
   as-is. The client and Relay share the loopback interface; no firewall or
   host changes are needed.
 - **Another machine on the same LAN:** start Relay bound to all interfaces
-  (`relay serve` honors `RELAY_HOST`; or run
-  `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`), and point the
+  (set `RELAY_HOST=0.0.0.0` then `relay serve`), and point the
   client at `http://<relay-host-ip>:8000/v1`. Allow port 8000 through the
   Relay machine's firewall.
 - **Remote / container / internet:** terminate TLS at a reverse proxy in
@@ -95,6 +94,11 @@ Relay has two tiers of API-key authentication (both documented in
 - **Tier 2 — store-backed per-app keys:** set `RELAY_AUTH_STORE=true`, then
   create keys with the CLI. Store keys are scrypt-hashed in `platform.db`
   and support scopes and expiry.
+
+The `.env` file is `%LOCALAPPDATA%\relay\.env` on Windows for an installed
+package, or `project-root/.env` for a source checkout (see
+[README Configuration](../../README.md#configuration) for the per-OS
+locations).
 
 The client sends the key in one of two forms (either works):
 

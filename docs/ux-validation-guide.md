@@ -34,8 +34,8 @@ Two terminals side by side:
 
 | Terminal | Purpose |
 | --- | --- |
-| A | Run Relay (`python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`) |
-| B | Run the CLI (`python -m app.cli setup`) and `curl` requests |
+| A | Run Relay (`relay serve`) |
+| B | Run the wizard/CLI (`relay setup`, `relay --help`, `relay keys ...`) and `curl` requests |
 
 ### Prerequisites
 
@@ -57,10 +57,10 @@ you or makes you pause.
 
 | Time | Step | What you do | Expected |
 | --- | --- | --- | --- |
-| 0:00–0:04 | Clone & install | `git clone <repo>`, `cd`, `python -m venv .venv`, activate, `pip install -r requirements.txt` | Install completes with no errors; `requirements.txt` pinned |
-| 0:04–0:06 | Explore | `python -m app.cli --help`, then open README and `docs/configuration.md` | Help text appears; docs tell you where to get keys and what to set |
-| 0:06–0:12 | First setup | `python -m app.cli setup`; enable NVIDIA, paste `nvapi-` key, accept model fetch, skip or set model priority | CLI masks your key, fetches the catalog, asks to test the provider, prints `OK: <model> (latency ...ms)` |
-| 0:12–0:14 | Start server | `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` | uvicorn banner, `Application startup complete`, no stack trace |
+| 0:00–0:04 | Install | Follow the [README installation section](../README.md#installation): `pip install ...` or `.\install.cmd` (Windows) | Install completes with no errors; `relay` is on your PATH |
+| 0:04–0:06 | Explore | `relay --help`, then open README and `docs/configuration.md` | Help text appears; docs tell you where to get keys and what to set |
+| 0:06–0:12 | First setup | `relay setup`; enable NVIDIA, paste `nvapi-` key, accept model fetch, skip or set model priority | CLI masks your key, fetches the catalog, runs the provider test, and hands off to the TUI on success |
+| 0:12–0:14 | Start server | `relay serve` (headless) or keep the TUI open (`relay` embeds the API server) | `Starting Relay at http://127.0.0.1:8000`, no stack trace |
 | 0:14–0:16 | First checks | `curl -s http://127.0.0.1:8000/` and `curl -s http://127.0.0.1:8000/providers` | `{"name":"Relay","status":"running"}`; providers list with NVIDIA models |
 | 0:16–0:20 | First chat | `curl` to `/v1/chat/completions` with a model you saw in `/providers` | HTTP 200, JSON with `choices[0].message.content`, `X-Relay-Correlation-Id` header |
 | 0:20–0:24 | Streaming | Same request with `"stream": true` and `curl -N` | Chunks arrive **incrementally**, end with `data: [DONE]` |
@@ -85,32 +85,39 @@ you or makes you pause.
 **What I should do**
 
 ```bash
-python --version
+# Installed package (recommended):
+.\install.cmd          # Windows (or powershell -ExecutionPolicy Bypass -File .\install.ps1)
+./install.sh           # macOS / Linux
+
+# Source checkout (developer):
 git clone <relay-repo-url> relay
 cd relay
 python -m venv .venv
 # Windows: .venv\Scripts\activate   |   macOS/Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m app.cli --help
-python -m compileall -q app
+```
+
+Then confirm the CLI works:
+
+```bash
+relay --help
 ```
 
 **Expected behavior**
 
-- `pip install` succeeds (5 pinned dependencies; `python-dotenv`,
-  fastapi, httpx, pydantic, uvicorn).
-- `python -m app.cli --help` prints usage with a `setup` subcommand.
-- `compileall` finishes silently (byte-compiles `app`).
-- The project root contains a `.env.example` you can copy.
-- There is no `.env` yet (or it is gitignored) and no leftover
-  `health.json`/state DB at the root.
+- `install.cmd` / `install.ps1` / `install.sh` completes and puts `relay`
+  on your PATH (open a **new** terminal so PATH refreshes).
+- `relay --help` prints usage with `setup`, `tui`, `serve`, `keys`,
+  `provider`, `migrate`, `events`, `config`, ... subcommands.
+- (Source checkout) `pip install` succeeds and `relay --help` works from
+  the activated venv.
 
 **Signs of a bug**
 
 - `pip install` fails on a pinned version (missing wheel, resolution error).
-- `ModuleNotFoundError` or import errors at startup after a clean install.
+- `'relay' is not recognized` even in a new terminal (see
+  [README installation](../README.md#installation) for the PATH fix).
 - The CLI help is empty or crashes.
-- The repo ships a `.env` with real keys, or state/diagnostic artifacts.
 
 **Logs / diagnostics to collect**
 
@@ -125,12 +132,14 @@ python -m compileall -q app
 
 **What I should do**
 
-- Run `python -m app.cli setup` and enable **NVIDIA first**. Paste your
+- Run `relay setup` and enable **NVIDIA first**. Paste your
   `nvapi-` key when asked, then when it asks about custom model priority,
   select a small, fast model you expect to work (e.g. search
   `deepseek-v4-flash` or `llama-3.1-8b`).
-- Answer "Test NVIDIA provider now?" → yes.
-- Then open `.env` and read it back.
+- Answer the provider test prompt → yes.
+- Then open `.env` and read it back. The file is `%LOCALAPPDATA%\relay\.env`
+  on Windows for an installed package, or `project-root/.env` for a source
+  checkout.
 
 **Expected behavior**
 
@@ -139,8 +148,8 @@ python -m compileall -q app
 - The CLI fetches the NVIDIA model catalog ("N models available").
 - The provider test prints `OK: <model> (latency Nms)` or a clear
   `FAILED: <model> (<reason>)`.
-- The CLI ends with: `Configuration saved to .env. Restart the server to
-  apply.`
+- On a usable setup the CLI prints `Relay setup complete.` and hands off
+  straight to the terminal interface — no manual restart step.
 
 **Signs of a bug**
 
@@ -165,7 +174,7 @@ python -m compileall -q app
 **What I should do**
 
 ```bash
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+relay serve
 ```
 
 Then, in terminal B:
@@ -178,7 +187,8 @@ curl -s http://127.0.0.1:8000/health
 
 **Expected behavior**
 
-- uvicorn banner, "Application startup complete", no traceback.
+- `relay serve` prints `Starting Relay at http://127.0.0.1:8000`, uvicorn
+  banner, "Application startup complete", no traceback.
 - `GET /` → `{"name":"Relay","status":"running"}`.
 - `GET /providers` → `{"providers":[{"name":"NVIDIA","enabled":true,
   "priority":...,"models":[...]}]}` with a non-empty model list.
@@ -210,11 +220,15 @@ curl -s http://127.0.0.1:8000/health
 
 1. NVIDIA is already enabled from section 2. Verify:
    `curl -s http://127.0.0.1:8000/providers`.
-2. Now add OpenAI: `python -m app.cli setup`, answer "Enable OpenAI" →
+2. Now add OpenAI: `relay setup`, answer "Enable OpenAI" →
    `y`, paste the `sk-...` key, pick a model (e.g. search `gpt-4o-mini`),
    and run the provider test.
 3. Check `.env` shows `OPENAI_ENABLED=true`.
-4. **Restart the server** (the CLI does not apply changes until restart).
+4. **Reload the running server** so the change takes effect:
+   `POST /admin/reload` (or restart `relay serve`). `relay setup` itself
+   hands off to the TUI with a reloaded config when you run it standalone,
+   but a separately started `relay serve` needs the reload or a restart to
+   pick up `.env` edits.
 
 **Expected behavior**
 
@@ -344,9 +358,10 @@ curl -s http://127.0.0.1:8000/v1/models
 2. Open Cline (VS Code extension) → open its settings.
 3. Choose API provider **"OpenAI Compatible"**.
 4. Set:
-   - Base URL: `http://localhost:8000/v1`
-   - API Key: the `RELAY_API_KEY` value (see section 7 note below; empty
-     is fine only if you left `RELAY_API_KEY` unset)
+   - Base URL: `http://127.0.0.1:8000/v1`
+   - API Key: the key from `relay keys add --label cline --scopes chat,v1`
+     (see [cline guide](clients/cline.md)); empty is fine only if you left
+     auth off
    - Model ID: a model you saw in `GET /v1/models`
 5. Send a message in the Cline chat panel.
 
@@ -396,7 +411,7 @@ one of these. If you left `RELAY_API_KEY` empty, no key is needed.
       "npm": "@ai-sdk/openai-compatible",
       "name": "Relay",
       "options": {
-        "baseURL": "http://localhost:8000/v1",
+        "baseURL": "http://127.0.0.1:8000/v1",
         "apiKey": "<RELAY_API_KEY or empty>"
       },
       "models": {
@@ -763,9 +778,11 @@ These are traps a first-time user is likely to hit. Each is either a doc
 gap, a silent failure, or a UX sharp edge. Test each, then note in the
 report which ones confused you and what the docs should have said.
 
-1. **Running setup and forgetting to restart.** The CLI ends with
-   "Restart the server to apply" — easy to miss. Test what happens if you
-   don't restart (nothing changes; silent).
+1. **Running setup and forgetting to reload a running server.** `relay
+   setup` writes the new config and hands off to the TUI (which reloads),
+   but a separately started `relay serve` only picks up `.env` changes via
+   `POST /admin/reload` or a restart. Test what happens if you edit `.env`
+   while `relay serve` is running and do not reload (no change; silent).
 2. **Never running setup at all.** No provider → `GET /chat` returns 503
    "No provider available" and `/v1/chat/completions` returns 400
    `model_not_found`. Is the error clear enough?

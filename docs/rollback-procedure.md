@@ -68,8 +68,11 @@ To reset the consolidated database:
 ## 6. Restart and verify
 
 ```bash
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+relay serve
 ```
+
+(To bind all interfaces, set `RELAY_HOST=0.0.0.0` before starting; see
+[docs/deployment.md](deployment.md).)
 
 Verification, in order:
 

@@ -29,24 +29,41 @@ from real request outcomes to keep routing smart over time.
 
 ```bash
 # 1. Configure providers (interactive: API keys, model priority, task routing)
-python -m app.cli setup
+relay setup
 
 # 2. Run the terminal interface (starts an embedded API server)
-python -m app.cli
+relay
 #   ...or, to run only the headless API server:
-#   python -m app.cli serve
+#   relay serve
 ```
 
 Send a chat:
 
 ```bash
-curl -s http://localhost:8000/v1/chat/completions \
+curl -s http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model": "meta/llama-3.1-8b-instruct", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-Interactive docs: http://localhost:8000/docs (Swagger UI) or
-http://localhost:8000/redoc (ReDoc).
+Interactive docs: http://127.0.0.1:8000/docs (Swagger UI) or
+http://127.0.0.1:8000/redoc (ReDoc).
+
+## Choosing a provider
+
+`relay setup` presents the providers below. Start with a cloud provider
+(no local setup) or a local one (no API key).
+
+| Provider | Type | Requires | Notes |
+| --- | --- | --- | --- |
+| NVIDIA NIM | Cloud | API key from build.nvidia.com | Ready-to-use hosted models; a good default |
+| OpenAI | Cloud | API key from platform.openai.com | Standard OpenAI catalog |
+| Anthropic | Cloud | API key | Claude models |
+| Google Gemini | Cloud | API key | Gemini models |
+| LM Studio (local) | Local | LM Studio running locally | OpenAI-compatible; no API key needed |
+| Ollama (local) | Local | Ollama running locally | No API key needed |
+
+For local models, see [docs/local-models.md](docs/local-models.md) for the
+LM Studio and Ollama setup walkthrough.
 
 ## Documentation
 
@@ -61,6 +78,7 @@ http://localhost:8000/redoc (ReDoc).
 - [UX validation guide](docs/ux-validation-guide.md) — Phase 8 manual test checklist for first-time users.
 - [Terminal interface guide](docs/tui-guide.md) — startup behavior, the seven screens, Windows requirements.
 - [Client setup guides](docs/clients/index.md) — connect Cline, OpenCode, Continue, or any OpenAI-compatible client to Relay.
+- [Local models](docs/local-models.md) — LM Studio and Ollama setup walkthrough.
 - [Platform analysis](docs/platform-architecture-report.md) — Phase 9 current-architecture report.
 - [Platform missing components](docs/platform-missing-components-report.md) — Phase 9 gap analysis vs. the target platform.
 - [Platform implementation roadmap](docs/platform-implementation-roadmap.md) — Phase 9 phased plan (P0–P8).
@@ -94,7 +112,7 @@ every other route, so they are only reachable without a key when
 Create a per-client key and point your tooling at Relay with it:
 
 ```bash
-relay keys add --label opencode          # prints the raw key exactly once
+relay keys add --label opencode --scopes chat,v1   # prints the raw key exactly once
 ```
 
 Then configure the client (OpenAI SDK, Cline, OpenCode, …):
@@ -137,9 +155,18 @@ header. Requests without a valid key receive `401 Unauthorized`.
 
 ## Configuration
 
-All configuration comes from environment variables or a `.env` file at
-the project root. See [docs/configuration.md](docs/configuration.md) for
-the full reference. The most common settings:
+All configuration comes from environment variables or a `.env` file. Where
+that `.env` lives depends on how you installed Relay:
+
+- **Installed package** (`pip install` or `install.cmd`): `%LOCALAPPDATA%\relay\.env` on
+  Windows, `~/.local/share/relay/.env` on Linux, and
+  `~/Library/Application Support/relay/.env` on macOS — Relay always uses
+  its per-user data directory, regardless of the current working directory.
+- **Source checkout**: `.env` at the project root (or in the current working
+  directory, then next to the app package).
+
+See [docs/configuration.md](docs/configuration.md) for the
+full reference. The most common settings:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

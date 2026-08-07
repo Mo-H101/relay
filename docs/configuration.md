@@ -2,7 +2,11 @@
 
 Relay reads configuration from environment variables, loaded from a
 `.env` file if present. The file is resolved from `RELAY_ENV_FILE`, then
-the current working directory, then the project root. Values are validated
+the current working directory, then the project root — **for source
+checkouts**. **Installed packages always use their per-user data
+directory** (see `RELAY_DATA_DIR` below): `%LOCALAPPDATA%\relay\.env` on
+Windows, `~/.local/share/relay/.env` on Linux, and
+`~/Library/Application Support/relay/.env` on macOS. Values are validated
 at startup; invalid values abort startup with a clear message. Hot reload
 (`POST /admin/reload`) applies only the fields marked **reloadable** below.
 

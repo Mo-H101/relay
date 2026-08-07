@@ -38,6 +38,10 @@ Bootstrap alternative:
 # in .env:  RELAY_API_KEY=<long-random-value>
 ```
 
+The `.env` file is `%LOCALAPPDATA%\relay\.env` on Windows for an installed
+package, or `project-root/.env` for a source checkout (see
+[README Configuration](../../README.md#configuration)).
+
 If both are empty, auth is off and `apiKey` can be any placeholder value
 (OpenCode/AI SDK still expect a non-empty string) — but do not expose that
 instance beyond localhost.
@@ -62,7 +66,7 @@ top-level `opencode.json`). Register Relay as an OpenAI-compatible provider:
       "npm": "@ai-sdk/openai-compatible",
       "name": "Relay",
       "options": {
-        "baseURL": "http://localhost:8000/v1",
+        "baseURL": "http://127.0.0.1:8000/v1",
         "apiKey": "<KEY>"
       },
       "models": {

@@ -13,7 +13,7 @@ or `https://`.
 No provider is enabled or configured. Check `NVIDIA_ENABLED`,
 `OPENAI_ENABLED`, and `LMSTUDIO_ENABLED` in `.env`, and that the enabled
 provider has an API key (`NVIDIA_API_KEY`, `OPENAI_API_KEY`) or does not
-require one (LM Studio). Run `python -m app.cli setup` for an interactive
+require one (LM Studio). Run `relay setup` for an interactive
 walkthrough.
 
 ## Authentication problems
