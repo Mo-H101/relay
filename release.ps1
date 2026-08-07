@@ -115,12 +115,9 @@ Write-Step "Checksums"
 
 $wheelHash = (Get-FileHash -Algorithm SHA256 $whl.FullName).Hash.ToLower()
 $sdistHash = (Get-FileHash -Algorithm SHA256 $sdist.FullName).Hash.ToLower()
-@(
-    ("{0}  {1}" -f $wheelHash, $whl.Name),
-    ("{0}  {1}" -f $sdistHash, $sdist.Name)
-) | Set-Content -Path "dist\SHA256SUMS" -Encoding Ascii
 Write-Host ("{0}  {1}" -f $wheelHash, $whl.Name)
 Write-Host ("{0}  {1}" -f $sdistHash, $sdist.Name)
+Write-Host "SHA256SUMS written to the release bundle in the Bundle step."
 
 # ---------------------------------------------------------------------------
 # 5. Packaging verification
@@ -208,7 +205,10 @@ New-Item -ItemType Directory -Path $bundle | Out-Null
 
 Copy-Item $whl.FullName $bundle
 Copy-Item $sdist.FullName $bundle
-Copy-Item "dist\SHA256SUMS" $bundle
+@(
+    ("{0}  {1}" -f $wheelHash, $whl.Name),
+    ("{0}  {1}" -f $sdistHash, $sdist.Name)
+) | Set-Content -Path (Join-Path $bundle "SHA256SUMS") -Encoding Ascii
 
 $docFiles = @(
     "README.md", "RELEASE.md", "CHANGELOG.md", "KNOWN-ISSUES.md",

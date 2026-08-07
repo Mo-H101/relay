@@ -39,8 +39,8 @@ Run the release script from the repository root. It performs, in order:
    fails if they disagree.
 3. **Clean build** — removes `build/`, `dist/`, and egg-info; builds sdist +
    wheel with `python -m build`.
-4. **Checksums** — computes `SHA256` for both artifacts and writes
-   `SHA256SUMS` next to them.
+4. **Checksums** — computes `SHA256` for both artifacts; the hashes are
+   written to `SHA256SUMS` in the release bundle.
 5. **Packaging verification** — runs `tests/test_packaging.py` (manifest
    sanity, wheel/sdist import smoke, upgrade-from-previous-release drill).
 6. **Fresh-install smoke** — installs the wheel into a brand-new throwaway

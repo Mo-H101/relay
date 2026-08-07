@@ -81,12 +81,9 @@ step "Checksums"
 
 WHEEL_HASH="$(sha256sum "$WHL" | awk '{print $1}')"
 SDIST_HASH="$(sha256sum "$SDIST" | awk '{print $1}')"
-{
-    printf '%s  %s\n' "$WHEEL_HASH" "$(basename "$WHL")"
-    printf '%s  %s\n' "$SDIST_HASH" "$(basename "$SDIST")"
-} > dist/SHA256SUMS
 echo "$WHEEL_HASH  $(basename "$WHL")"
 echo "$SDIST_HASH  $(basename "$SDIST")"
+echo "SHA256SUMS written to the release bundle in the Bundle step."
 
 # ---------------------------------------------------------------------------
 # 5. Packaging verification
@@ -162,7 +159,12 @@ BUNDLE="$ROOT/release/relay-$VERSION"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE"
 
-cp "$WHL" "$SDIST" dist/SHA256SUMS "$BUNDLE"
+cp "$WHL" "$SDIST" "$BUNDLE/"
+
+{
+    printf '%s  %s\n' "$WHEEL_HASH" "$(basename "$WHL")"
+    printf '%s  %s\n' "$SDIST_HASH" "$(basename "$SDIST")"
+} > "$BUNDLE/SHA256SUMS"
 
 for doc in \
     README.md RELEASE.md CHANGELOG.md KNOWN-ISSUES.md \
