@@ -36,3 +36,6 @@ bench/raw/
 bench/probe.json
 bench/results.json
 bench/report.md
+
+# Release Candidate validation bundle (generated; not part of the source tree).
+release-candidate/
