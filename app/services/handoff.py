@@ -91,6 +91,7 @@ class TurnContext:
     events: List[dict] = field(default_factory=list)
     _injected_payload: Optional[dict] = field(default=None, repr=False)
     _handoff: "Optional[HandoffCoordinator]" = field(default=None, repr=False)
+    context_manager: Optional[ContextManager] = field(default=None, repr=False)
     # P9d: the one-time resume token issued for this turn (surfaced to the
     # client exactly once), plus whether this turn resumed a prior
     # conversation and the acknowledged scope it excludes.
@@ -175,15 +176,39 @@ class TurnContext:
         Return a payload copy with the envelope as a leading synthetic
         system message. The original payload is never mutated and the
         injected copy is cached per turn.
+
+        When content-aware handoff is enabled (opt-in,
+        ``continuity_content_context_enabled``), a bounded, redacted
+        content summary of the in-request messages is appended to the
+        envelope, and an over-budget message array is compacted (redacted
+        digest + recent tail) before forwarding. The content digest is
+        ephemeral: it exists only inside the forwarded payload and is
+        never persisted or surfaced elsewhere.
         """
         if self.envelope is None:
             return payload
         if self._injected_payload is None:
+            from app.core.config import settings
+            from app.services import ephemeral_context
+
             copy = dict(payload)
             messages = list(payload.get("messages") or [])
+            system_content = render_envelope(self.envelope)
+            forward = messages
+
+            if settings.continuity_content_context_enabled:
+                digest = ephemeral_context.content_summary(messages)
+                if digest:
+                    system_content = system_content + "\n\n" + digest
+                compacted, _stats = ephemeral_context.compact(
+                    messages, manager=self.context_manager
+                )
+                if compacted is not None:
+                    forward = compacted
+
             copy["messages"] = [
-                {"role": "system", "content": render_envelope(self.envelope)}
-            ] + messages
+                {"role": "system", "content": system_content}
+            ] + forward
             self._injected_payload = copy
         return self._injected_payload
 
@@ -396,6 +421,7 @@ class HandoffCoordinator:
             model_chain=list(state.model_chain),
         )
         turn._handoff = self
+        turn.context_manager = self._manager
         turn.resumed = resumed
         turn.exclude_up_to_seq = state.resume_up_to_seq
 

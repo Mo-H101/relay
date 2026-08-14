@@ -645,7 +645,14 @@ class TestProductionGatewayWorkflow:
         response = _get(rc_client, "/v1/models")
         assert response.status_code == 200
         ids = {entry["id"] for entry in response.json()["data"]}
-        assert ids == set(NVIDIA_MODELS) | set(OPENAI_MODELS)
+        # The raw upstream catalog plus the Relay-facing routing names.
+        assert ids == (
+            set(NVIDIA_MODELS)
+            | set(OPENAI_MODELS)
+            | {"auto", "default", "relay"}
+            | {"coding", "vision", "reasoning", "general",
+               "creative", "translation"}
+        )
 
     def test_auth_enforced(self, prod_components, rc_client):
         prod_components()

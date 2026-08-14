@@ -810,6 +810,10 @@ class Settings:
         self.continuity_enabled = (
             os.getenv("CONTINUITY_ENABLED", "false").lower() == "true"
         )
+        self.continuity_content_context_enabled = (
+            os.getenv("CONTINUITY_CONTENT_CONTEXT_ENABLED", "false").lower()
+            == "true"
+        )
         self.continuity_retention_days = _valid_int(
             "CONTINUITY_RETENTION_DAYS",
             os.getenv("CONTINUITY_RETENTION_DAYS", "30"),

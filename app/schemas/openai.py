@@ -93,7 +93,11 @@ class ToolDefinition(BaseModel):
 
 
 class OpenAIChatCompletionRequest(BaseModel):
-    model: str
+    # Optional so clients can rely on Relay's automatic routing. A literal
+    # upstream model id is still forwarded verbatim; virtual names
+    # ("auto", "default", "relay", task names) and omitted models route
+    # through Relay's task/candidate machinery.
+    model: Optional[str] = None
     messages: List[ChatMessageObject]
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -149,7 +153,10 @@ class OpenAIChatCompletionRequest(BaseModel):
             "stream_options",
         ):
             if field in self.model_fields_set:
-                payload[field] = getattr(self, field)
+                value = getattr(self, field)
+                if field == "model" and not value:
+                    continue
+                payload[field] = value
 
         if "tools" in self.model_fields_set and self.tools is not None:
             payload["tools"] = [

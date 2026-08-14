@@ -89,7 +89,9 @@ class TestHealthStore:
 
 class TestHealthStoreFreshness:
     def test_freshness_is_full_when_just_saved(self):
-        store = HealthStore(ttl_seconds=300)
+        # Deterministic clock: wall time between save() and freshness()
+        # makes the ratio 1.0 - tiny_epsilon, never exactly 1.0.
+        store = HealthStore(ttl_seconds=300, now=lambda: 100.0)
         store.save(make_report("A"))
 
         assert store.freshness("A") == 1.0
@@ -124,7 +126,7 @@ class TestHealthStoreFreshness:
         assert store.get("A") is None
 
     def test_freshness_read_only_keeps_get_hard_expiry(self):
-        store = HealthStore(ttl_seconds=5)
+        store = HealthStore(ttl_seconds=5, now=lambda: 100.0)
         store.save(make_report("A"))
 
         assert store.freshness("A") == 1.0

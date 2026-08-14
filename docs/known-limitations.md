@@ -114,6 +114,17 @@ Project continuity is **off by default** and additive when enabled
 
 - Clients that do not send `X-Relay-Conversation-Id` /
   `X-Relay-Project-Id` see no continuity behavior and no storage.
+- Content-aware handoff is a further opt-in (`CONTINUITY_CONTENT_CONTEXT_ENABLED=true`,
+  requires `CONTINUITY_ENABLED=true`, both restart-required). When enabled, a
+  bounded, redacted content summary of the in-request messages is added to the
+  envelope and over-budget arrays are compacted (digest + recent tail) before
+  forwarding. This is **ephemeral only**: the digest exists solely inside the
+  forwarded payload and is never persisted, logged, exported, or surfaced in
+  metrics/events. Because it is derived from message *content*, operators who
+  enable it must accept that derived content text flows to the provider on the
+  request path (it remains redacted for secret shapes and framed as data, not
+  instructions). Default is off, so the metadata-only privacy posture is
+  unchanged unless explicitly enabled.
 - The durable replay tracker only covers the resume path: it is not a
   general rate limiter on `validate_resume`. RC1 decision (D13): **no
   dedicated rate limiter on the resume path for v1.0.0** — the 256-bit

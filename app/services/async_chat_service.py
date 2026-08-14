@@ -441,9 +441,15 @@ class AsyncChatService:
 
         try:
             client = self.registry.get(provider.identity())
+            # The wire payload must always name the candidate being
+            # attempted: virtual/task-routed models resolve to a concrete
+            # upstream model per candidate, and failover can move across
+            # different models on the same provider.
+            attempt_payload = dict(payload)
+            attempt_payload["model"] = model
             response = await client.achat_messages(
                 provider=provider,
-                payload=payload,
+                payload=attempt_payload,
             )
         except Exception as exc:
             latency = int((time.perf_counter() - start) * 1000)
@@ -625,9 +631,13 @@ class AsyncChatService:
         mid-stream.
         """
         client = self.registry.get(provider.identity())
+        # Same contract as the non-stream path: the payload model must be
+        # the concrete candidate model, never a virtual/task name.
+        attempt_payload = dict(payload)
+        attempt_payload["model"] = model
         async for chunk in client.achat_stream_messages(
             provider=provider,
-            payload=payload,
+            payload=attempt_payload,
         ):
             yield chunk
 

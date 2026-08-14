@@ -14,6 +14,8 @@ from app.services.correlation import new_correlation_id
 from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
+from app.services.routing import TASK_CATEGORIES
+from app.services.task_classifier import classify_task
 from app.schemas.openai import (
     OpenAIChatCompletionRequest,
     ModelObject,
@@ -29,6 +31,83 @@ async_chat_svc = AsyncChatService()
 _CORRELATION_HEADER = "X-Relay-Correlation-Id"
 _CONVERSATION_HEADER = "X-Relay-Conversation-Id"
 _RESUME_TOKEN_HEADER = "X-Relay-Resume-Token"
+
+# Relay-facing virtual model names: they always route through Relay's
+# own candidate machinery instead of naming an upstream model.
+_VIRTUAL_MODELS = frozenset({"auto", "default", "relay"})
+
+
+def _message_text(message) -> str:
+    """
+    Extract the plain-text form of a chat message for task
+    classification: a string content verbatim, a multimodal part list as
+    the joined text parts, and nothing else.
+    """
+    content = message.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.text for part in content if getattr(part, "text", None)
+        )
+    return ""
+
+
+def _last_user_message_text(messages) -> str:
+    """
+    Return the text of the newest user message (the natural analogue of
+    the legacy /chat free-text message), or "" when none exists.
+    """
+    for message in reversed(messages):
+        if message.role == "user":
+            return _message_text(message)
+    return ""
+
+
+def _resolve_candidates(relay, providers, requested_model, messages):
+    """
+    Resolve the request's model field into an ordered candidate list.
+
+    Returns ``(candidates, task, routed)``: ``candidates`` is the ordered
+    (provider, model) list, ``task`` the routing task that was applied
+    (None when none), and ``routed`` True when the request went through
+    Relay's candidate machinery rather than an explicit upstream model.
+
+    An omitted model or a virtual name ("auto", "default", "relay")
+    routes through Relay's candidate machinery, optionally narrowed by
+    free-text task classification when enabled. A task name routes with
+    that task. Any other value is an explicit upstream model id matched
+    literally against every provider, preserving the original verbatim
+    passthrough behavior.
+    """
+    requested = (requested_model or "").strip()
+    lowered = requested.lower()
+
+    if not requested or lowered in _VIRTUAL_MODELS:
+        task = None
+        if settings.task_classification_enabled:
+            task = classify_task(
+                _last_user_message_text(messages),
+                settings.task_classification_threshold,
+            )
+        return (
+            relay.candidate_builder.build(providers, task=task),
+            task,
+            True,
+        )
+
+    if lowered in TASK_CATEGORIES:
+        return (
+            relay.candidate_builder.build(providers, task=lowered),
+            lowered,
+            True,
+        )
+
+    return [
+        (provider, requested)
+        for provider in providers
+        if requested in provider.models
+    ], None, False
 
 
 def _correlation_headers(correlation_id: str) -> dict:
@@ -290,18 +369,32 @@ async def openai_chat_completion(
             correlation_id=correlation_id,
         )
 
-    # 2. Filter providers that declare the model
-    candidates = [
-        (p, req.model) for p in relay.provider_manager.all()
-        if req.model in p.models
-    ]
+    # 2. Resolve the Relay-facing model interface: virtual names, task
+    #    names, and omitted models route through task/candidate
+    #    machinery; literal upstream model ids keep the passthrough
+    #    behavior.
+    providers = relay.provider_manager.all()
+    candidates, routed_task, routed = _resolve_candidates(
+        relay, providers, req.model, req.messages
+    )
     if not candidates:
+        if req.model:
+            detail = f"Model '{req.model}' not available from any provider."
+        else:
+            detail = "No provider available for automatic routing."
         return _openai_error_response(
             400,
-            f"Model '{req.model}' not available from any provider.",
+            detail,
             code="model_not_found",
             correlation_id=correlation_id,
         )
+
+    # Decision observability (parity with /chat): when the request was
+    # routed through Relay's candidate machinery and the decision engine
+    # is enabled, record a decision pass over the same pool. Ordering is
+    # unchanged; the engine is a scoring/observability layer.
+    if routed and relay.decision_engine.enabled:
+        relay.decision_engine.decide(providers, task=routed_task)
 
     # 3. Build the verbatim wire payload from the request.
     payload = req.to_provider_payload()
@@ -343,6 +436,7 @@ async def openai_chat_completion(
             )
 
         provider_name = result["provider"]
+        stream_model = result.get("model") or req.model
         stream_gen = result["stream_gen"]
         continuity_sse = _sse_continuity_events(result)
 
@@ -365,7 +459,7 @@ async def openai_chat_completion(
                         "id": stream_id,
                         "object": "chat.completion.chunk",
                         "created": created,
-                        "model": req.model,
+                        "model": stream_model,
                     }
                     if "choices" in chunk:
                         out["choices"] = chunk["choices"]
@@ -391,7 +485,7 @@ async def openai_chat_completion(
                 latency_ms = int((time.perf_counter() - start_time) * 1000)
                 _record_telemetry_and_health(
                     provider_name,
-                    req.model,
+                    stream_model,
                     success,
                     latency_ms,
                     failure_type,
@@ -475,7 +569,19 @@ async def openai_chat_completion(
 @router.get("/v1/models")
 def openai_models():
     models: list[ModelObject] = []
-    for p in relay.provider_manager.all():
+    providers = relay.provider_manager.all()
+    # Relay-facing names first: virtual routing names and the task
+    # categories, owned by Relay so clients can discover automatic
+    # routing without knowing any upstream model id. Only advertised when
+    # at least one provider is registered so the empty-provider contract
+    # is preserved.
+    if providers:
+        for name in sorted(_VIRTUAL_MODELS):
+            models.append(ModelObject(id=name, owned_by="relay"))
+        for name in TASK_CATEGORIES:
+            models.append(ModelObject(id=name, owned_by="relay"))
+    # Then the raw upstream catalog, unchanged.
+    for p in providers:
         for m in p.models:
             models.append(ModelObject(id=m, owned_by=p.name))
     return ModelList(data=models)

@@ -511,6 +511,96 @@ class TestOpenAIContinuity:
         assert "data: [DONE]" in body
 
 
+class TestOpenAIContentContext:
+    """P9f: opt-in content-aware handoff (Phase 5/6)."""
+
+    def test_envelope_includes_content_summary_when_enabled(
+        self, monkeypatch, fake_registry, store_auth, client, tmp_path
+    ):
+        monkeypatch.setattr(settings, "continuity_content_context_enabled", True)
+        relay = _build_continuity_relay(monkeypatch, fake_registry, tmp_path)
+        fake = _register(
+            relay,
+            fake_registry,
+            "A",
+            ["a-1"],
+            {"a-1": ["first", "second"]},
+        )
+        _, raw_key = _create_key(store_auth)
+        cid = "d" * 32
+        headers = {
+            "Authorization": f"Bearer {raw_key}",
+            "X-Relay-Conversation-Id": cid,
+            "X-Relay-Project-Id": "proj-1",
+        }
+        payload = {
+            "model": "a-1",
+            "messages": [{"role": "user", "content": "hello world"}],
+        }
+
+        first = client.post("/v1/chat/completions", headers=headers, json=payload)
+        assert first.status_code == 200
+        second = client.post("/v1/chat/completions", headers=headers, json=payload)
+        assert second.status_code == 200
+
+        sent = [call for call in fake.chat_calls if isinstance(call[1], dict)]
+        assert len(sent) == 2
+        # Fresh conversation: still verbatim (no envelope yet).
+        assert sent[0][1]["messages"] == payload["messages"]
+        # Resume: envelope plus the bounded content summary of the
+        # in-request messages.
+        system_content = sent[1][1]["messages"][0]["content"]
+        assert "[continuity context]" in system_content
+        assert "messages: 1" in system_content
+        assert "first user request: hello world" in system_content
+
+    def test_over_budget_array_compacted_when_enabled(
+        self, monkeypatch, fake_registry, store_auth, client, tmp_path
+    ):
+        monkeypatch.setattr(settings, "continuity_content_context_enabled", True)
+        monkeypatch.setattr(settings, "continuity_context_token_budget", 32)
+        monkeypatch.setattr(settings, "continuity_output_reserve_tokens", 0)
+        monkeypatch.setattr(settings, "continuity_summary_share", 0.5)
+        monkeypatch.setattr(settings, "continuity_tail_max_items", 2)
+        relay = _build_continuity_relay(monkeypatch, fake_registry, tmp_path)
+        fake = _register(
+            relay,
+            fake_registry,
+            "A",
+            ["a-1"],
+            {"a-1": ["first", "second"]},
+        )
+        _, raw_key = _create_key(store_auth)
+        cid = "e" * 32
+        headers = {
+            "Authorization": f"Bearer {raw_key}",
+            "X-Relay-Conversation-Id": cid,
+            "X-Relay-Project-Id": "proj-1",
+        }
+        messages = [
+            {"role": "user", "content": "first request text for compaction"},
+            {"role": "assistant", "content": "first answer text for compaction"},
+            {"role": "user", "content": "second request text"},
+        ]
+        payload = {"model": "a-1", "messages": messages}
+
+        first = client.post("/v1/chat/completions", headers=headers, json=payload)
+        assert first.status_code == 200
+        second = client.post("/v1/chat/completions", headers=headers, json=payload)
+        assert second.status_code == 200
+
+        sent = [call for call in fake.chat_calls if isinstance(call[1], dict)]
+        forwarded = sent[1][1]["messages"]
+        # Envelope system message, redacted digest, then the verbatim tail.
+        assert forwarded[0]["role"] == "system"
+        assert "[continuity context]" in forwarded[0]["content"]
+        assert forwarded[1]["role"] == "system"
+        assert "[summary of earlier conversation content" in forwarded[1]["content"]
+        assert forwarded[-1] == messages[-1]
+        assert messages[0] not in forwarded
+        assert len(forwarded) == 3
+
+
 class TestSwitchCaps:
     def test_cap_stops_failover_with_502(
         self, monkeypatch, fake_registry, store_auth, client, tmp_path

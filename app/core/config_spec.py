@@ -512,6 +512,12 @@ _RAW_SPECS = (
     _restart("CONTINUITY_ENABLED", "continuity_enabled", "bool", False,
              "Enable project continuity and model handoff (P9).",
              "continuity"),
+    _restart("CONTINUITY_CONTENT_CONTEXT_ENABLED",
+             "continuity_content_context_enabled", "bool", False,
+             "Opt-in content-aware handoff (P9f): derive a redacted, "
+             "bounded content summary from the in-request messages and "
+             "compact an over-budget array before forwarding. Ephemeral "
+             "-- never persisted or logged.", "continuity"),
     _restart("CONTINUITY_RETENTION_DAYS", "continuity_retention_days",
              "int", 30,
              "Retention, in days, for archived/inactive continuity rows "

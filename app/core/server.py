@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from app.core.config import settings
 
@@ -20,6 +21,14 @@ _logger = logging.getLogger("relay")
 # after a stop request. Kept modest so a hung event loop cannot wedge the
 # TUI exit path forever.
 _JOIN_TIMEOUT_SECONDS = 10.0
+
+# Maximum time (seconds) to wait for the embedded server to finish binding
+# and complete startup before start() returns. Mirrors the historical
+# _started.wait() budget.
+_START_TIMEOUT_SECONDS = 30.0
+
+# How often start() polls uvicorn's started flag while waiting.
+_READINESS_POLL_SECONDS = 0.05
 
 
 class EmbeddedServer:
@@ -35,7 +44,6 @@ class EmbeddedServer:
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
-        self._started = threading.Event()
 
     @property
     def running(self) -> bool:
@@ -70,7 +78,6 @@ class EmbeddedServer:
             )
             server = uvicorn.Server(config)
             self._server = server
-            self._started.set()
             server.run()
 
         self._thread = threading.Thread(
@@ -78,11 +85,29 @@ class EmbeddedServer:
             name="relay-embedded-server",
             daemon=True,
         )
-        self._started.clear()
         self._thread.start()
-        self._started.wait(timeout=30.0)
 
-        if not self.running:
+        # Wait for real readiness (socket bound + startup complete), not
+        # just thread start: uvicorn only sets server.started after binding
+        # the port, so returning earlier races with the first client
+        # request (ConnectionRefused on slow machines).
+        deadline = time.monotonic() + _START_TIMEOUT_SECONDS
+
+        while time.monotonic() < deadline:
+            server = getattr(self, "_server", None)
+
+            if server is not None and getattr(server, "started", False):
+                break
+
+            if not self.running:
+                break
+
+            time.sleep(_READINESS_POLL_SECONDS)
+
+        if not self.running or (
+            getattr(self, "_server", None) is not None
+            and not getattr(self._server, "started", False)
+        ):
             raise RuntimeError("embedded API server failed to start")
 
     def stop(self) -> None:

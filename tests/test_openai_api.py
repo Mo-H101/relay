@@ -973,10 +973,22 @@ class TestOpenAIModels:
         payload = response.json()
         assert payload["object"] == "list"
         model_ids = {item["id"] for item in payload["data"]}
-        assert model_ids == {"a-1", "a-2", "b-1"}
+        # Upstream ids remain exposed so explicit passthrough clients
+        # keep working unchanged...
+        assert {"a-1", "a-2", "b-1"}.issubset(model_ids)
+        # ...and the Relay-facing names are discoverable for automatic
+        # and task-based routing.
+        assert {"auto", "default", "relay"}.issubset(model_ids)
+        assert {
+            "coding", "vision", "reasoning", "general", "creative",
+            "translation",
+        }.issubset(model_ids)
         for item in payload["data"]:
             assert item["object"] == "model"
-            assert item["owned_by"] in {"A", "B"}
+            if item["id"] in {"a-1", "a-2", "b-1"}:
+                assert item["owned_by"] in {"A", "B"}
+            else:
+                assert item["owned_by"] == "relay"
 
     def test_models_endpoint_empty_when_no_providers(self, wired_relay, client):
         wired_relay(providers=[])
@@ -987,6 +999,200 @@ class TestOpenAIModels:
         payload = response.json()
         assert payload["object"] == "list"
         assert payload["data"] == []
+
+
+class TestOpenAIVirtualModelRouting:
+    """Relay-facing model interface on /v1 (Phase 3)."""
+
+    def test_omitted_model_routes_automatically(
+        self, wired_relay, fake_registry, client
+    ):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(
+            fake_registry,
+            "A",
+            {"a-1": ["auto response"]},
+        )
+        wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["choices"][0]["message"]["content"] == "auto response"
+        # The wire payload carries the concrete upstream model, never a
+        # virtual name.
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "a-1"
+
+    @pytest.mark.parametrize("virtual", ["auto", "default", "relay"])
+    def test_virtual_model_names_route_automatically(
+        self, wired_relay, fake_registry, client, virtual
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": [f"{virtual} response"]})
+        wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": virtual,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert (
+            payload["choices"][0]["message"]["content"]
+            == f"{virtual} response"
+        )
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "a-1"
+
+    def test_task_named_model_routes_via_preferences(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(fake_registry, "A", {"a-2": ["coding response"]})
+        monkeypatch.setattr(settings, "task_routing_enabled", True)
+        monkeypatch.setattr(settings, "task_coding", ["a-2"])
+        wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "coding",
+                "messages": [{"role": "user", "content": "write code"}],
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["choices"][0]["message"]["content"] == "coding response"
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "a-2"
+
+    def test_omitted_model_classifies_task(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(
+            fake_registry,
+            "A",
+            {"a-2": ["classified coding response"]},
+        )
+        monkeypatch.setattr(settings, "task_classification_enabled", True)
+        monkeypatch.setattr(settings, "task_routing_enabled", True)
+        monkeypatch.setattr(settings, "task_coding", ["a-2"])
+        wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "user", "content": "write a python function"}
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert (
+            payload["choices"][0]["message"]["content"]
+            == "classified coding response"
+        )
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "a-2"
+
+    def test_streaming_virtual_model_reports_resolved_model(
+        self, wired_relay, fake_registry, client
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["streamed"]})
+        wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+
+        assert response.status_code == 200
+        lines = response.text.strip().split("\n")
+        data_lines = [line for line in lines if line.startswith("data: ")]
+        first = json.loads(data_lines[0][6:])
+        assert first["model"] == "a-1"
+
+    def test_missing_model_no_providers_returns_400(
+        self, wired_relay, client
+    ):
+        wired_relay(providers=[])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert "error" in payload
+        assert "automatic routing" in payload["error"]["message"]
+
+    def test_decision_engine_records_on_virtual_routing(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["decided response"]})
+        monkeypatch.setattr(settings, "decision_engine_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        stats = relay.decision_engine.stats()
+        assert stats["decisions"] == 1
+        assert stats["candidates"] == 1
+        assert list(stats["selected"]) == ["A/a-1"]
+
+    def test_decision_engine_skips_explicit_passthrough(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["passthrough response"]})
+        monkeypatch.setattr(settings, "decision_engine_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "a-1",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        assert relay.decision_engine.stats()["decisions"] == 0
 
 
 class TestRegressionChatEndpoint:

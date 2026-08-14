@@ -272,6 +272,7 @@ state are stored — raw prompts and responses are never persisted.
 | Variable | Default | Reloadable | Meaning |
 | --- | --- | --- | --- |
 | `CONTINUITY_ENABLED` | `false` | no | Enable durable conversation tracking and the resume protocol. |
+| `CONTINUITY_CONTENT_CONTEXT_ENABLED` | `false` | no | Opt-in content-aware handoff (P9f): derive a redacted, bounded content summary from the in-request messages and compact an over-budget array before forwarding. Ephemeral only — never persisted, logged, exported, or surfaced in metrics/events. Requires `CONTINUITY_ENABLED=true`. |
 | `CONTINUITY_RETENTION_DAYS` | `30` | no | Retention in days for conversations, turns, summaries, compactions, and replay rows; `0` disables pruning. Active conversations are never pruned. |
 | `CONTINUITY_FLUSH_INTERVAL_SECONDS` | `5` | no | Write-behind flush cadence for continuity rows (min 1). |
 | `CONTINUITY_CONTEXT_TOKEN_BUDGET` | `32768` | no | Token budget used by the context manager when building the next-turn envelope. |
