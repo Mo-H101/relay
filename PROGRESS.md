@@ -5,14 +5,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `9a8d9d5` — `fix: restore 3.10/3.11 f-string compat, test
-  isolation, and CI hardening` (committed and pushed to `origin/master`).
+- **HEAD:** `a5703a2` — `docs: update progress state to pushed remediation
+  HEAD` (committed and pushed to `origin/master`).
 - **Working tree:** clean.
-- **Recent history:** Phase 9A at `27a0ca9` (cross-client continuity);
-  CI/3.10–3.11 remediation at `9a8d9d5`.
 - **Recent history:** Phase 7 at `c41cd22` (actual decision records for
   `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
-  doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity).
+  doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity);
+  CI/3.10–3.11 remediation at `9a8d9d5`; doc state update at `a5703a2`.
 - **Baseline suite:** 2558 passed, 8 skipped, 0 failed (Python 3.13.5,
   full suite in ~9.5 min), re-verified after the Phase 9A additions.
   The SD-card sqlite concurrency flake is intermittent — see Known
