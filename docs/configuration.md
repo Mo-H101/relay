@@ -293,9 +293,10 @@ and Relay replays the durable, per-conversation sequence (each server
 `seq` advances monotonically, so acknowledged work is never re-executed).
 Replay attempts are tracked durably (`resume_replays`, schema v8) so the
 cap survives restarts, and the resume path fails closed if the tracker
-cannot be persisted. See [deployment.md](deployment.md) and
-[platform-db-schema.md](platform-db-schema.md) for the storage model and
-privacy contract.
+cannot be persisted. See [deployment.md](deployment.md),
+[platform-db-schema.md](platform-db-schema.md), and the client-facing
+[project continuity guide](clients/continuity.md) for the wire
+contract and storage model.
 
 ## Recommended production profile
 

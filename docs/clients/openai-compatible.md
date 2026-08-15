@@ -174,6 +174,7 @@ Success = a `200` with an OpenAI-shaped choices body. Any non-2xx returns the
 ## Related documentation
 
 - [Client setup guides index](index.md)
+- [Project continuity](continuity.md) — resume a conversation after a provider switch or Relay restart.
 - [Authentication & keys](../security.md)
 - [Configuration reference](../configuration.md)
 - [Deployment & hardening](../deployment.md)

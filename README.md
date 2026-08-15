@@ -79,6 +79,7 @@ LM Studio and Ollama setup walkthrough.
 - [UX validation guide](docs/ux-validation-guide.md) — Phase 8 manual test checklist for first-time users.
 - [Terminal interface guide](docs/tui-guide.md) — startup behavior, the seven screens, Windows requirements.
 - [Client setup guides](docs/clients/index.md) — connect Cline, OpenCode, Continue, or any OpenAI-compatible client to Relay.
+- [Project continuity](docs/clients/continuity.md) — opt-in conversation resume across provider switches and Relay restarts.
 - [Local models](docs/local-models.md) — LM Studio and Ollama setup walkthrough.
 - [Platform analysis](docs/platform-architecture-report.md) — Phase 9 current-architecture report.
 - [Platform missing components](docs/platform-missing-components-report.md) — Phase 9 gap analysis vs. the target platform.

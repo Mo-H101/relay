@@ -315,8 +315,9 @@ class TestSwitchCaps:
         assert self._switch(coord, turn, "m2")["allowed"]
 
         # Age the recorded window entry beyond the sliding window so the
-        # next switch is allowed again.
-        state = coord._states[turn.conversation_id]
+        # next switch is allowed again. In-memory state is key-scoped by
+        # (key_id, conversation_id), matching the durable boundary.
+        state = coord._states[(turn.key_id, turn.conversation_id)]
         state.window[0] = (0.0, "m2")
 
         assert self._switch(coord, turn, "m3")["allowed"]
@@ -482,6 +483,114 @@ class TestCommit:
 
         updates = _operations(flusher, "project_state.update")[-1]
         assert updates["last_models"] == ["m1", "m2", "m3"]
+
+
+# ------------------------- coordinator: key-scoped state -------------------------
+
+
+class TestKeyScopedState:
+    """
+    In-memory conversation state identity must be (key_id, conversation_id),
+    mirroring the durable key-scoping (Phase 9A fix). A conversation id
+    presented by a different store-backed key never reuses another key's
+    in-memory state.
+    """
+
+    def test_same_key_same_conversation_id_reuses_state(self):
+        flusher = FakeFlusher()
+        coord = _coordinator(flusher)
+        cid = "a" * 32
+
+        first = coord.start(
+            key_id="key-a", client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+        coord.commit(first, provider="p", model="m1")
+
+        second = coord.start(
+            key_id="key-a", client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+
+        assert second.conversation_id == cid
+        assert second.key_id == "key-a"
+        assert second.is_new is False
+        assert second.model_chain == ["m1"]
+        assert second.envelope is not None
+        assert second.resumed is False
+
+        # Same key + same conversation id: the next commit continues the
+        # original sequence (no reset to seq 1).
+        rec = coord.commit(second, provider="p", model="m1")
+        assert rec["seq"] == 2
+
+    def test_different_keys_same_conversation_id_do_not_share_state(self):
+        flusher = FakeFlusher()
+        coord = _coordinator(flusher)
+        cid = "b" * 32
+
+        turn_a = coord.start(
+            key_id="key-a", client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+        coord.commit(turn_a, provider="p", model="m1")
+
+        # Key B presents the same opaque conversation id. It must get a
+        # brand-new, isolated conversation -- never key A's state.
+        turn_b = coord.start(
+            key_id="key-b", client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+
+        assert turn_b.conversation_id == cid
+        assert turn_b.key_id == "key-b"
+        assert turn_b.is_new is True
+        assert turn_b.model_chain == []
+        assert turn_b.envelope is None
+        assert turn_b.resumed is False
+
+        # Key B's commit starts its own sequence at seq 1 and every
+        # durable operation carries key B's identity -- key A's
+        # conversation data is never touched.
+        rec = coord.commit(turn_b, provider="p", model="m1")
+        assert rec["seq"] == 1
+
+        appends = _operations(flusher, "turn.append")
+        assert [a["seq"] for a in appends] == [1, 1]
+        assert appends[0]["key_id"] == "key-a"
+        assert appends[1]["key_id"] == "key-b"
+
+        creates = _operations(flusher, "conversation.create")
+        assert len(creates) == 2
+        assert creates[1]["key_id"] == "key-b"
+        assert creates[1]["conversation_id"] == cid
+
+        # Key A's conversation is untouched by key B's activity.
+        after = coord.start(
+            key_id="key-a", client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+        assert after.model_chain == ["m1"]
+        assert after.envelope is not None
+        rec = coord.commit(after, provider="p", model="m1")
+        assert rec["seq"] == 2
+
+    def test_different_keys_with_no_conversation_id_do_not_collide(self):
+        flusher = FakeFlusher()
+        coord = _coordinator(flusher)
+
+        turn_a = coord.start(
+            key_id="key-a", client_bucket="cli", project_key="pk"
+        )
+        turn_b = coord.start(
+            key_id="key-b", client_bucket="cli", project_key="pk"
+        )
+
+        assert turn_a.conversation_id != turn_b.conversation_id
+        assert turn_a.key_id == "key-a"
+        assert turn_b.key_id == "key-b"
+        assert turn_a.is_new is True
+        assert turn_b.is_new is True
 
 
 # ------------------------- coordinator: envelope -------------------------

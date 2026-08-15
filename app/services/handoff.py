@@ -31,7 +31,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Optional, Tuple
 
 from app.models.continuity import SUMMARY_VERSION, CompactionReason, SummaryBlock
 from app.services.continuity_headers import new_conversation_id
@@ -43,6 +43,19 @@ _logger = logging.getLogger("relay")
 # Bounded in-memory state so a flood of distinct conversation ids cannot
 # grow the process heap without limit (rows are still durable).
 _MAX_IN_MEMORY_STATES = 512
+
+
+def _state_key(key_id: object, conversation_id: str) -> Tuple[str, str]:
+    """
+    In-memory conversation state identity.
+
+    Scoped by the authenticated store-backed key id *and* the conversation
+    id, mirroring the durable layer's key-scoping: two different keys can
+    never share an in-memory conversation state merely by presenting the
+    same opaque conversation id. ``key_id`` is normalized the same way
+    ``_ConversationState`` stores it (``str(key_id or "")``).
+    """
+    return (str(key_id or ""), conversation_id)
 
 
 @dataclass
@@ -281,6 +294,11 @@ class HandoffCoordinator:
     Tracks conversation state, applies switch caps, and assembles the
     handoff envelope. Injectable and inert until ``start`` is called;
     never raises and never touches SQLite.
+
+    In-memory conversation state is key-scoped: the identity of a state is
+    ``(key_id, conversation_id)``, matching the durable key-scoping, so a
+    conversation id presented by a different store-backed key never
+    reuses this process's state for the original key (S7).
     """
 
     def __init__(
@@ -321,7 +339,9 @@ class HandoffCoordinator:
         self._model_chain_cap = max(1, int(model_chain_cap))
         self._window_seconds = max(1.0, float(window_seconds))
         self._max_states = max(1, int(max_in_memory_states))
-        self._states: "OrderedDict[str, _ConversationState]" = OrderedDict()
+        self._states: "OrderedDict[Tuple[str, str], _ConversationState]" = (
+            OrderedDict()
+        )
         self._lock = threading.Lock()
 
     # ------------------------- lifecycle -------------------------
@@ -372,7 +392,7 @@ class HandoffCoordinator:
         )
 
         with self._lock:
-            state = self._states.get(cid)
+            state = self._states.get(_state_key(key_id, cid))
 
             if state is None:
                 if resume_last_seq:
@@ -516,7 +536,9 @@ class HandoffCoordinator:
         now = time.time()
 
         with self._lock:
-            state = self._states.get(turn.conversation_id)
+            state = self._states.get(
+                _state_key(turn.key_id, turn.conversation_id)
+            )
 
             if state is None:
                 return {"allowed": False, "denied": True, "reason": "unknown"}
@@ -589,7 +611,9 @@ class HandoffCoordinator:
         project-state rows to the write-behind flusher.
         """
         with self._lock:
-            state = self._states.get(turn.conversation_id)
+            state = self._states.get(
+                _state_key(turn.key_id, turn.conversation_id)
+            )
             if state is None:
                 return {}
 
@@ -806,7 +830,7 @@ class HandoffCoordinator:
 
     def _remember_state(self, state: _ConversationState) -> None:
         """Insert a new state, evicting the least-recently-touched one."""
-        self._states[state.conversation_id] = state
+        self._states[_state_key(state.key_id, state.conversation_id)] = state
         state.last_touched = time.time()
 
         while len(self._states) > self._max_states:
@@ -814,7 +838,9 @@ class HandoffCoordinator:
 
     def _touch(self, state: _ConversationState) -> None:
         state.last_touched = time.time()
-        self._states.move_to_end(state.conversation_id)
+        self._states.move_to_end(
+            _state_key(state.key_id, state.conversation_id)
+        )
 
     def _enqueue(self, operation: str, **kwargs) -> None:
         if self._flusher is None:

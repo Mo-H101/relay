@@ -129,6 +129,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 ## Related documentation
 
 - [Client setup guides index](index.md)
+- [Project continuity](continuity.md) — resume a conversation after a provider switch or Relay restart.
 - [Authentication & keys](../security.md)
 - [Configuration reference](../configuration.md)
 - [Deployment & hardening](../deployment.md)

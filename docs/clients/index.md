@@ -32,6 +32,15 @@ If your client is not listed, the generic guide covers the contract any
 OpenAI-compatible client needs (`base_url`, `api_key`, model ids) plus
 curl/OpenAI SDK examples.
 
+## Project continuity across clients
+
+Continuity lets any of the clients above resume a conversation after a
+provider switch or a Relay restart by echoing back the resume token Relay
+issues per turn — and because it is keyed by your key + conversation id +
+project id, one client can hand off to another. It is opt-in
+(`CONTINUITY_ENABLED=true`) and documented in the
+[project continuity guide](continuity.md).
+
 ## Shared prerequisites
 
 1. **Install Relay** and make sure the `relay` command is on your PATH

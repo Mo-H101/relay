@@ -5,15 +5,19 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `64976cd` — `feat: complete phase 8 decision execution
-  telemetry` (committed and pushed to `origin/master`).
-- **Working tree:** clean.
+- **HEAD:** `d7433b1` — `docs: update project progress after phase 8`
+  (committed and pushed to `origin/master`).
+- **Working tree:** Phase 9A work-in-progress, **not committed**:
+  `app/services/handoff.py`, `tests/test_continuity_handoff.py`,
+  `tests/test_continuity_phase9a.py` (new), `docs/clients/continuity.md`
+  (new), plus doc link updates (README, docs/clients/*, docs/configuration.md).
 - **Recent history:** Phase 7 landed at `c41cd22` (actual decision
   records for `/v1`); Phase 8 at `64976cd` (decision execution
-  telemetry). No commits beyond `64976cd`.
-- **Baseline suite:** 2545 passed, 8 skipped, 0 failed (Python 3.13.5,
-  full suite in 8 min). The SD-card sqlite concurrency flake is
-  intermittent — see Known failures below.
+  telemetry); progress doc at `d7433b1`.
+- **Baseline suite:** 2558 passed, 8 skipped, 0 failed (Python 3.13.5,
+  full suite in ~9.5 min), re-verified after the Phase 9A additions.
+  The SD-card sqlite concurrency flake is intermittent — see Known
+  failures below.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -90,6 +94,47 @@ Base all work on: current code + this file + `git log --oneline -10`.
     adaptive routing, sync/async parity, retry/failover, passthrough,
     virtual routing, decision engine/record, continuity, and API suites
     all pass unchanged.
+- **Phase 9A (cross-client continuity verification, implemented + verified,
+  not yet committed):**
+  - **Fix — key-scoped in-memory state** (`app/services/handoff.py`):
+    `HandoffCoordinator._states` is now keyed by the composite
+    `(key_id, conversation_id)` tuple (new `_state_key()` helper
+    normalizing `str(key_id or "")`), so the same conversation id under
+    two different store-backed keys can never share or collide on this
+    process's continuity state. Same-key conversations still reuse state;
+    no-conversation-id keys never collide. Verified by the new
+    `TestKeyScopedState` in `tests/test_continuity_handoff.py`.
+  - **Cross-client HTTP verification** (`tests/test_continuity_phase9a.py`,
+    10 tests): a `cline` client is served only after an A→B failover, then
+    an `opencode` client resumes the same conversation with the wire
+    resume token — one conversation row (`client_bucket "cline"`), one
+    contiguous durable `seq` run [1,2], the data-marked continuity envelope
+    injected on the resumed request, and derived project state
+    (turn/switch counters, model chain). Stream variant asserts the
+    `relay:conversation` / `relay:model_switched` SSE events on the wire.
+  - **Restart-safe resume**: a fresh `Relay` over the same `platform.db`
+    resumes from the wire token at `last_seq + 1` with no re-execution or
+    duplicate rows; a stale/wrong token fails closed (200, resume denied
+    `token_mismatch`, sequence neither reset nor advanced by the attempt,
+    no durable replay recorded), and the correct token resumes cleanly
+    afterwards.
+  - **Privacy / memory contract**: raw prompt/response content and raw
+    resume tokens never appear anywhere in `platform.db` (only SHA-256
+    hashes), all continuity exports are free of content-shaped keys
+    (`contains_never_captured` false), and the opt-in content digest
+    (`CONTINUITY_CONTENT_CONTEXT_ENABLED`) is ephemeral — present only in
+    the forwarded payload, absent from the store.
+  - **Regressions on this path**: bootstrap keys get no continuity,
+    header-less requests unchanged, flag-off parity, literal-model
+    passthrough verbatim, and the Phase 8 actual-decision record still
+    fires on the continuity path.
+  - **Docs:** new `docs/clients/continuity.md` (wire contract: headers,
+    one-time resume token, cross-client handoff, staleness/replay limits,
+    privacy), linked from `docs/clients/index.md`, all client guides,
+    README, and `docs/configuration.md` §Project continuity.
+  - **Full suite green** after the additions: 2558 passed, 8 skipped,
+    0 failed. Phase 9 is **not** marked complete — later continuity work
+    (see What is next) is still open.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
@@ -107,10 +152,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
   independent change; do not wire it into production ordering.
 - Continuity reachability + client docs: continuity requires
   `CONTINUITY_ENABLED` AND a store-backed key; bootstrap/unauthenticated
-  traffic gets none. Client guides do not document the
+  traffic gets none. **Phase 9A documented the
   `X-Relay-Conversation-Id` / `X-Relay-Project-Id` /
-  `X-Relay-Resume-Token` contract end-to-end. Consider documenting (and/or
-  extending to bootstrap keys) so hand-off is demonstrable (Problem H).
+  `X-Relay-Resume-Token` contract end-to-end** in
+  `docs/clients/continuity.md` and verified cross-client + restart-safe
+  resume over HTTP. Remaining: decided-scope follow-ups beyond 9A
+  (e.g. extending to bootstrap keys, if ever justified) and the
+  later-phase items below.
 - Final release prep / README / release-candidate checklist as needed.
 
 ## Next architectural work (Phase 9+ candidates, unverified)
