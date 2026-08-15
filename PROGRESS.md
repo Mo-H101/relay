@@ -5,10 +5,15 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `c41cd22` + local work (Phase 8B–8D, uncommitted).
-- **Suite:** 2545 passed, 8 skipped, 0 failed (Python 3.13.5, full suite
-  in 8 min). The known SD-card sqlite concurrency flake did not trigger
-  on this run.
+- **HEAD:** `64976cd` — `feat: complete phase 8 decision execution
+  telemetry` (committed and pushed to `origin/master`).
+- **Working tree:** clean.
+- **Recent history:** Phase 7 landed at `c41cd22` (actual decision
+  records for `/v1`); Phase 8 at `64976cd` (decision execution
+  telemetry). No commits beyond `64976cd`.
+- **Baseline suite:** 2545 passed, 8 skipped, 0 failed (Python 3.13.5,
+  full suite in 8 min). The SD-card sqlite concurrency flake is
+  intermittent — see Known failures below.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -18,8 +23,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - `test_platform_store.py::TestConcurrency::test_concurrent_opens_of_same_file`
   fails under a full-suite run on this SD-card-backed device (sqlite
   `busy_timeout=5000` exceeded by 8 concurrent opens under load). Passes
-  in isolation and on the other device. Environment-dependent, **not**
-  changed or papered over in Phase 8.
+  in isolation and on the other device. Intermittent: did not trigger on
+  the Phase 8 verification run, but triggered on one review re-run
+  (2544 passed + this flake, 0 real failures). Environment-dependent,
+  **not** changed or papered over in Phase 8.
 
 ## What is done
 
