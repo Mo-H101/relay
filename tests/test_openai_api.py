@@ -17,6 +17,7 @@ from app.providers.exceptions import (
     ProviderTimeout,
 )
 from app.services.health_checker import DEGRADED, HEALTHY, ProviderHealth
+from app.services.memory_contract import contains_never_captured
 
 import app.api.chat
 import app.api.diagnostics
@@ -1589,6 +1590,185 @@ class TestActualDecisionExplainEndpoint:
         assert payload["selected"] == {"provider": "A", "model": "a-1"}
         assert "candidates" in payload
         assert "generated_at" in payload
+
+
+class TestLegacyChatActualDecisionRecord:
+    """
+    Phase 8B: the legacy /chat path records the same actual-decision
+    truth surface as /v1 — the (provider, model) really executed, the
+    ordered candidate pool, per-attempt metadata, and (when the decision
+    engine is enabled) the score for the executed candidate. Recording is
+    observability only; routing behavior is unchanged.
+    """
+
+    def _wire_task_routing(self, monkeypatch, **task_refs):
+        monkeypatch.setattr(settings, "task_routing_enabled", True)
+        for name, refs in task_refs.items():
+            monkeypatch.setattr(settings, f"task_{name}", list(refs))
+
+    def test_chat_success_records_actual_decision(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(
+            fake_registry,
+            "A",
+            {"a-1": ["chat response"], "a-2": ["fallback"]},
+        )
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["model"] == "a-1"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.routed is True
+        assert record.requested_model is None
+        assert record.classified_task is None
+        assert record.selected_provider == "A"
+        assert record.selected_model == "a-1"
+        assert record.selected_rank == 1
+        assert record.outcome == "succeeded"
+        assert record.decision_reason == "routed to top-ranked candidate"
+        # The legacy /chat path never touches explicit passthrough, so the
+        # engine's decide() pass is what produced the score here.
+        assert not contains_never_captured(record.to_dict())
+
+    def test_chat_failover_records_executed_candidate(
+        self, wired_relay, fake_registry, client
+    ):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(
+            fake_registry,
+            "A",
+            {"a-1": [ProviderTimeout("timeout")], "a-2": ["fallback ok"]},
+        )
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["model"] == "a-2"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.selected_model == "a-2"
+        assert record.selected_rank == 2
+        assert record.outcome == "succeeded"
+        assert record.decision_reason == "routed; executed candidate rank 2"
+        # Timeout is retryable, so a-1 was retried before the failover to
+        # a-2; every attempt is captured in pipeline order.
+        assert [(a.provider, a.model, a.success) for a in record.attempts] == [
+            ("A", "a-1", False),
+            ("A", "a-1", False),
+            ("A", "a-2", True),
+        ]
+
+    def test_chat_task_field_records_task(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1", "coding-model"])
+        make_client(
+            fake_registry,
+            "A",
+            {"coding-model": ["coding reply"], "a-1": ["general"]},
+        )
+        self._wire_task_routing(monkeypatch, coding=["coding-model"])
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello", "task": "coding"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["model"] == "coding-model"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.classified_task == "coding"
+        assert record.selected_model == "coding-model"
+
+    def test_chat_records_with_engine_disabled(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "decision_engine_enabled", False)
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["reply"]})
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 200
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.selected_model == "a-1"
+        assert record.outcome == "succeeded"
+        # Engine off: no score, fallback reason only.
+        assert record.confidence is None
+        assert record.signals is None
+        assert record.decision_reason == "routed to top-ranked candidate"
+        assert relay.decision_engine.stats()["decisions"] == 0
+
+    def test_chat_records_engine_reason_when_enabled(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "decision_engine_enabled", True)
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["reply"]})
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 200
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.selected_model == "a-1"
+        assert record.confidence is not None
+        assert record.signals is not None
+        assert "health_band" in record.decision_reason
+        # One real decision pass was recorded by the engine.
+        assert relay.decision_engine.stats()["decisions"] == 1
+
+    def test_chat_failure_records_failed_outcome(
+        self, wired_relay, fake_registry, client
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(
+            fake_registry,
+            "A",
+            {"a-1": [ProviderHTTPError(503, "down")]},
+        )
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/chat",
+            json={"message": "hello"},
+        )
+
+        assert response.status_code == 502
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.outcome == "failed"
+        assert record.selected_provider == "A"
+        assert record.selected_model == "a-1"
 
 
 class TestRegressionChatEndpoint:

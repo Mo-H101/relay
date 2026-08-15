@@ -111,6 +111,7 @@ class TestDiagnosticsEndpoint:
             "scoring",
             "adaptive",
             "quality",
+            "actual_decisions",
             "persistence",
         }
         assert payload["generated_at"]
@@ -124,6 +125,84 @@ class TestDiagnosticsEndpoint:
 
         assert response.status_code == 200
         assert response.json()["scoring"]["decision"]["task"] == "coding"
+
+
+class TestActualDecisionsSection:
+    """
+    Phase 8C: the diagnostics snapshot surfaces recent actual routing
+    decision records. Read-only, bounded, metadata only, and gated by the
+    same store the /decision/explain/actual endpoint serves.
+    """
+
+    def _record(self, relay, cid, model="a-1"):
+        from app.services.decision_record import record_actual_decision
+
+        provider = make_provider("A", ["a-1"])
+        record_actual_decision(
+            relay.decision_record_store,
+            correlation_id=cid,
+            requested_model=None,
+            routed_task=None,
+            routed=True,
+            candidates=[(provider, "a-1")],
+            provider="A",
+            model=model,
+            attempts=[
+                {"provider": "A", "model": model, "success": True,
+                 "latency_ms": 5}
+            ],
+            outcome="succeeded",
+        )
+
+    def test_empty_when_no_records(self, wired_relay, client):
+        relay = wired_relay()
+        relay.provider_manager.register(make_provider("A", ["a-1"]))
+
+        response = client.get("/diagnostics")
+
+        section = response.json()["actual_decisions"]
+        assert section["available"] is True
+        assert section["records"] == []
+
+    def test_recent_records_surfaced_metadata_only(self, wired_relay, client):
+        relay = wired_relay()
+        relay.provider_manager.register(make_provider("A", ["a-1"]))
+        self._record(relay, "req-1")
+        self._record(relay, "req-2")
+
+        response = client.get("/diagnostics")
+
+        section = response.json()["actual_decisions"]
+        assert section["available"] is True
+        assert section["limit"] == 50
+        assert section["max_records"] == relay.decision_record_store.max_records
+        assert [r["correlation_id"] for r in section["records"]] == [
+            "req-1",
+            "req-2",
+        ]
+        assert section["records"][-1]["selected_model"] == "a-1"
+        assert section["records"][-1]["outcome"] == "succeeded"
+        # Metadata only: no prompts, responses, content, or credentials.
+        raw = json.dumps(section)
+        assert "api_key" not in raw
+        assert "sk-secret" not in raw
+        assert "prompt" not in raw
+        assert "content" not in raw
+
+    def test_records_bounded(self, wired_relay, client):
+        relay = wired_relay()
+        relay.provider_manager.register(make_provider("A", ["a-1"]))
+
+        for i in range(60):
+            self._record(relay, f"req-{i}", model="a-1")
+
+        response = client.get("/diagnostics")
+
+        records = response.json()["actual_decisions"]["records"]
+        assert len(records) == 50
+        # Most recent 50 are kept; the oldest are evicted from the output.
+        assert records[0]["correlation_id"] == "req-10"
+        assert records[-1]["correlation_id"] == "req-59"
 
 
 class TestProvidersSection:

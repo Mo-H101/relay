@@ -24,6 +24,11 @@ from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
 from app.services.scoring import CandidateScorer
 
+# Bound on actual-decision records surfaced in one diagnostics snapshot.
+# The store itself is already bounded (DecisionRecordStore.max_records);
+# this keeps the snapshot payload small even at that bound.
+_ACTUAL_DECISIONS_LIMIT = 50
+
 
 class DiagnosticsService:
     """
@@ -43,6 +48,7 @@ class DiagnosticsService:
             "scoring": self._scoring(relay, task),
             "adaptive": self._adaptive(relay),
             "quality": self._quality(relay),
+            "actual_decisions": self._actual_decisions(relay),
             "persistence": self._persistence(relay),
         }
 
@@ -359,6 +365,31 @@ class DiagnosticsService:
                 }
                 for state in states[:50]
             ],
+        }
+
+    def _actual_decisions(self, relay) -> dict:
+        """
+        Recent actual routing decision records (Phase 7/8 orchestration
+        truth layer): the executed provider/model per request, the
+        ordered candidate pool, ranks, and per-attempt metadata. Read-only
+        and bounded (only the most recent records are surfaced). Metadata
+        only: no prompts, responses, content, or credentials — the same
+        surface the /decision/explain/actual endpoint serves.
+        """
+        store = getattr(relay, "decision_record_store", None)
+
+        if store is None:
+            return {
+                "available": False,
+                "limit": _ACTUAL_DECISIONS_LIMIT,
+                "records": [],
+            }
+
+        return {
+            "available": True,
+            "limit": _ACTUAL_DECISIONS_LIMIT,
+            "max_records": store.max_records,
+            "records": store.snapshot(limit=_ACTUAL_DECISIONS_LIMIT),
         }
 
     def _quality(self, relay) -> dict:

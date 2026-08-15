@@ -12,7 +12,7 @@ from app.services.candidate_builder import CandidateBuilder
 from app.services.chat_service import ChatService
 from app.services.async_chat_service import AsyncChatService
 from app.services.decision_engine import DecisionEngine
-from app.services.decision_record import DecisionRecordStore
+from app.services.decision_record import DecisionRecordStore, record_actual_decision
 from app.services.routing import RoutingEngine
 from app.services.log_service import RequestLogger
 from app.services.telemetry import TelemetryStore
@@ -373,8 +373,9 @@ class Relay:
 
         candidates = self.candidate_builder.build(providers, task=task)
 
+        decision_result = None
         if self.decision_engine.enabled:
-            self.decision_engine.decide(providers, task=task)
+            decision_result = self.decision_engine.decide(providers, task=task)
 
         turn = self.begin_continuity_turn(continuity_scope)
 
@@ -395,6 +396,19 @@ class Relay:
 
         if settings.health_feedback_enabled:
             self._record_feedback(result)
+
+        self._record_actual_decision(
+            correlation_id=cid,
+            requested_model=None,
+            routed_task=task,
+            routed=True,
+            candidates=candidates,
+            provider=result.get("provider") or "",
+            model=result.get("model") or "",
+            attempts=result.get("attempts"),
+            outcome="succeeded" if result.get("success") else "failed",
+            decision_result=decision_result,
+        )
 
         return result
 
@@ -427,8 +441,9 @@ class Relay:
 
         candidates = self.candidate_builder.build(providers, task=task)
 
+        decision_result = None
         if self.decision_engine.enabled:
-            self.decision_engine.decide(providers, task=task)
+            decision_result = self.decision_engine.decide(providers, task=task)
 
         turn = self.begin_continuity_turn(continuity_scope)
 
@@ -450,7 +465,60 @@ class Relay:
         if settings.health_feedback_enabled:
             self._record_feedback(result)
 
+        self._record_actual_decision(
+            correlation_id=cid,
+            requested_model=None,
+            routed_task=task,
+            routed=True,
+            candidates=candidates,
+            provider=result.get("provider") or "",
+            model=result.get("model") or "",
+            attempts=result.get("attempts"),
+            outcome="succeeded" if result.get("success") else "failed",
+            decision_result=decision_result,
+        )
+
         return result
+
+    def _record_actual_decision(
+        self,
+        *,
+        correlation_id: str,
+        requested_model: str | None,
+        routed_task: str | None,
+        routed: bool,
+        candidates,
+        provider: str,
+        model: str,
+        attempts,
+        outcome: str,
+        decision_result=None,
+    ) -> None:
+        """
+        Record the decision the legacy /chat path actually made via the
+        shared decision_record implementation, so /chat produces the same
+        actual-decision truth surface as /v1. Never raises and never
+        changes routing: this is observability only.
+        """
+        try:
+            record_actual_decision(
+                self.decision_record_store,
+                correlation_id=correlation_id,
+                requested_model=requested_model,
+                routed_task=routed_task,
+                routed=routed,
+                candidates=candidates,
+                provider=provider,
+                model=model,
+                attempts=attempts,
+                outcome=outcome,
+                decision_result=decision_result,
+            )
+        except Exception:  # noqa: BLE001 - decision truth must never break chat
+            _logger.warning(
+                "actual-decision recording failed for %s; continuing",
+                correlation_id,
+            )
 
     def _record_telemetry(self, result: dict) -> None:
         """

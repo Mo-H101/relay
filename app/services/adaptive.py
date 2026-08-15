@@ -10,6 +10,14 @@ telemetry, health, or routing state, and it is provider-agnostic.
 The scoring itself is done by CandidateScorer using the adaptive
 signals; this service exists so diagnostics can expose the learned state
 without duplicating the EWMA math. Everything here is metadata only.
+
+Status (Phase 8D): dormant/redundant for production ordering. The
+production scorer reads the same authoritative EWMA estimates
+(``TelemetryStats.ewma_success`` / ``ewma_latency_ms``) directly from the
+telemetry store, gated by ``adaptive_min_samples``, so this service adds
+no unique production functionality. It is intentionally NOT wired into
+the routing path; it remains a diagnostics-only derivation layer. Do not
+add redundant adaptive calculations to give it a production call site.
 """
 
 from dataclasses import dataclass

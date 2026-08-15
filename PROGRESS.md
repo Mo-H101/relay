@@ -5,10 +5,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `3a6ed85` + local work (actual-decision record / Phase 7).
-- **Suite:** 2497 passed, 8 skipped, 0 failed on the other device
-  (Python 3.14). On the SD-card-backed device (Python 3.13.5) the suite
-  shows **1 environment-dependent flake** — see Known failures below.
+- **HEAD:** `c41cd22` + local work (Phase 8B–8D, uncommitted).
+- **Suite:** 2545 passed, 8 skipped, 0 failed (Python 3.13.5, full suite
+  in 8 min). The known SD-card sqlite concurrency flake did not trigger
+  on this run.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -19,7 +19,7 @@ Base all work on: current code + this file + `git log --oneline -10`.
   fails under a full-suite run on this SD-card-backed device (sqlite
   `busy_timeout=5000` exceeded by 8 concurrent opens under load). Passes
   in isolation and on the other device. Environment-dependent, **not**
-  changed or papered over in Phase 7.
+  changed or papered over in Phase 8.
 
 ## What is done
 
@@ -57,6 +57,32 @@ Base all work on: current code + this file + `git log --oneline -10`.
   correlation-id-looked-up record (404 when absent); `GET /decision/explain`
   stays predictive. Routing behavior unchanged. Status: **implemented and
   verified** by focused + full-suite tests.
+- **Phase 8 — Decision truth integration (8B–8D, implemented + verified):**
+  - **8B (completed/verified)** — legacy `/chat` actual-decision recording.
+    The Phase 7 `_record_actual_decision` was extracted into the shared
+    `record_actual_decision(store, ...)` in `app/services/decision_record.py`;
+    `/v1` now delegates to it and `relay.chat()`/`relay.achat()` record the
+    executed candidate for the legacy path (capturing the previously
+    discarded `decide()` result). Routing, ordering, retry/failover, and
+    explicit-passthrough behavior unchanged.
+  - **8C (completed/verified)** — read-only diagnostics surface: the
+    `/diagnostics` snapshot now includes a bounded `actual_decisions`
+    section (most recent 50 records, metadata only) served from the same
+    `DecisionRecordStore` the `/decision/explain/actual` endpoint uses.
+  - **8D (investigation complete — Outcome B)** — `AdaptiveWeights`
+    (`app/services/adaptive.py`) is **dormant/redundant for production
+    ordering**: the production `CandidateScorer` already consumes the same
+    authoritative EWMA estimates (`TelemetryStats.ewma_success` /
+    `ewma_latency_ms`) directly from the telemetry store, gated by
+    `adaptive_min_samples`. `AdaptiveWeights` is used only by diagnostics/
+    tests and adds no unique production functionality; it stays an
+    observability-only derivation layer (documented in its module docstring).
+    No production call site was added. Eventual removal proposed separately.
+  - **8E (verified)** — full suite green (2545 passed, 8 skipped, 0
+    failed). Routing equivalence (phase0), candidate-builder health,
+    adaptive routing, sync/async parity, retry/failover, passthrough,
+    virtual routing, decision engine/record, continuity, and API suites
+    all pass unchanged.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
@@ -65,14 +91,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## What is next (candidate backlog)
 
-- **Per-request decision explanation (Problem F):** *partially
-  implemented* — actual-decision records + `/decision/explain/actual`
-  exist for `/v1`; the legacy `/chat` path still discards `decide()` and
-  records no actual decision, and the records are not yet surfaced in
-  `/diagnostics`.
-- Adaptive weights subsystem (`app/services/adaptive.py`) still has no
-  production call site (only diagnostics/tests import it). Wire it or
-  explicitly document it as dormant (Problem G).
+- **Problem F (mostly done in Phase 8):** `/v1` and `/chat` both record
+  actual decisions and `/diagnostics` surfaces them. Remaining: nothing
+  in this phase — handoff/context-compaction/project-persistence and
+  cross-client continuity changes are explicitly later phases.
+- **AdaptiveWeights (Problem G):** resolved as **dormant/redundant**
+  (Outcome B) in Phase 8D. Propose eventual removal as a separate,
+  independent change; do not wire it into production ordering.
 - Continuity reachability + client docs: continuity requires
   `CONTINUITY_ENABLED` AND a store-backed key; bootstrap/unauthenticated
   traffic gets none. Client guides do not document the
@@ -81,6 +106,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
   extending to bootstrap keys) so hand-off is demonstrable (Problem H).
 - Final release prep / README / release-candidate checklist as needed.
 
+## Next architectural work (Phase 9+ candidates, unverified)
+
+- Model handoff, context compaction, project persistence, and
+  cross-client continuity (explicitly out of scope for Phase 8).
+- Actual-decision records remain bounded in-memory; a durable schema is
+  a later decision only if justified.
+
 ## Key decisions
 
 - Privacy contract (Option C) is binding: no conversation content is ever
@@ -88,6 +120,12 @@ Base all work on: current code + this file + `git log --oneline -10`.
   (P9f approach).
 - `/v1` keeps verbatim passthrough for literal upstream model ids; routing
   applies only to virtual/task/omitted models.
+- **One authoritative routing/execution plan (Phase 8 invariant):** task
+  classification → CandidateBuilder/RoutingEngine → CandidateScorer /
+  health/adaptive signals → ordered execution plan → ChatService
+  execution/failover. The DecisionEngine is an analysis/observability
+  layer only — it must NOT become an independent authoritative router, and
+  no second ordering authority is introduced.
 - Decision engine is observational by design; ordering is owned by
   CandidateBuilder/CandidateScorer.
 - Actual-decision records are metadata only and describe the *executed*

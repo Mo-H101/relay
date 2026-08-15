@@ -274,6 +274,72 @@ def decision_score_for(
     return None
 
 
+def record_actual_decision(
+    store,
+    *,
+    correlation_id: str,
+    requested_model: Optional[str],
+    routed_task: Optional[str],
+    routed: bool,
+    candidates,
+    provider: str,
+    model: str,
+    attempts,
+    outcome: str,
+    decision_result=None,
+) -> None:
+    """
+    Record the decision a completed request actually made: the
+    (provider, model) that executed, the ordered candidate pool, and
+    (when the decision engine produced scores) its reason/confidence/
+    signals for the *executed* candidate. Metadata only; the correlation
+    id ties the record to the request.
+
+    This is the single shared implementation for every request surface
+    (/v1 passthrough and routed paths, and the legacy /chat path), so the
+    actual-decision truth surface can never drift between endpoints.
+    """
+    ranked = build_candidates(candidates)
+    attempts_meta = build_attempts(attempts)
+    rank = selected_rank(provider, model, ranked)
+    score = decision_score_for(decision_result, provider, model)
+
+    if score is not None:
+        reason = score.reason
+        confidence = score.confidence
+        signals = dict(score.contributions)
+    else:
+        reason = None
+        confidence = None
+        signals = None
+
+    if reason is None:
+        if not routed:
+            reason = "explicit upstream model passthrough"
+        elif rank == 1:
+            reason = "routed to top-ranked candidate"
+        else:
+            reason = f"routed; executed candidate rank {rank}"
+
+    record = DecisionRecord(
+        correlation_id=correlation_id,
+        timestamp=time.time(),
+        requested_model=requested_model,
+        classified_task=routed_task,
+        routed=routed,
+        selected_provider=provider,
+        selected_model=model,
+        candidates=ranked,
+        attempts=attempts_meta,
+        outcome=outcome,
+        selected_rank=rank,
+        decision_reason=reason,
+        confidence=confidence,
+        signals=signals,
+    )
+    store.record(record)
+
+
 __all__ = [
     "DecisionAttempt",
     "DecisionCandidate",
@@ -282,5 +348,6 @@ __all__ = [
     "build_attempts",
     "build_candidates",
     "decision_score_for",
+    "record_actual_decision",
     "selected_rank",
 ]

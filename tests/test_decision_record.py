@@ -17,6 +17,7 @@ from app.services.decision_record import (
     build_attempts,
     build_candidates,
     decision_score_for,
+    record_actual_decision,
     selected_rank,
 )
 from app.services.memory_contract import contains_never_captured
@@ -282,3 +283,146 @@ class TestDecisionScoreLookup:
         assert decision_score_for(FakeResult(), "B", "b-1").model == "b-1"
         assert decision_score_for(FakeResult(), "C", "c-1") is None
         assert decision_score_for(None, "A", "a-1") is None
+
+
+class _FakeDecisionScore:
+    def __init__(self, provider, model, reason, confidence, contributions):
+        self.provider = provider
+        self.model = model
+        self.reason = reason
+        self.confidence = confidence
+        self.contributions = contributions
+
+
+class _FakeDecisionResult:
+    ranked = [
+        _FakeDecisionScore(
+            "A", "a-1", "health_band=0 confidence=1.00 signals=priority",
+            1.0, {"priority": 1.0, "cost": 0.0},
+        ),
+        _FakeDecisionScore(
+            "B", "b-1", "health_band=1 confidence=0.50 signals=priority",
+            0.5, {"priority": 0.8, "cost": 0.0},
+        ),
+    ]
+
+
+class TestRecordActualDecision:
+    """
+    Phase 8B: the shared actual-decision recorder is the single truth
+    surface for both /v1 and the legacy /chat path. It records the
+    executed candidate (post-failover), the ordered pool, per-attempt
+    metadata, and the engine score for the executed candidate only.
+    """
+
+    def _candidates(self):
+        return [(make_provider("A", ["a-1"]), "a-1"),
+                (make_provider("B", ["b-1"]), "b-1")]
+
+    def _attempts(self):
+        return [
+            {"provider": "A", "model": "a-1", "success": False,
+             "latency_ms": 5, "failure_type": "timeout", "reason": "x"},
+            {"provider": "B", "model": "b-1", "success": True,
+             "latency_ms": 9, "failure_type": None},
+        ]
+
+    def test_records_executed_candidate_and_reason_fallback(self):
+        store = DecisionRecordStore()
+
+        record_actual_decision(
+            store,
+            correlation_id="chat-1",
+            requested_model=None,
+            routed_task=None,
+            routed=True,
+            candidates=self._candidates(),
+            provider="B",
+            model="b-1",
+            attempts=self._attempts(),
+            outcome="succeeded",
+        )
+
+        record = store.most_recent()
+        assert record.correlation_id == "chat-1"
+        assert record.routed is True
+        assert record.selected_provider == "B"
+        assert record.selected_model == "b-1"
+        assert record.selected_rank == 2
+        assert record.outcome == "succeeded"
+        assert record.decision_reason == "routed; executed candidate rank 2"
+        assert record.confidence is None
+        assert record.signals is None
+        # The pool and attempts are captured in order; failure reasons are
+        # dropped from the metadata surface.
+        assert [c.provider for c in record.candidates] == ["A", "B"]
+        assert [(a.provider, a.model, a.success)
+                for a in record.attempts] == [
+            ("A", "a-1", False),
+            ("B", "b-1", True),
+        ]
+        assert not contains_never_captured(record.to_dict())
+
+    def test_records_engine_score_for_executed_candidate(self):
+        store = DecisionRecordStore()
+
+        record_actual_decision(
+            store,
+            correlation_id="chat-2",
+            requested_model=None,
+            routed_task="coding",
+            routed=True,
+            candidates=self._candidates(),
+            provider="B",
+            model="b-1",
+            attempts=self._attempts(),
+            outcome="succeeded",
+            decision_result=_FakeDecisionResult,
+        )
+
+        record = store.most_recent()
+        assert record.classified_task == "coding"
+        # The score is for the executed candidate (B), never the predicted
+        # top candidate (A).
+        assert record.confidence == 0.5
+        assert record.signals == {"priority": 0.8, "cost": 0.0}
+        assert "health_band=1" in record.decision_reason
+
+    def test_passthrough_records_explicit_reason(self):
+        store = DecisionRecordStore()
+
+        record_actual_decision(
+            store,
+            correlation_id="passthrough-1",
+            requested_model="a-1",
+            routed_task=None,
+            routed=False,
+            candidates=self._candidates()[:1],
+            provider="A",
+            model="a-1",
+            attempts=[{"provider": "A", "model": "a-1",
+                       "success": True, "latency_ms": 4}],
+            outcome="succeeded",
+        )
+
+        record = store.most_recent()
+        assert record.routed is False
+        assert record.decision_reason == "explicit upstream model passthrough"
+
+    def test_failed_outcome_recorded(self):
+        store = DecisionRecordStore()
+
+        record_actual_decision(
+            store,
+            correlation_id="chat-fail",
+            requested_model=None,
+            routed_task=None,
+            routed=True,
+            candidates=self._candidates(),
+            provider="A",
+            model="a-1",
+            attempts=self._attempts(),
+            outcome="failed",
+        )
+
+        assert store.most_recent().outcome == "failed"

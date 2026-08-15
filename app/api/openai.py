@@ -11,13 +11,7 @@ from app.services.continuity_headers import (
     resolve_scope,
 )
 from app.services.correlation import new_correlation_id
-from app.services.decision_record import (
-    DecisionRecord,
-    build_attempts,
-    build_candidates,
-    decision_score_for,
-    selected_rank,
-)
+from app.services.decision_record import record_actual_decision
 from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
@@ -362,51 +356,23 @@ def _record_actual_decision(
     decision_result=None,
 ) -> None:
     """
-    Record the decision a completed /v1 request actually made: the
-    (provider, model) that executed, the ordered candidate pool, and
-    (when the decision engine produced scores) its reason/confidence/
-    signals for the *executed* candidate. Metadata only; the correlation
-    id ties the record to the request.
+    Record the decision a completed /v1 request actually made. Thin
+    delegate to the shared implementation in decision_record so the
+    /v1 and legacy /chat surfaces produce identical records.
     """
-    ranked = build_candidates(candidates)
-    attempts_meta = build_attempts(attempts)
-    rank = selected_rank(provider, model, ranked)
-    score = decision_score_for(decision_result, provider, model)
-
-    if score is not None:
-        reason = score.reason
-        confidence = score.confidence
-        signals = dict(score.contributions)
-    else:
-        reason = None
-        confidence = None
-        signals = None
-
-    if reason is None:
-        if not routed:
-            reason = "explicit upstream model passthrough"
-        elif rank == 1:
-            reason = "routed to top-ranked candidate"
-        else:
-            reason = f"routed; executed candidate rank {rank}"
-
-    record = DecisionRecord(
+    record_actual_decision(
+        relay.decision_record_store,
         correlation_id=correlation_id,
-        timestamp=time.time(),
         requested_model=requested_model,
-        classified_task=routed_task,
+        routed_task=routed_task,
         routed=routed,
-        selected_provider=provider,
-        selected_model=model,
-        candidates=ranked,
-        attempts=attempts_meta,
+        candidates=candidates,
+        provider=provider,
+        model=model,
+        attempts=attempts,
         outcome=outcome,
-        selected_rank=rank,
-        decision_reason=reason,
-        confidence=confidence,
-        signals=signals,
+        decision_result=decision_result,
     )
-    relay.decision_record_store.record(record)
 
 
 @router.post("/v1/chat/completions")
