@@ -637,6 +637,11 @@ def test_sdist_build_excludes_tests_and_bench(tmp_path_factory):
 
 
 @pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="relay 0.1.0 artifact predates PEP 701 f-strings and "
+    "cannot run on Python < 3.12",
+)
+@pytest.mark.skipif(
     os.environ.get("RUN_PACKAGING_SMOKE") == "0",
     reason="disabled via RUN_PACKAGING_SMOKE=0",
 )
