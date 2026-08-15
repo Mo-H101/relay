@@ -12,6 +12,7 @@ from app.services.candidate_builder import CandidateBuilder
 from app.services.chat_service import ChatService
 from app.services.async_chat_service import AsyncChatService
 from app.services.decision_engine import DecisionEngine
+from app.services.decision_record import DecisionRecordStore
 from app.services.routing import RoutingEngine
 from app.services.log_service import RequestLogger
 from app.services.telemetry import TelemetryStore
@@ -87,6 +88,10 @@ class Relay:
         self.decision_engine = DecisionEngine(
             builder=self.candidate_builder,
         )
+        # Bounded in-memory store of the actual decisions requests made
+        # (Phase 7 orchestration truth layer). Metadata only, never
+        # persisted; old records are evicted past the bound.
+        self.decision_record_store = DecisionRecordStore()
         self.chat_service = ChatService()
         self.async_chat_service = AsyncChatService()
         self.request_logger = RequestLogger()

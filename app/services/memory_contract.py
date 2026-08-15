@@ -59,6 +59,7 @@ MEMORY_SURFACES = {
     "task_classifications": MemoryClass.EPHEMERAL,
     "decision_scores": MemoryClass.EPHEMERAL,
     "decision_explanations": MemoryClass.EPHEMERAL,
+    "decision_records": MemoryClass.EPHEMERAL,
     # Never: forbidden anywhere, in any memory class.
     "prompts": MemoryClass.NEVER,
     "responses": MemoryClass.NEVER,

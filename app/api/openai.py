@@ -11,6 +11,13 @@ from app.services.continuity_headers import (
     resolve_scope,
 )
 from app.services.correlation import new_correlation_id
+from app.services.decision_record import (
+    DecisionRecord,
+    build_attempts,
+    build_candidates,
+    decision_score_for,
+    selected_rank,
+)
 from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
@@ -341,6 +348,67 @@ def _generation_kwargs(req: OpenAIChatCompletionRequest) -> dict:
     return kwargs
 
 
+def _record_actual_decision(
+    *,
+    correlation_id: str,
+    requested_model: str | None,
+    routed_task: str | None,
+    routed: bool,
+    candidates,
+    provider: str,
+    model: str,
+    attempts,
+    outcome: str,
+    decision_result=None,
+) -> None:
+    """
+    Record the decision a completed /v1 request actually made: the
+    (provider, model) that executed, the ordered candidate pool, and
+    (when the decision engine produced scores) its reason/confidence/
+    signals for the *executed* candidate. Metadata only; the correlation
+    id ties the record to the request.
+    """
+    ranked = build_candidates(candidates)
+    attempts_meta = build_attempts(attempts)
+    rank = selected_rank(provider, model, ranked)
+    score = decision_score_for(decision_result, provider, model)
+
+    if score is not None:
+        reason = score.reason
+        confidence = score.confidence
+        signals = dict(score.contributions)
+    else:
+        reason = None
+        confidence = None
+        signals = None
+
+    if reason is None:
+        if not routed:
+            reason = "explicit upstream model passthrough"
+        elif rank == 1:
+            reason = "routed to top-ranked candidate"
+        else:
+            reason = f"routed; executed candidate rank {rank}"
+
+    record = DecisionRecord(
+        correlation_id=correlation_id,
+        timestamp=time.time(),
+        requested_model=requested_model,
+        classified_task=routed_task,
+        routed=routed,
+        selected_provider=provider,
+        selected_model=model,
+        candidates=ranked,
+        attempts=attempts_meta,
+        outcome=outcome,
+        selected_rank=rank,
+        decision_reason=reason,
+        confidence=confidence,
+        signals=signals,
+    )
+    relay.decision_record_store.record(record)
+
+
 @router.post("/v1/chat/completions")
 async def openai_chat_completion(
     req: OpenAIChatCompletionRequest = Body(...),
@@ -392,9 +460,13 @@ async def openai_chat_completion(
     # Decision observability (parity with /chat): when the request was
     # routed through Relay's candidate machinery and the decision engine
     # is enabled, record a decision pass over the same pool. Ordering is
-    # unchanged; the engine is a scoring/observability layer.
+    # unchanged; the engine is a scoring/observability layer. The result
+    # feeds the actual-decision record for the candidate that executes.
+    decision_result = None
     if routed and relay.decision_engine.enabled:
-        relay.decision_engine.decide(providers, task=routed_task)
+        decision_result = relay.decision_engine.decide(
+            providers, task=routed_task
+        )
 
     # 3. Build the verbatim wire payload from the request.
     payload = req.to_provider_payload()
@@ -426,6 +498,18 @@ async def openai_chat_completion(
                 ),
                 _used_kwargs(gen_kwargs),
             )
+            _record_actual_decision(
+                correlation_id=correlation_id,
+                requested_model=req.model,
+                routed_task=routed_task,
+                routed=routed,
+                candidates=candidates,
+                provider=result.get("provider") or "",
+                model=result.get("model") or "",
+                attempts=result.get("attempts"),
+                outcome="failed",
+                decision_result=decision_result,
+            )
             return _openai_error_response(
                 502,
                 result["error"],
@@ -439,6 +523,19 @@ async def openai_chat_completion(
         stream_model = result.get("model") or req.model
         stream_gen = result["stream_gen"]
         continuity_sse = _sse_continuity_events(result)
+
+        _record_actual_decision(
+            correlation_id=correlation_id,
+            requested_model=req.model,
+            routed_task=routed_task,
+            routed=routed,
+            candidates=candidates,
+            provider=provider_name,
+            model=stream_model,
+            attempts=result.get("attempts"),
+            outcome="stream_started",
+            decision_result=decision_result,
+        )
 
         # Stable identifiers across the whole stream, plus passthrough of
         # provider deltas, finish_reason, tool_call deltas, and usage.
@@ -496,6 +593,10 @@ async def openai_chat_completion(
                     _used_kwargs(gen_kwargs),
                     success=success,
                 )
+                relay.decision_record_store.update(
+                    correlation_id,
+                    outcome="succeeded" if success else "failed",
+                )
 
         headers = {_CORRELATION_HEADER: correlation_id}
         headers.update(_continuity_headers(result))
@@ -542,6 +643,18 @@ async def openai_chat_completion(
             latency_ms,
             _used_kwargs(gen_kwargs),
         )
+        _record_actual_decision(
+            correlation_id=correlation_id,
+            requested_model=req.model,
+            routed_task=routed_task,
+            routed=routed,
+            candidates=candidates,
+            provider=result.get("provider") or "",
+            model=result.get("model") or "",
+            attempts=result.get("attempts"),
+            outcome="failed",
+            decision_result=decision_result,
+        )
         return _openai_error_response(
             502,
             result.get("error", "Provider error"),
@@ -557,6 +670,19 @@ async def openai_chat_completion(
         result,
         latency_ms,
         _used_kwargs(gen_kwargs),
+    )
+
+    _record_actual_decision(
+        correlation_id=correlation_id,
+        requested_model=req.model,
+        routed_task=routed_task,
+        routed=routed,
+        candidates=candidates,
+        provider=result.get("provider") or "",
+        model=result.get("model") or "",
+        attempts=result.get("attempts"),
+        outcome="succeeded",
+        decision_result=decision_result,
     )
 
     resp = result["response"]

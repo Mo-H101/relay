@@ -1195,6 +1195,402 @@ class TestOpenAIVirtualModelRouting:
         assert relay.decision_engine.stats()["decisions"] == 0
 
 
+class TestActualDecisionRecord:
+    """
+    Phase 7 orchestration truth layer: the /v1 request records the actual
+    decision (provider/model really executed), consistent with the wire
+    payload, and /decision/explain/actual serves it back.
+    """
+
+    def _wire_task_routing(self, monkeypatch, **task_refs):
+        monkeypatch.setattr(settings, "task_routing_enabled", True)
+        for name, refs in task_refs.items():
+            monkeypatch.setattr(settings, f"task_{name}", list(refs))
+
+    def test_coding_request_actual_decision(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["coding-model", "a-2"])
+        make_client(fake_registry, "A", {"coding-model": ["coding done"]})
+        self._wire_task_routing(monkeypatch, coding=["coding-model"])
+        monkeypatch.setattr(settings, "task_classification_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "user", "content": "write a python function"}
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "coding-model"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.classified_task == "coding"
+        assert record.routed is True
+        assert record.selected_provider == "A"
+        assert record.selected_model == "coding-model"
+        assert record.outcome == "succeeded"
+        assert record.requested_model is None
+        assert record.selected_rank == 1
+        assert record.selected_model == wire["model"]
+
+    def test_reasoning_request_actual_decision(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["reason-model", "a-2"])
+        make_client(fake_registry, "A", {"reason-model": ["reasoned"]})
+        self._wire_task_routing(monkeypatch, reasoning=["reason-model"])
+        monkeypatch.setattr(settings, "task_classification_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "user", "content": "solve this math logic puzzle"}
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "reason-model"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.classified_task == "reasoning"
+        assert record.selected_provider == "A"
+        assert record.selected_model == "reason-model"
+        assert record.outcome == "succeeded"
+        assert record.selected_model == wire["model"]
+
+    def test_general_request_actual_decision(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["general-model"])
+        make_client(fake_registry, "A", {"general-model": ["generic reply"]})
+        self._wire_task_routing(monkeypatch, general=["general-model"])
+        monkeypatch.setattr(settings, "task_classification_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hello there"}]
+            },
+        )
+
+        assert response.status_code == 200
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "general-model"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.classified_task == "general"
+        assert record.selected_model == "general-model"
+        assert record.selected_model == wire["model"]
+
+    def test_explicit_model_passthrough_preserved(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(fake_registry, "A", {"a-1": ["verbatim reply"]})
+        monkeypatch.setattr(settings, "task_routing_enabled", True)
+        monkeypatch.setattr(settings, "task_coding", ["a-2"])
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "a-1",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "a-1"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.routed is False
+        assert record.requested_model == "a-1"
+        assert record.selected_model == "a-1"
+        assert record.selected_model == wire["model"]
+        assert record.decision_reason == (
+            "explicit upstream model passthrough"
+        )
+        # The decision engine still skips explicit passthrough.
+        assert relay.decision_engine.stats()["decisions"] == 0
+
+    @pytest.mark.parametrize("virtual", ["auto", "default", "relay"])
+    def test_virtual_models_route_and_record(
+        self, wired_relay, fake_registry, client, virtual
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["routed reply"]})
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": virtual,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "a-1"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.routed is True
+        assert record.requested_model == virtual
+        assert record.selected_model == "a-1"
+        assert record.selected_model == wire["model"]
+
+    def test_omitted_model_routes_and_records(
+        self, wired_relay, fake_registry, client
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["auto reply"]})
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        calls = fake_registry["A"].chat_calls
+        assert len(calls) == 1
+        _, wire = calls[0]
+        assert wire["model"] == "a-1"
+
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.routed is True
+        assert record.requested_model is None
+        assert record.selected_model == "a-1"
+        assert record.selected_model == wire["model"]
+
+    def test_failover_actual_decision_reports_executed_candidate(
+        self, wired_relay, fake_registry, client
+    ):
+        provider = make_provider("A", ["a-1", "a-2"])
+        make_client(
+            fake_registry,
+            "A",
+            {
+                "a-1": [ProviderError("a-1 unavailable")],
+                "a-2": ["recovered"],
+            },
+        )
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.selected_model == "a-2"
+        assert record.selected_rank == 2
+        assert record.outcome == "succeeded"
+        assert record.decision_reason == "routed; executed candidate rank 2"
+        assert len(record.attempts) >= 2
+        assert record.attempts[0].success is False
+        assert record.attempts[-1].success is True
+
+    def test_decision_engine_signals_attached_when_enabled(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["decided reply"]})
+        self._wire_task_routing(monkeypatch, coding=["a-1"])
+        monkeypatch.setattr(settings, "task_classification_enabled", True)
+        monkeypatch.setattr(settings, "decision_engine_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "user", "content": "write python code"}
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.classified_task == "coding"
+        assert record.selected_model == "a-1"
+        assert record.decision_reason is not None
+        assert "health_band=" in record.decision_reason
+        assert record.confidence is not None
+        assert record.signals is not None
+        assert "priority" in record.signals
+        # The engine pass still recorded statistics for the routed request.
+        assert relay.decision_engine.stats()["decisions"] == 1
+
+    def test_streaming_actual_decision_reports_final_outcome(
+        self, wired_relay, fake_registry, client
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["streamed"]})
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+
+        assert response.status_code == 200
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+        assert record.selected_model == "a-1"
+        assert record.outcome == "succeeded"
+
+
+class TestActualDecisionExplainEndpoint:
+    def test_actual_explain_disabled_by_default(self, wired_relay, client):
+        wired_relay(providers=[make_provider("A", ["a-1"])])
+
+        response = client.get("/decision/explain/actual")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "enabled": False,
+            "message": "Decision explanations are disabled.",
+        }
+
+    def test_actual_explain_returns_most_recent(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["reply"]})
+        monkeypatch.setattr(settings, "decision_explanations_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        correlation_id = response.headers["X-Relay-Correlation-Id"]
+        record = relay.decision_record_store.most_recent()
+        assert record is not None
+
+        explain = client.get("/decision/explain/actual")
+
+        assert explain.status_code == 200
+        payload = explain.json()
+        assert payload["correlation_id"] == correlation_id
+        assert payload["selected_model"] == "a-1"
+        assert payload["routed"] is True
+
+    def test_actual_explain_by_correlation_id(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["reply"]})
+        monkeypatch.setattr(settings, "decision_explanations_enabled", True)
+        relay = wired_relay(providers=[provider])
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+        assert response.status_code == 200
+        correlation_id = response.headers["X-Relay-Correlation-Id"]
+
+        explain = client.get(
+            "/decision/explain/actual",
+            params={"correlation_id": correlation_id},
+        )
+
+        assert explain.status_code == 200
+        assert explain.json()["correlation_id"] == correlation_id
+        assert explain.json()["selected_model"] == "a-1"
+
+    def test_actual_explain_unknown_correlation_404(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        make_client(fake_registry, "A", {"a-1": ["reply"]})
+        monkeypatch.setattr(settings, "decision_explanations_enabled", True)
+        wired_relay(providers=[make_provider("A", ["a-1"])])
+
+        explain = client.get(
+            "/decision/explain/actual",
+            params={"correlation_id": "does-not-exist"},
+        )
+
+        assert explain.status_code == 404
+
+    def test_actual_explain_empty_store_404(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        make_client(fake_registry, "A", {"a-1": ["reply"]})
+        monkeypatch.setattr(settings, "decision_explanations_enabled", True)
+        wired_relay(providers=[make_provider("A", ["a-1"])])
+
+        response = client.get("/decision/explain/actual")
+
+        assert response.status_code == 404
+
+    def test_predictive_explain_still_available(
+        self, wired_relay, fake_registry, client, monkeypatch
+    ):
+        provider = make_provider("A", ["a-1"])
+        make_client(fake_registry, "A", {"a-1": ["reply"]})
+        monkeypatch.setattr(settings, "decision_explanations_enabled", True)
+        wired_relay(providers=[provider])
+
+        response = client.get("/decision/explain")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["selected"] == {"provider": "A", "model": "a-1"}
+        assert "candidates" in payload
+        assert "generated_at" in payload
+
+
 class TestRegressionChatEndpoint:
     def test_chat_endpoint_unchanged(self, wired_relay, fake_registry, client):
         """Ensure the existing /chat endpoint still works and behaves identically."""

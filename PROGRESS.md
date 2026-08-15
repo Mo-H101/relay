@@ -5,12 +5,21 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `df4b127` — unified /v1 model interface, decision parity,
-  content-aware handoff (see commit message).
-- **Suite:** 2497 passed, 8 skipped, 0 failed (Python 3.14 / pydantic 2.12).
+- **HEAD:** `3a6ed85` + local work (actual-decision record / Phase 7).
+- **Suite:** 2497 passed, 8 skipped, 0 failed on the other device
+  (Python 3.14). On the SD-card-backed device (Python 3.13.5) the suite
+  shows **1 environment-dependent flake** — see Known failures below.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
+
+## Known failures / flakes
+
+- `test_platform_store.py::TestConcurrency::test_concurrent_opens_of_same_file`
+  fails under a full-suite run on this SD-card-backed device (sqlite
+  `busy_timeout=5000` exceeded by 8 concurrent opens under load). Passes
+  in isolation and on the other device. Environment-dependent, **not**
+  changed or papered over in Phase 7.
 
 ## What is done
 
@@ -33,6 +42,21 @@ Base all work on: current code + this file + `git log --oneline -10`.
   over-budget arrays before forwarding. Ephemeral only — never persisted,
   logged, exported, or surfaced in metrics/events; memory contract
   untouched.
+- **Phase 7 — Orchestration truth layer (implemented + verified on /v1):**
+  `app/services/decision_record.py` adds an explicit, metadata-only
+  `DecisionRecord` for what an actual `/v1/chat/completions` request did:
+  executed provider/model (post-failover), ordered candidate pool, ranks,
+  per-attempt metadata, classified task, correlation id, and (when
+  `DECISION_ENGINE_ENABLED`) the engine's reason/confidence/signals for
+  the *executed* candidate. `Relay.decision_record_store` is a bounded
+  in-memory `DecisionRecordStore` (never persisted; classified
+  `decision_records`/EPHEMERAL in the memory contract). The `/v1` handler
+  now captures the previously discarded `decide()` result and records
+  stream + non-stream outcomes (stream final outcome attached in place).
+  `GET /decision/explain/actual` serves the most recent or
+  correlation-id-looked-up record (404 when absent); `GET /decision/explain`
+  stays predictive. Routing behavior unchanged. Status: **implemented and
+  verified** by focused + full-suite tests.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
@@ -41,10 +65,11 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## What is next (candidate backlog)
 
-- Per-request decision explanation surface (Problem F): `/decision/explain`
-  is predictive, not a record of what a request actually did; the engine
-  now records stats on `/v1` but there is no per-request "why this model"
-  answer for clients/operators.
+- **Per-request decision explanation (Problem F):** *partially
+  implemented* — actual-decision records + `/decision/explain/actual`
+  exist for `/v1`; the legacy `/chat` path still discards `decide()` and
+  records no actual decision, and the records are not yet surfaced in
+  `/diagnostics`.
 - Adaptive weights subsystem (`app/services/adaptive.py`) still has no
   production call site (only diagnostics/tests import it). Wire it or
   explicitly document it as dormant (Problem G).
@@ -65,3 +90,6 @@ Base all work on: current code + this file + `git log --oneline -10`.
   applies only to virtual/task/omitted models.
 - Decision engine is observational by design; ordering is owned by
   CandidateBuilder/CandidateScorer.
+- Actual-decision records are metadata only and describe the *executed*
+  candidate (post-failover), never a predicted one; they are bounded
+  in-memory (no persistence) until a later phase justifies a schema.

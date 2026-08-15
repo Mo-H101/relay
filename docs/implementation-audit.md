@@ -193,3 +193,19 @@ This is the key decision to confirm before Phases 5/6.
   untouched.
 - Remaining: Phase 7 (CI branch fix) is applied (`main` → `master`),
   docs/release prep, and a final full-suite verification of Phases 4–6.
+- **Phase 7 done (2026-08-15): orchestration truth layer.** A new
+  metadata-only actual-decision record (`app/services/decision_record.py`:
+  `DecisionRecord` + bounded in-memory `DecisionRecordStore`) now records
+  what a completed `/v1/chat/completions` request *actually* did: the
+  executed provider/model (after failover), the ordered candidate pool,
+  per-attempt metadata, the classified task, the correlation id, and
+  (when `DECISION_ENGINE_ENABLED`) the engine's reason/confidence/signals
+  for the executed candidate. The `/v1` handler captures the previously
+  discarded `DecisionEngine.decide()` result and records both stream and
+  non-stream outcomes (streams attach their final outcome in place).
+  `GET /decision/explain/actual` serves the most recent actual decision
+  or one looked up by correlation id (404 when absent), distinct from the
+  predictive `GET /decision/explain`. No routing, scoring, health,
+  adaptive, or fallback behavior changed; nothing is persisted (the store
+  is bounded in-memory, classified `decision_records`/EPHEMERAL under the
+  memory contract).

@@ -189,6 +189,16 @@ can be resumed without re-executing acknowledged work.
 - The ops store keeps a bounded rolling window of request metadata
   (timestamps, routes, statuses, latencies, provider/model) sized by
   `OPS_WINDOW_SECONDS` / `OPS_MAX_EVENTS`.
+- **Actual decision records (Phase 7):** for every completed `/v1`
+  request, a bounded in-memory `DecisionRecordStore`
+  (`app/services/decision_record.py`) holds the decision the request
+  *actually* made: executed provider/model (after failover), ordered
+  candidate pool, per-attempt metadata, classified task, correlation id,
+  and (when the decision engine is enabled) the engine's
+  reason/confidence/signals for the executed candidate.
+  `GET /decision/explain/actual` serves the most recent record or one by
+  correlation id; `GET /decision/explain` remains predictive. Records are
+  metadata only and never persisted.
 
 ## Configuration reload
 

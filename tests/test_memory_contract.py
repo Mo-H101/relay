@@ -44,6 +44,7 @@ class TestMemoryClasses:
             "task_classifications",
             "decision_scores",
             "decision_explanations",
+            "decision_records",
         ]
 
         for surface in ephemeral:
