@@ -5,17 +5,24 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `a5703a2` — `docs: update progress state to pushed remediation
-  HEAD` (committed and pushed to `origin/master`).
+- **HEAD:** `f93c112` — `test: skip wheel-upgrade check on Python < 3.12
+  (0.1.0 artifact is pre-PEP 701)` (committed and pushed to
+  `origin/master`).
 - **Working tree:** clean.
+- **CI is green** on all matrix jobs (ubuntu Python 3.11/3.12/3.13,
+  windows Python 3.12, packaging) — run #10 (`31907969693`) fully passed
+  after the `f93c112` packaging-test skip.
 - **Recent history:** Phase 7 at `c41cd22` (actual decision records for
   `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
   doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity);
-  CI/3.10–3.11 remediation at `9a8d9d5`; doc state update at `a5703a2`.
+  CI/3.10–3.11 remediation at `9a8d9d5`; doc state updates at `a5703a2`
+  and `3dbeec8`; packaging-test 3.11 skip at `f93c112`.
+- **Phase 9B has NOT started.**
+- **Deferred:** the SQLite platform-store concurrency/SIGBUS issue (see
+  Known failures below) is intentionally **not** fixed; do not treat it
+  as resolved.
 - **Baseline suite:** 2558 passed, 8 skipped, 0 failed (Python 3.13.5,
   full suite in ~9.5 min), re-verified after the Phase 9A additions.
-  The SD-card sqlite concurrency flake is intermittent — see Known
-  failures below.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -29,6 +36,14 @@ Base all work on: current code + this file + `git log --oneline -10`.
   the Phase 8 verification run, but triggered on one review re-run
   (2544 passed + this flake, 0 real failures). Environment-dependent,
   **not** changed or papered over in Phase 8.
+- **CI manifestation / deferred (deliberately unfixed):** on ubuntu
+  Python 3.11 the same test crashed the interpreter with `Fatal Python
+  error: Bus error` (SIGBUS, exit 135) in CI run #9, in
+  `platform_store.open_connection()` — `PRAGMA journal_mode = WAL`
+  runs outside `_migration_lock` (race on a fresh DB with 8 threads).
+  Diagnosis accepted, fix **deferred** to a separate production-code
+  investigation. Do not treat this as fixed; CI is green only because
+  the SIGBUS is intermittent (did not fire in runs #7/#8/#10).
 
 ## What is done
 
@@ -155,6 +170,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Verified:** `compileall -q app tests` green on Python 3.11.15 and
     3.14.6; full suite 2558 passed, 8 skipped, 0 failed (Python 3.14);
     packaging suite green incl. the wheel-upgrade regression test.
+- **Packaging-test 3.11 skip (`f93c112`):** `test_wheel_upgrade_from_previous_release`
+  builds the old 0.1.0 wheel from `_PREVIOUS_RELEASE_TREE` (`dbc2902`),
+  whose `metrics.py` uses pre-PEP-701 f-string syntax — un-importable on
+  Python 3.10/3.11 (deterministic 3.11 failure in CI runs #7/#8). Added
+  `skipif(sys.version_info < (3, 12))` with a clear reason; test stays
+  active on 3.12+. CI run #10 fully green afterwards. SQLite concurrency
+  issue (separate SIGBUS from run #9) deliberately left untouched.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
