@@ -5,12 +5,11 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `27a0ca9` — `feat: complete phase 9a cross-client continuity`
-  (committed and pushed to `origin/master`).
-- **Working tree:** CI/compat remediation, **not committed**:
-  `.github/workflows/ci.yml`, `app/services/metrics.py`,
-  `app/ui/screens/models.py`, `tests/test_keyring_setup.py`,
-  `tests/test_ui_providers.py`.
+- **HEAD:** `9a8d9d5` — `fix: restore 3.10/3.11 f-string compat, test
+  isolation, and CI hardening` (committed and pushed to `origin/master`).
+- **Working tree:** clean.
+- **Recent history:** Phase 9A at `27a0ca9` (cross-client continuity);
+  CI/3.10–3.11 remediation at `9a8d9d5`.
 - **Recent history:** Phase 7 at `c41cd22` (actual decision records for
   `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
   doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity).
