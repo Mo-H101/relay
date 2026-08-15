@@ -265,13 +265,10 @@ class Histogram:
                 return f"{self.name}_{suffix}"
 
             for bucket in self.buckets:
-                lines.append(
-                    f"{_series('bucket', f'le=\"{_fmt(bucket)}\"')} "
-                    f"{counts[bucket]}"
-                )
-            lines.append(
-                f"{_series('bucket', 'le=\"+Inf\"')} {count}"
-            )
+                le_label = 'le="' + _fmt(bucket) + '"'
+                lines.append(f"{_series('bucket', le_label)} {counts[bucket]}")
+            le_label = 'le="+Inf"'
+            lines.append(f"{_series('bucket', le_label)} {count}")
             lines.append(f"{_series('sum', '')} {_fmt(total)}")
             lines.append(f"{_series('count', '')} {count}")
 

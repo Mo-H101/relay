@@ -5,15 +5,15 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `d7433b1` — `docs: update project progress after phase 8`
+- **HEAD:** `27a0ca9` — `feat: complete phase 9a cross-client continuity`
   (committed and pushed to `origin/master`).
-- **Working tree:** Phase 9A work-in-progress, **not committed**:
-  `app/services/handoff.py`, `tests/test_continuity_handoff.py`,
-  `tests/test_continuity_phase9a.py` (new), `docs/clients/continuity.md`
-  (new), plus doc link updates (README, docs/clients/*, docs/configuration.md).
-- **Recent history:** Phase 7 landed at `c41cd22` (actual decision
-  records for `/v1`); Phase 8 at `64976cd` (decision execution
-  telemetry); progress doc at `d7433b1`.
+- **Working tree:** CI/compat remediation, **not committed**:
+  `.github/workflows/ci.yml`, `app/services/metrics.py`,
+  `app/ui/screens/models.py`, `tests/test_keyring_setup.py`,
+  `tests/test_ui_providers.py`.
+- **Recent history:** Phase 7 at `c41cd22` (actual decision records for
+  `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
+  doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity).
 - **Baseline suite:** 2558 passed, 8 skipped, 0 failed (Python 3.13.5,
   full suite in ~9.5 min), re-verified after the Phase 9A additions.
   The SD-card sqlite concurrency flake is intermittent — see Known
@@ -95,7 +95,7 @@ Base all work on: current code + this file + `git log --oneline -10`.
     virtual routing, decision engine/record, continuity, and API suites
     all pass unchanged.
 - **Phase 9A (cross-client continuity verification, implemented + verified,
-  not yet committed):**
+  committed at `27a0ca9`):**
   - **Fix — key-scoped in-memory state** (`app/services/handoff.py`):
     `HandoffCoordinator._states` is now keyed by the composite
     `(key_id, conversation_id)` tuple (new `_state_key()` helper
@@ -135,6 +135,28 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Full suite green** after the additions: 2558 passed, 8 skipped,
     0 failed. Phase 9 is **not** marked complete — later continuity work
     (see What is next) is still open.
+- **CI / Python 3.10–3.11 compatibility remediation (committed with this
+  progress update):**
+  - **f-string syntax (3.10/3.11):** `app/services/metrics.py` and
+    `app/ui/screens/models.py` used PEP-701-only backslash escapes inside
+    f-string expressions (invalid on 3.10/3.11, `compileall` failure).
+    Rewrote to escape-free forms (`metrics.py` builds the `le="..."` label
+    by plain concatenation outside the expression; `models.py` uses literal
+    `✓`/`✗` glyphs). Generated Prometheus exposition and displayed glyphs
+    are byte-identical (metrics tests assert the exact strings).
+  - **Test isolation:** both `isolated_state` fixtures now also patch
+    `platform_store.state_dir`, so `test_provider_flow_validates_key_before_persist`
+    and `test_wizard_offers_keyring_key_as_existing` no longer touch the
+    real `<repo>/.relay/platform.db`. Reproduced the CI failure with
+    `RELAY_STATE_DIR` → nonexistent dir (pre-fix: 2 failed; post-fix: 2
+    passed).
+  - **CI hardening:** `actions/checkout@v4` now `fetch-depth: 0` +
+    `fetch-tags: true` in both jobs so the packaging regression test
+    (`git archive` of a historical tree) works on CI; Python 3.13 added to
+    the Ubuntu test matrix (3.10 minimum unchanged).
+  - **Verified:** `compileall -q app tests` green on Python 3.11.15 and
+    3.14.6; full suite 2558 passed, 8 skipped, 0 failed (Python 3.14);
+    packaging suite green incl. the wheel-upgrade regression test.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase

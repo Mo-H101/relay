@@ -161,7 +161,7 @@ class ModelsScreen(Screen):
     def _refresh_provider_select(self) -> None:
         options = [
             (
-                f"{'\u2713' if entry.enabled else '\u2717'} {entry.display_name}"
+                f"{'✓' if entry.enabled else '✗'} {entry.display_name}"
                 if entry.configured
                 else f"- {entry.display_name}",
                 entry.id,

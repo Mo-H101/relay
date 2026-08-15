@@ -390,10 +390,12 @@ async def test_setup_adapter_invalid_input_shows_feedback(monkeypatch, tmp_path)
 @pytest.fixture
 def isolated_state(monkeypatch, tmp_path):
     from app.services import setup_state
+    from app.services import platform_store
     from app.setup import persistence
 
     monkeypatch.setattr(setup_state, "state_dir", tmp_path)
     monkeypatch.setattr(persistence, "state_dir", tmp_path)
+    monkeypatch.setattr(platform_store, "state_dir", tmp_path)
     return tmp_path
 
 
