@@ -454,6 +454,48 @@ class TestCommit:
         finally:
             store.close()
 
+    def test_fresh_state_continues_seq_when_last_turn_has_no_model(self, tmp_path):
+        # Phase 10A: seq continuation is independent of anchor/model
+        # presence. A restarted coordinator over a conversation whose last
+        # durable turn has no model must still continue at last_seq + 1 --
+        # never restart at seq 1 and collide with
+        # UNIQUE (conversation_id, seq). The model lineage and anchor stay
+        # empty until a real model turn commits.
+        from app.services.continuity_recovery import ContinuityRecovery
+
+        store = ConversationStore(str(tmp_path / "continuity.db"))
+        cid = "c" * 32
+        store.create(key_id="k", client_bucket="cli", project_key="pk",
+                     conversation_id=cid)
+        for seq in (1, 2, 3):
+            store.append_turn(
+                conversation_id=cid, key_id="k", seq=seq, outcome="ok",
+                provider="p", model="m1",
+            )
+        store.append_turn(conversation_id=cid, key_id="k", seq=4,
+                          outcome="ok", provider="p", model=None)
+        try:
+            recovery = ContinuityRecovery(store)
+            flusher = FakeFlusher()
+            coord = _coordinator(flusher, recovery=recovery)
+
+            turn = coord.start(
+                key_id="k", client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            # The fresh state seeds no model lineage or anchor from a
+            # model-less durable last turn (start-time view).
+            assert turn.model_chain == []
+            assert turn.anchor_model is None
+            assert turn.anchor_provider is None
+
+            rec = coord.commit(turn, provider="p", model="m2")
+
+            assert rec["seq"] == 5
+            assert _operations(flusher, "turn.append")[-1]["seq"] == 5
+        finally:
+            store.close()
+
     def test_new_conversation_still_starts_at_seq_one(self):
         flusher = FakeFlusher()
         coord = _coordinator(flusher)

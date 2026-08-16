@@ -379,11 +379,17 @@ class ContinuityRecovery:
         committed turn, or None when the conversation has no durable turns
         or the store is unavailable. Used to seed a fresh coordinator state
         at ``last_seq + 1`` so a post-restart conversation never restarts at
-        seq 1 and collides with ``UNIQUE (conversation_id, seq)``. Never
-        raises.
+        seq 1 and collides with ``UNIQUE (conversation_id, seq)``. The seq
+        is read independently of the last turn's model: seq continuation
+        must never depend on anchor availability (Phase 10A). Never raises.
         """
-        anchor = self.last_provider_model(conversation_id, key_id)
-        return anchor["seq"] if anchor else None
+        if not conversation_id or self._store is None:
+            return None
+        try:
+            last = self._store.last_turn(conversation_id, key_id)
+        except Exception:  # noqa: BLE001 - recovery never breaks chat
+            return None
+        return last["seq"] if last else None
 
     def last_provider_model(
         self, conversation_id: str, key_id: str

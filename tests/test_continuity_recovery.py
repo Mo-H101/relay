@@ -324,6 +324,21 @@ class TestPartialStreamThenResume:
         assert recovery.durable_last_seq(cid, "k") == 2
         store.close()
 
+    def test_durable_last_seq_independent_of_model(self, tmp_path):
+        # Phase 10A: seq continuation must never depend on anchor/model
+        # availability. A last turn without a model still reports its seq,
+        # while the anchor itself stays unavailable.
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        cid = _commit_turn(store, seq=1, resume_token_hash="x")
+        store.append_turn(
+            conversation_id=cid, key_id="k", seq=2, outcome="ok",
+            provider="p", model=None,
+        )
+        assert recovery.durable_last_seq(cid, "k") == 2
+        assert recovery.last_provider_model(cid, "k") is None
+        store.close()
+
 
 # ------------------------- failure injection: failed provider switch -------------------------
 

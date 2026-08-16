@@ -389,10 +389,14 @@ class HandoffCoordinator:
         conversation is seeded at the durable ``last_seq + 1`` instead of
         seq 1. ``resume_last_seq`` carries the decision's durable last seq
         (valid or denied resume); when absent (a normal no-token turn) the
-        recovery service's ``durable_last_seq`` is consulted. Without this,
-        a conversation restarted after a hard kill would assign seq 1 to a
-        turn whose ``(conversation_id, seq)`` row already exists, collide
-        with the unique constraint, and stall the write-behind flusher.
+        recovery service's ``durable_last_seq`` is consulted. The seq is
+        seeded independently of model presence (Phase 10A): a last turn
+        without a model must still continue the sequence, while the
+        durable anchor and model lineage come from
+        ``last_provider_model``. Without this, a conversation restarted
+        after a hard kill would assign seq 1 to a turn whose
+        ``(conversation_id, seq)`` row already exists, collide with the
+        unique constraint, and stall the write-behind flusher.
         """
         cid = conversation_id or new_conversation_id()
         budget = (
@@ -405,19 +409,25 @@ class HandoffCoordinator:
             state = self._states.get(_state_key(key_id, cid))
 
             if state is None:
-                # P9B: the last committed durable turn (provider, model,
-                # seq) seeds both the seq counter and the model lineage of
-                # a fresh state for an existing conversation, so the
-                # continuation anchor survives restart / cross-process.
+                # Phase 10A: the durable seq is seeded independently of
+                # model presence (a last turn without a model still
+                # continues the sequence), while the last committed durable
+                # turn (provider, model) seeds the model lineage and the
+                # continuation anchor so it survives restart /
+                # cross-process.
                 durable = None
+                durable_seq = None
                 if self._recovery is not None:
                     durable = self._recovery.last_provider_model(
                         cid, str(key_id or "")
                     )
+                    durable_seq = self._recovery.durable_last_seq(
+                        cid, str(key_id or "")
+                    )
                 if resume_last_seq:
                     next_seq = max(1, int(resume_last_seq) + 1)
-                elif durable:
-                    next_seq = max(1, int(durable["seq"]) + 1)
+                elif durable_seq:
+                    next_seq = max(1, int(durable_seq) + 1)
                 else:
                     next_seq = 1
                 state = _ConversationState(
