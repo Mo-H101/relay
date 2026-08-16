@@ -415,6 +415,25 @@ class ContinuityRecovery:
             "seq": last.get("seq"),
         }
 
+    def project_states(
+        self, key_id: str, project_key: str, limit: int = 50
+    ) -> Optional[dict]:
+        """
+        Phase 10A: bounded, read-only projection of one project's durable
+        conversation states (see ``ConversationStore.project_states``).
+        Best-effort for the conversation-states surface: returns None when
+        the store is unavailable so the snapshot degrades to the live
+        state alone. Never raises.
+        """
+        if not project_key or self._store is None:
+            return None
+        try:
+            return self._store.project_states(
+                key_id, project_key, limit=limit
+            )
+        except Exception:  # noqa: BLE001 - recovery never breaks chat
+            return None
+
     def resume_envelope(
         self, conversation_id: str, key_id: str
     ) -> Optional[dict]:

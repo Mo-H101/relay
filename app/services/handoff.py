@@ -718,6 +718,85 @@ class HandoffCoordinator:
         relay_metrics.continuity_turns_committed.inc()
         return dict(record)
 
+    # ------------------------- conversation states snapshot -------------------------
+
+    def build_conversation_snapshot(
+        self, turn: TurnContext, key_id: str, project_limit: int = 50
+    ) -> dict:
+        """
+        Phase 10A: bounded diagnostic snapshot of a conversation and its
+        project at this instant, for the conversation-states surface.
+
+        The ``conversation`` block carries the live turn identity --
+        ``turn_id`` (``{conversation_id}:{seq}``), the next ``seq``, the
+        ``anchor_provider``/``anchor_model``, ``model_chain`` and the
+        ``last_seq`` -- falling back to the durable ``last_seq`` when the
+        live state has not committed anything yet. The ``project`` block
+        is the bounded ``ConversationStore.project_states`` projection
+        (durable truth; the live state is not yet flushed). Never raises:
+        when the store is unavailable the snapshot degrades to the live
+        state alone (``project`` is None).
+        """
+        cid = turn.conversation_id
+        key = str(key_id or "")
+
+        with self._lock:
+            state = self._states.get(_state_key(key, cid))
+            if state is None:
+                live = {
+                    "conversation_id": cid,
+                    "key_id": key,
+                    "client_bucket": turn.client_bucket,
+                    "project_key": turn.project_key,
+                }
+                seq = None
+                committed_count = 0
+                anchor_provider = None
+                anchor_model = None
+                model_chain = list(turn.model_chain)
+            else:
+                live = {
+                    "conversation_id": state.conversation_id,
+                    "key_id": state.key_id,
+                    "client_bucket": state.client_bucket,
+                    "project_key": state.project_key,
+                }
+                seq = state.next_seq
+                committed_count = len(state.committed_turns)
+                anchor_provider = state.anchor_provider
+                anchor_model = state.anchor_model
+                model_chain = list(state.model_chain)
+
+        last_seq = seq - 1 if seq is not None and committed_count else None
+        if last_seq is None and self._recovery is not None:
+            try:
+                last_seq = self._recovery.durable_last_seq(cid, key)
+            except Exception:  # noqa: BLE001 - snapshot never raises
+                last_seq = None
+
+        snapshot = {
+            "conversation": {
+                **live,
+                "turn_id": f"{cid}:{seq}" if seq is not None else None,
+                "seq": seq,
+                "last_seq": last_seq,
+                "anchor_provider": anchor_provider,
+                "anchor_model": anchor_model,
+                "model_chain": model_chain,
+            },
+            "project": None,
+        }
+
+        if self._recovery is not None:
+            try:
+                snapshot["project"] = self._recovery.project_states(
+                    key, turn.project_key, limit=project_limit
+                )
+            except Exception:  # noqa: BLE001 - snapshot never raises
+                snapshot["project"] = None
+
+        return snapshot
+
     # ------------------------- P9B anchor + transitions -------------------------
 
     def last_committed(
