@@ -12,7 +12,7 @@ and ``StateStore``:
   metadata-only ``request_log`` table (v6), the project-continuity
   tables (v7), and the durable resume-replay tracker (v8),
 * an in-process migration lock so concurrent opens of the same file
-  cannot race a migration,
+  cannot race a migration or the one-time WAL/shm initialization,
 * user-only file permissions on the database plus its ``-wal``/``-shm``
   sidecars and ``.corrupt-*.bak`` backups (POSIX),
 * corrupt-file backup-and-reopen, and
@@ -299,8 +299,10 @@ MIGRATIONS: dict = {
 }
 
 # In-process lock so concurrent opens of the same file cannot race a
-# migration. Migration steps are idempotent (guarded by user_version),
-# but the lock keeps multiple connections from interleaving DDL.
+# migration or the one-time WAL/shm initialization. Migration steps are
+# idempotent (guarded by user_version), but the lock keeps multiple
+# connections from interleaving DDL or from racing the persistent
+# ``journal_mode = WAL`` switch on a fresh database file.
 _migration_lock = threading.Lock()
 
 
@@ -373,7 +375,14 @@ def open_connection(path: str) -> sqlite3.Connection:
 
         try:
             conn.execute("PRAGMA busy_timeout = 5000")
-            conn.execute("PRAGMA journal_mode = WAL")
+
+            # The one-time WAL switch (sidecar/-shm creation) must not
+            # race concurrent opens of the same fresh file, so run it
+            # under the migration lock. Subsequent opens find WAL already
+            # active and the pragma is a no-op.
+            with _migration_lock:
+                conn.execute("PRAGMA journal_mode = WAL")
+
             conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
             migrate(conn)
         except PlatformStoreError:
