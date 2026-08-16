@@ -382,13 +382,32 @@ class ContinuityRecovery:
         seq 1 and collides with ``UNIQUE (conversation_id, seq)``. Never
         raises.
         """
+        anchor = self.last_provider_model(conversation_id, key_id)
+        return anchor["seq"] if anchor else None
+
+    def last_provider_model(
+        self, conversation_id: str, key_id: str
+    ) -> Optional[dict]:
+        """
+        P9B: the last committed logical ``(provider, model)`` for a
+        conversation, plus its seq, from durable turn metadata. None when
+        the conversation has no committed turns or the store is
+        unavailable. Key-scoped single-row read (bounded); the durable
+        source for the continuation anchor. Never raises.
+        """
         if not conversation_id or self._store is None:
             return None
         try:
             last = self._store.last_turn(conversation_id, key_id)
         except Exception:  # noqa: BLE001 - recovery never breaks chat
             return None
-        return last["seq"] if last else None
+        if last is None or not last.get("model"):
+            return None
+        return {
+            "provider": last.get("provider") or "",
+            "model": last["model"],
+            "seq": last.get("seq"),
+        }
 
     def resume_envelope(
         self, conversation_id: str, key_id: str

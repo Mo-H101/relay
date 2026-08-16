@@ -217,30 +217,37 @@ class DecisionEngine:
         self,
         providers,
         task: str | None = None,
+        anchor: str | None = None,
     ) -> DecisionResult:
         """
         Score the ordered candidate pool and return the top candidate.
         Records the decision in the engine statistics.
+
+        P9B: ``anchor`` (the conversation's last committed logical model)
+        is passed through to the candidate builder so the engine observes
+        the same anchor-tiered plan the chat hot path executes.
         """
-        return self._pass(providers, task, record=True)
+        return self._pass(providers, task, record=True, anchor=anchor)
 
     def score_pool(
         self,
         providers,
         task: str | None = None,
+        anchor: str | None = None,
     ) -> DecisionResult:
         """
         Read-only scoring pass for diagnostics: identical output to
         ``decide`` but never mutates statistics, so exposing the engine
         in the diagnostics snapshot stays side-effect free.
         """
-        return self._pass(providers, task, record=False)
+        return self._pass(providers, task, record=False, anchor=anchor)
 
     def _pass(
         self,
         providers,
         task: str | None,
         record: bool,
+        anchor: str | None = None,
     ) -> DecisionResult:
         if self._builder is None:
             return DecisionResult(
@@ -249,7 +256,7 @@ class DecisionEngine:
                 generated_at=time.time(),
             )
 
-        rankables = self._builder.rankables(providers, task=task)
+        rankables = self._builder.rankables(providers, task=task, anchor=anchor)
 
         if not rankables:
             return DecisionResult(

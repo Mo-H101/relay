@@ -104,7 +104,7 @@ class _FakeBuilder:
     def __init__(self, rankables):
         self._rankables = rankables
 
-    def rankables(self, providers, task=None):
+    def rankables(self, providers, task=None, anchor=None):
         return self._rankables
 
 

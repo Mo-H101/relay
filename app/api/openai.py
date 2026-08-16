@@ -65,7 +65,7 @@ def _last_user_message_text(messages) -> str:
     return ""
 
 
-def _resolve_candidates(relay, providers, requested_model, messages):
+def _resolve_candidates(relay, providers, requested_model, messages, anchor=None):
     """
     Resolve the request's model field into an ordered candidate list.
 
@@ -80,6 +80,12 @@ def _resolve_candidates(relay, providers, requested_model, messages):
     that task. Any other value is an explicit upstream model id matched
     literally against every provider, preserving the original verbatim
     passthrough behavior.
+
+    P9B: ``anchor`` (the conversation's last committed logical model)
+    tiers the routed plan (anchor tier first, fallback tier second) so a
+    continued conversation stays on its last model by default. Explicit
+    literal models are never anchored: deliberate model selection keeps
+    the existing passthrough behavior.
     """
     requested = (requested_model or "").strip()
     lowered = requested.lower()
@@ -92,14 +98,18 @@ def _resolve_candidates(relay, providers, requested_model, messages):
                 settings.task_classification_threshold,
             )
         return (
-            relay.candidate_builder.build(providers, task=task),
+            relay.candidate_builder.build(
+                providers, task=task, anchor=anchor
+            ),
             task,
             True,
         )
 
     if lowered in TASK_CATEGORIES:
         return (
-            relay.candidate_builder.build(providers, task=lowered),
+            relay.candidate_builder.build(
+                providers, task=lowered, anchor=anchor
+            ),
             lowered,
             True,
         )
@@ -406,10 +416,14 @@ async def openai_chat_completion(
     # 2. Resolve the Relay-facing model interface: virtual names, task
     #    names, and omitted models route through task/candidate
     #    machinery; literal upstream model ids keep the passthrough
-    #    behavior.
+    #    behavior. P9B: the continuation anchor (last committed logical
+    #    model) tiers the routed plan so a continued conversation stays
+    #    on its last model by default.
     providers = relay.provider_manager.all()
+    anchor = relay.anchor_for(continuity_scope)
+    anchor_model = anchor["model"] if anchor else None
     candidates, routed_task, routed = _resolve_candidates(
-        relay, providers, req.model, req.messages
+        relay, providers, req.model, req.messages, anchor=anchor_model
     )
     if not candidates:
         if req.model:
@@ -431,7 +445,7 @@ async def openai_chat_completion(
     decision_result = None
     if routed and relay.decision_engine.enabled:
         decision_result = relay.decision_engine.decide(
-            providers, task=routed_task
+            providers, task=routed_task, anchor=anchor_model
         )
 
     # 3. Build the verbatim wire payload from the request.
@@ -439,6 +453,13 @@ async def openai_chat_completion(
     gen_kwargs = _generation_kwargs(req)
 
     turn = relay.begin_continuity_turn(continuity_scope)
+    # P9B: the cross-turn transition event is computed here, after
+    # candidate resolution and before execution, and reuses the existing
+    # relay:model_switched shape (switch_count=0). It is never duplicated
+    # through on_switch.
+    relay.annotate_transition(
+        turn, anchor=anchor, routed=routed, candidates=candidates
+    )
 
     # 4. Handle streaming vs non-streaming
     if req.stream:

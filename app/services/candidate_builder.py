@@ -87,6 +87,7 @@ class CandidateBuilder:
         self,
         providers: List[Provider],
         task: str | None = None,
+        anchor: str | None = None,
     ) -> List[Tuple[Provider, str]]:
         """
         Return ordered chat candidates for the given ranked providers.
@@ -106,45 +107,49 @@ class CandidateBuilder:
         models. Health and telemetry only ever reorder the task's allowed
         candidates; unrelated models are never introduced. If filtering
         would remove every candidate, the original ordering is returned.
+
+        P9B: ``anchor`` is the conversation's last committed logical
+        model. When present, the plan is tiered: candidates carrying the
+        anchor model (anchor tier) come first, the remaining normal
+        routing output (fallback tier) second. Health/scoring may reorder
+        within each tier but never across tiers; an anchor model that no
+        provider can execute yields an empty anchor tier and the plan
+        falls through to the fallback tier. With no anchor the plan is
+        the unchanged pre-Phase 9B output.
         """
 
-        routed = self.routing.candidates_weighted(task, providers)
-
-        if routed:
-            candidates = routed
-        else:
-            candidates = [
-                (provider, model, None)
-                for provider in providers
-                for model in provider.models
-                if is_chat_testable(model)
-            ]
+        candidates = self._initial_candidates(providers, task)
 
         if not self._settings.health_aware_routing:
-            return [(provider, model) for provider, model, _ in candidates]
+            return [
+                (provider, model)
+                for provider, model, _ in self._order_plan(candidates, anchor)
+            ]
 
         return [
             (provider, model)
-            for provider, model, _ in self._health_adjust(candidates, task)
+            for provider, model, _ in self._health_plan(candidates, task, anchor)
         ]
 
     def ranked_candidates(
         self,
         providers: List[Provider],
         task: str | None = None,
+        anchor: str | None = None,
     ) -> List[RankedCandidate]:
         """
         Return the decision ranking with full signal detail, in the same
-        order `build()` produces. Used by the decision explanation
-        endpoint; not part of the chat hot path, so it adds no runtime
-        overhead when explanations are disabled.
+        order `build()` produces (P9B: the same anchor-tiered plan). Used
+        by the decision explanation endpoint; not part of the chat hot
+        path, so it adds no runtime overhead when explanations are
+        disabled.
         """
         candidates = self._initial_candidates(providers, task)
 
         if not self._settings.health_aware_routing:
-            ordered = candidates
+            ordered = self._order_plan(candidates, anchor)
         else:
-            ordered = self._health_adjust(candidates, task)
+            ordered = self._health_plan(candidates, task, anchor)
 
         return self._rank_candidates(ordered, candidates, task)
 
@@ -152,18 +157,21 @@ class CandidateBuilder:
         self,
         providers: List[Provider],
         task: str | None = None,
+        anchor: str | None = None,
     ) -> List[Rankable]:
         """
         Return the ordered Rankable candidates for the decision engine,
-        in exactly the same order `build()` produces (health-aware
-        filtering/ordering applied, or input order when health-aware
-        routing is off). The DecisionEngine consumes these to produce
-        explicit DecisionScore objects.
+        in exactly the same order `build()` produces (P9B: the same
+        anchor-tiered plan; health-aware filtering/ordering applied, or
+        input order when health-aware routing is off). The DecisionEngine
+        consumes these to produce explicit DecisionScore objects.
         """
         candidates = self._initial_candidates(providers, task)
 
         if self._settings.health_aware_routing:
-            candidates = self._health_adjust(candidates, task)
+            candidates = self._health_plan(candidates, task, anchor)
+        else:
+            candidates = self._order_plan(candidates, anchor)
 
         return self._rankables(candidates, task)
 
@@ -183,6 +191,77 @@ class CandidateBuilder:
             for model in provider.models
             if is_chat_testable(model)
         ]
+
+    # ------------------------- P9B anchor tiering -------------------------
+
+    def _tiered(
+        self,
+        candidates: List[Tuple[Provider, str, Optional[int]]],
+        anchor: Optional[str],
+    ) -> Tuple[
+        Optional[List[Tuple[Provider, str, Optional[int]]]],
+        List[Tuple[Provider, str, Optional[int]]],
+    ]:
+        """
+        Split the normal candidate output into the P9B tiers: the anchor
+        tier (candidates for the conversation's last committed logical
+        model, deduplicated) and the fallback pool (everything else).
+        Returns ``(None, candidates)`` when no anchor is given.
+        """
+        if not anchor:
+            return None, candidates
+
+        anchor_tier: List[Tuple[Provider, str, Optional[int]]] = []
+        fallback: List[Tuple[Provider, str, Optional[int]]] = []
+        seen = set()
+
+        for item in candidates:
+            provider, model, _preference = item
+            key = (provider.name, model)
+            if key in seen:
+                continue
+            seen.add(key)
+            if model == anchor:
+                anchor_tier.append(item)
+            else:
+                fallback.append(item)
+
+        return anchor_tier, fallback
+
+    def _order_plan(
+        self,
+        candidates: List[Tuple[Provider, str, Optional[int]]],
+        anchor: Optional[str],
+    ) -> List[Tuple[Provider, str, Optional[int]]]:
+        """
+        Anchor tier first, fallback tier second, no health reordering
+        (used when health-aware routing is off).
+        """
+        anchor_tier, fallback = self._tiered(candidates, anchor)
+        if anchor_tier is None:
+            return candidates
+        return anchor_tier + fallback
+
+    def _health_plan(
+        self,
+        candidates: List[Tuple[Provider, str, Optional[int]]],
+        task: str | None,
+        anchor: Optional[str],
+    ) -> List[Tuple[Provider, str, Optional[int]]]:
+        """
+        Anchor tier first, fallback tier second, each tier health-filtered
+        and ordered within the tier by the existing band/scoring logic.
+        The anchor tier never falls back to its unfiltered input: an
+        anchor model no provider can execute yields an empty anchor tier
+        and the plan falls through to the fallback tier (P9B Case D).
+        """
+        if not anchor:
+            return self._health_adjust(candidates, task)
+
+        anchor_tier, fallback = self._tiered(candidates, anchor)
+        anchor_ordered = self._health_adjust_strict(anchor_tier, task)
+        fallback_ordered = self._health_adjust(fallback, task)
+        return anchor_ordered + fallback_ordered
 
     def _rank_candidates(
         self,
@@ -250,17 +329,45 @@ class CandidateBuilder:
         if self.health_store is None:
             return candidates
 
-        reports = {}
-        learned = {}
+        filtered, reports, learned = self._health_filtered(candidates)
 
-        for provider, _, _ in candidates:
-            if provider.name not in reports:
-                reports[provider.name] = self.health_store.get(
-                    provider.name
-                )
-                learned[provider.name] = self.health_store.learned(
-                    provider.name
-                )
+        if not filtered:
+            return candidates
+
+        return self._order_health(filtered, reports, learned, task)
+
+    def _health_adjust_strict(
+        self,
+        candidates: List[Tuple[Provider, str, Optional[int]]],
+        task: str | None = None,
+    ) -> List[Tuple[Provider, str, Optional[int]]]:
+        """
+        Like ``_health_adjust`` but without the "return the original
+        ordering when everything is filtered out" fallback: an empty
+        result means every candidate is unavailable. Used for the P9B
+        anchor tier so an unavailable anchor model falls through to the
+        fallback tier instead of being force-retained.
+        """
+        if self.health_store is None:
+            return candidates
+
+        filtered, reports, learned = self._health_filtered(candidates)
+
+        if not filtered:
+            return []
+
+        return self._order_health(filtered, reports, learned, task)
+
+    def _health_filtered(
+        self,
+        candidates: List[Tuple[Provider, str, Optional[int]]],
+    ) -> Tuple[
+        List[Tuple[Provider, str, Optional[int]]],
+        dict,
+        dict,
+    ]:
+        """Health-filter candidates; returns (filtered, reports, learned)."""
+        reports, learned = self._reports_and_learned(candidates)
 
         filtered = [
             (provider, model, preference)
@@ -272,9 +379,16 @@ class CandidateBuilder:
             )
         ]
 
-        if not filtered:
-            return candidates
+        return filtered, reports, learned
 
+    def _order_health(
+        self,
+        filtered: List[Tuple[Provider, str, Optional[int]]],
+        reports: dict,
+        learned: dict,
+        task: str | None = None,
+    ) -> List[Tuple[Provider, str, Optional[int]]]:
+        """Order already-filtered candidates by band, then by scorer."""
         has_signal = (
             self._has_telemetry(filtered) if self.telemetry is not None else False
         ) or self._has_quality(filtered)

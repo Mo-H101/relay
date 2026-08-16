@@ -79,6 +79,12 @@ class _ConversationState:
     pending_resume_hash: Optional[str] = None
     resume_up_to_seq: int = 0
     resume_summary: Optional[dict] = None
+    # P9B: the last committed logical (provider, model) for the
+    # conversation (the continuation anchor). Seeded from durable state
+    # when a fresh state is created for an existing conversation so the
+    # anchor survives restarts and cross-process resumes.
+    anchor_provider: Optional[str] = None
+    anchor_model: Optional[str] = None
 
 
 @dataclass
@@ -111,6 +117,10 @@ class TurnContext:
     resume_token: Optional[str] = None
     resumed: bool = False
     exclude_up_to_seq: int = 0
+    # P9B: the last committed logical (provider, model) of the
+    # conversation (the continuation anchor) at the time this turn began.
+    anchor_provider: Optional[str] = None
+    anchor_model: Optional[str] = None
 
     @property
     def is_new(self) -> bool:
@@ -395,13 +405,19 @@ class HandoffCoordinator:
             state = self._states.get(_state_key(key_id, cid))
 
             if state is None:
-                if resume_last_seq:
-                    next_seq = max(1, int(resume_last_seq) + 1)
-                elif self._recovery is not None:
-                    durable = self._recovery.durable_last_seq(
+                # P9B: the last committed durable turn (provider, model,
+                # seq) seeds both the seq counter and the model lineage of
+                # a fresh state for an existing conversation, so the
+                # continuation anchor survives restart / cross-process.
+                durable = None
+                if self._recovery is not None:
+                    durable = self._recovery.last_provider_model(
                         cid, str(key_id or "")
                     )
-                    next_seq = durable + 1 if durable else 1
+                if resume_last_seq:
+                    next_seq = max(1, int(resume_last_seq) + 1)
+                elif durable:
+                    next_seq = max(1, int(durable["seq"]) + 1)
                 else:
                     next_seq = 1
                 state = _ConversationState(
@@ -410,10 +426,14 @@ class HandoffCoordinator:
                     client_bucket=client_bucket or "other",
                     project_key=project_key or "",
                     token_budget=budget,
-                    model_chain=[],
+                    model_chain=[durable["model"]] if durable else [],
                     next_seq=next_seq,
                     committed_turns=[],
                     window=deque(),
+                    anchor_provider=(
+                        durable["provider"] if durable else None
+                    ),
+                    anchor_model=(durable["model"] if durable else None),
                 )
                 self._remember_state(state)
 
@@ -429,6 +449,12 @@ class HandoffCoordinator:
                     )
             else:
                 self._touch(state)
+                # P9B: refresh the anchor from the last committed turn so
+                # it always reflects the conversation's most recent model.
+                if state.committed_turns:
+                    last = state.committed_turns[-1]
+                    state.anchor_provider = last.get("provider")
+                    state.anchor_model = last.get("model")
 
             resumed = self._hydrate_resume(state, resume)
 
@@ -439,6 +465,8 @@ class HandoffCoordinator:
             project_key=state.project_key,
             token_budget=state.token_budget,
             model_chain=list(state.model_chain),
+            anchor_provider=state.anchor_provider,
+            anchor_model=state.anchor_model,
         )
         turn._handoff = self
         turn.context_manager = self._manager
@@ -497,6 +525,14 @@ class HandoffCoordinator:
         if isinstance(last_turn, dict) and last_turn.get("seq"):
             state.committed_turns.append(dict(last_turn))
             state.next_seq = max(state.next_seq, int(last_turn["seq"]) + 1)
+            # P9B model lineage: reconstruct the model chain from the
+            # durable last turn so a restarted/cross-process resume does
+            # not start with an empty ``models:`` envelope.
+            model = last_turn.get("model")
+            if model and (not state.model_chain or state.model_chain[-1] != model):
+                state.model_chain.append(model)
+            state.anchor_provider = last_turn.get("provider") or None
+            state.anchor_model = model or None
         else:
             return False
 
@@ -671,6 +707,80 @@ class HandoffCoordinator:
 
         relay_metrics.continuity_turns_committed.inc()
         return dict(record)
+
+    # ------------------------- P9B anchor + transitions -------------------------
+
+    def last_committed(
+        self, key_id: str, conversation_id: str
+    ) -> Optional[dict]:
+        """
+        Return the last committed turn (provider/model/seq) currently held
+        in memory for a conversation, or None when this process has no
+        state for it. Key-scoped: a conversation id presented by a
+        different key never sees another key's state. The durable
+        fallback lives in ``ContinuityRecovery.last_provider_model``.
+        """
+        if not conversation_id:
+            return None
+        with self._lock:
+            state = self._states.get(_state_key(key_id, conversation_id))
+            if state is None or not state.committed_turns:
+                return None
+            last = state.committed_turns[-1]
+            return {
+                "provider": last.get("provider") or "",
+                "model": last.get("model") or "",
+                "seq": last.get("seq"),
+            }
+
+    def record_transition(
+        self,
+        turn: TurnContext,
+        *,
+        anchor: Optional[dict],
+        routed: bool,
+        candidates: List[Tuple[object, str]],
+    ) -> Optional[dict]:
+        """
+        P9B: classify and record the single cross-turn model transition
+        event after candidate resolution and before execution.
+
+        Compares ``conversation_last_model`` (the anchor) with the
+        resolved first candidate's model:
+
+        * explicit literal model request (``routed`` False) with a
+          different model -> ``reason="selection"``;
+        * Relay-initiated fallback (``routed`` True) with a different
+          resolved model -> ``reason="failover"``;
+        * identical model -> no event (provider movement within the same
+          logical model is not a model selection).
+
+        The event reuses the existing ``relay:model_switched`` shape with
+        ``switch_count=0`` and is appended once; it is never duplicated
+        through ``on_switch``. Provider movement between providers
+        carrying the same logical model is left entirely to the existing
+        execution-time ``on_switch`` (``reason="failover"``).
+        """
+        if anchor is None or not candidates:
+            return None
+        from_model = (anchor.get("model") or "").strip()
+        to_model = (candidates[0][1] or "").strip()
+        if not from_model or not to_model or from_model == to_model:
+            return None
+
+        reason = "selection" if not routed else "failover"
+        event = {
+            "type": "relay:model_switched",
+            "conversation_id": turn.conversation_id,
+            "from_provider": anchor.get("provider") or "",
+            "from_model": from_model,
+            "to_provider": candidates[0][0].name,
+            "to_model": to_model,
+            "reason": reason,
+            "switch_count": 0,
+        }
+        turn.events.append(event)
+        return event
 
     # ------------------------- internals -------------------------
 

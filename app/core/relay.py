@@ -212,6 +212,64 @@ class Relay:
         except Exception:  # noqa: BLE001 - continuity never breaks chat
             return None
 
+    def anchor_for(self, continuity_scope):
+        """
+        P9B: the continuation anchor for a resolved continuity scope --
+        the last committed logical ``(provider, model)`` of the
+        conversation, or None when there is no known continued
+        conversation.
+
+        The in-memory committed view wins when this process has state
+        (covers turns committed but not yet drained by the write-behind
+        flusher); durable state is the fallback after a restart or across
+        processes. Both lookups are key-scoped, so a conversation id
+        presented by a different key never yields another key's anchor.
+        Never raises; continuity must never break chat.
+        """
+        if not continuity_scope or self.continuity_handoff is None:
+            return None
+        cid = continuity_scope.get("conversation_id")
+        key_id = continuity_scope.get("key_id")
+        if not cid or not key_id:
+            return None
+        try:
+            last = self.continuity_handoff.last_committed(key_id, cid)
+            if last is None and self.continuity_recovery is not None:
+                last = self.continuity_recovery.last_provider_model(
+                    cid, key_id
+                )
+            if not last or not last.get("model"):
+                return None
+            return {
+                "provider": last.get("provider") or "",
+                "model": last["model"],
+            }
+        except Exception:  # noqa: BLE001 - continuity never breaks chat
+            return None
+
+    def annotate_transition(
+        self, turn, *, anchor, routed, candidates
+    ) -> None:
+        """
+        P9B: classify and record the single cross-turn model transition
+        on the turn after candidate resolution and before execution.
+        ``anchor`` is the last committed logical (provider, model),
+        ``routed`` whether the request went through Relay's candidate
+        machinery (False for an explicit literal model), and ``candidates``
+        the resolved plan. Never raises and is a no-op without a turn.
+        """
+        if turn is None or self.continuity_handoff is None:
+            return
+        try:
+            self.continuity_handoff.record_transition(
+                turn,
+                anchor=anchor,
+                routed=routed,
+                candidates=candidates,
+            )
+        except Exception:  # noqa: BLE001 - continuity never breaks chat
+            return
+
     def _init_persistence(self) -> None:
         """
         Open the StateStore, load persisted state, and start the write-
@@ -371,13 +429,25 @@ class Relay:
                 "correlation_id": cid,
             }
 
-        candidates = self.candidate_builder.build(providers, task=task)
+        # P9B: the continuation anchor (last committed logical model)
+        # tiers the candidate plan and feeds the cross-turn transition
+        # classification. The legacy surface is always Relay-routed.
+        anchor = self.anchor_for(continuity_scope)
+        anchor_model = anchor["model"] if anchor else None
+        candidates = self.candidate_builder.build(
+            providers, task=task, anchor=anchor_model
+        )
 
         decision_result = None
         if self.decision_engine.enabled:
-            decision_result = self.decision_engine.decide(providers, task=task)
+            decision_result = self.decision_engine.decide(
+                providers, task=task, anchor=anchor_model
+            )
 
         turn = self.begin_continuity_turn(continuity_scope)
+        self.annotate_transition(
+            turn, anchor=anchor, routed=True, candidates=candidates
+        )
 
         result = self.chat_service.chat_across(
             candidates,
@@ -439,13 +509,25 @@ class Relay:
                 "correlation_id": cid,
             }
 
-        candidates = self.candidate_builder.build(providers, task=task)
+        # P9B: the continuation anchor (last committed logical model)
+        # tiers the candidate plan and feeds the cross-turn transition
+        # classification. The legacy surface is always Relay-routed.
+        anchor = self.anchor_for(continuity_scope)
+        anchor_model = anchor["model"] if anchor else None
+        candidates = self.candidate_builder.build(
+            providers, task=task, anchor=anchor_model
+        )
 
         decision_result = None
         if self.decision_engine.enabled:
-            decision_result = self.decision_engine.decide(providers, task=task)
+            decision_result = self.decision_engine.decide(
+                providers, task=task, anchor=anchor_model
+            )
 
         turn = self.begin_continuity_turn(continuity_scope)
+        self.annotate_transition(
+            turn, anchor=anchor, routed=True, candidates=candidates
+        )
 
         result = await self.async_chat_service.achat_across(
             candidates,
