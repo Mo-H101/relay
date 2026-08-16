@@ -5,9 +5,8 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `f93c112` — `test: skip wheel-upgrade check on Python < 3.12
-  (0.1.0 artifact is pre-PEP 701)` (committed and pushed to
-  `origin/master`).
+- **HEAD:** `30b2078` — `fix: serialize WAL/shm init under migration lock
+  in platform store` (committed and pushed to `origin/master`).
 - **Working tree:** clean.
 - **CI is green** on all matrix jobs (ubuntu Python 3.11/3.12/3.13,
   windows Python 3.12, packaging) — run #10 (`31907969693`) fully passed
@@ -16,11 +15,12 @@ Base all work on: current code + this file + `git log --oneline -10`.
   `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
   doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity);
   CI/3.10–3.11 remediation at `9a8d9d5`; doc state updates at `a5703a2`
-  and `3dbeec8`; packaging-test 3.11 skip at `f93c112`.
+  and `3dbeec8`; packaging-test 3.11 skip at `f93c112`; SQLite
+  concurrency/SIGBUS fix at `30b2078`.
 - **Phase 9B has NOT started.**
-- **Deferred:** the SQLite platform-store concurrency/SIGBUS issue (see
-  Known failures below) is intentionally **not** fixed; do not treat it
-  as resolved.
+- **Resolved:** the SQLite platform-store concurrency/SIGBUS issue is now
+  fixed at `30b2078` (see Known failures below for the investigation and
+  verification).
 - **Baseline suite:** 2558 passed, 8 skipped, 0 failed (Python 3.13.5,
   full suite in ~9.5 min), re-verified after the Phase 9A additions.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
@@ -29,21 +29,34 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Known failures / flakes
 
-- `test_platform_store.py::TestConcurrency::test_concurrent_opens_of_same_file`
+- ~~`test_platform_store.py::TestConcurrency::test_concurrent_opens_of_same_file`
   fails under a full-suite run on this SD-card-backed device (sqlite
   `busy_timeout=5000` exceeded by 8 concurrent opens under load). Passes
   in isolation and on the other device. Intermittent: did not trigger on
   the Phase 8 verification run, but triggered on one review re-run
   (2544 passed + this flake, 0 real failures). Environment-dependent,
-  **not** changed or papered over in Phase 8.
-- **CI manifestation / deferred (deliberately unfixed):** on ubuntu
-  Python 3.11 the same test crashed the interpreter with `Fatal Python
-  error: Bus error` (SIGBUS, exit 135) in CI run #9, in
-  `platform_store.open_connection()` — `PRAGMA journal_mode = WAL`
-  runs outside `_migration_lock` (race on a fresh DB with 8 threads).
-  Diagnosis accepted, fix **deferred** to a separate production-code
-  investigation. Do not treat this as fixed; CI is green only because
-  the SIGBUS is intermittent (did not fire in runs #7/#8/#10).
+  **not** changed or papered over in Phase 8.~~ **Fixed at `30b2078`.**
+- **CI manifestation / now resolved (`30b2078`):** on ubuntu Python 3.11
+  the same test crashed the interpreter with `Fatal Python error: Bus
+  error` (SIGBUS, exit 135) in CI run #9, in
+  `platform_store.open_connection()` — `PRAGMA journal_mode = WAL` ran
+  outside `_migration_lock`, so 8 concurrent first-time opens of the same
+  fresh `platform.db` all raced the one-time WAL switch (db header write
+  + `-wal`/`-shm` sidecar creation). Locally this surfaced as
+  `database is locked` (and, via the corrupt-retry path, `disk I/O
+  error`).
+  **Root cause confirmed by instrumentation:** ~26/60 stress rounds
+  failed, and 100% of failures were at the WAL pragma; the sanity SELECT
+  and `migrate()` (already under the lock) never failed.
+  **Fix:** run the WAL pragma under the existing `_migration_lock`
+  (`app/services/platform_store.py` `open_connection()`), so the
+  one-time sidecar/shm init is atomic across concurrent opens. No new
+  lock; non-reentrant lock acquired sequentially (no deadlock).
+  **Verification:** targeted suite 16 passed; 60 rounds of the 8-thread
+  fresh-open stress pass (26 failed pre-fix); 80 rounds of 16-thread +
+  reopen pass; consumer suites (state/key/event/request stores,
+  continuity) pass; full suite 2558 passed, 8 skipped, 0 failed.
+  CI confirmation pending for the commit.
 
 ## What is done
 
@@ -175,8 +188,18 @@ Base all work on: current code + this file + `git log --oneline -10`.
   whose `metrics.py` uses pre-PEP-701 f-string syntax — un-importable on
   Python 3.10/3.11 (deterministic 3.11 failure in CI runs #7/#8). Added
   `skipif(sys.version_info < (3, 12))` with a clear reason; test stays
-  active on 3.12+. CI run #10 fully green afterwards. SQLite concurrency
-  issue (separate SIGBUS from run #9) deliberately left untouched.
+  active on 3.12+. CI run #10 fully green afterwards.
+- **SQLite concurrency/SIGBUS fix (`30b2078`):** serialized the one-time
+  `PRAGMA journal_mode = WAL` switch (db header + `-wal`/`-shm` sidecar
+  creation) under the existing `_migration_lock` in
+  `app/services/platform_store.py::open_connection()`. Root cause of the
+  CI run #9 SIGBUS (`test_concurrent_opens_of_same_file`) and the
+  local `database is locked` flake; 100% of stress failures were at the
+  WAL pragma (pre-fix 26/60 rounds, post-fix 0/60 fresh + 0/80 with
+  16-thread/reopen). Full suite green (2558 passed, 8 skipped, 0
+  failed). No new locking mechanism; sequential (non-nested) lock
+  acquisition, no deadlock. Multi-process safety unchanged (SQLite file
+  locking + `busy_timeout=5000`).
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
