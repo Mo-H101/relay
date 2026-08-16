@@ -1006,6 +1006,54 @@ class ConversationStore:
             "last_seen": row[4],
         }
 
+    def project_states(
+        self, key_id: str, project_key: str, limit: int = 50
+    ) -> dict:
+        """
+        Read-only projection of the durable conversation table for one
+        project (key-scoped): every conversation's last committed turn and
+        the project's total conversation count. Reuses the same bounded
+        single-turn read as ``last_turn`` (no event replay, no meta rows).
+        The ``states`` list is ordered newest-updated first and bounded by
+        ``limit``; ``conversation_count`` reflects the full project, not
+        just the returned page. Used by the Phase 10A conversation-states
+        surface.
+        """
+        limit = max(1, min(int(limit), _MAX_QUERY_LIMIT))
+        conn = self._require_open()
+
+        with self._lock:
+            rows = conn.execute(
+                "SELECT id, key_id, client_bucket, project_key FROM"
+                " conversations WHERE project_key = ? AND key_id = ?"
+                " ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (project_key, key_id, limit),
+            ).fetchall()
+            conversation_count = conn.execute(
+                "SELECT COUNT(*) FROM conversations"
+                " WHERE project_key = ? AND key_id = ?",
+                (project_key, key_id),
+            ).fetchone()[0]
+
+        states = []
+        for row in rows:
+            cid, ckey, client_bucket, pkey = row
+            last = self.last_turn(cid, ckey)
+            states.append(
+                {
+                    "project_key": pkey,
+                    "client_bucket": client_bucket,
+                    "conversation_id": cid,
+                    "key_id": ckey,
+                    "last_seq": last["seq"] if last else None,
+                    "last_model": last["model"] if last else None,
+                    "last_provider": last["provider"] if last else None,
+                    "last_outcome": last["outcome"] if last else None,
+                }
+            )
+
+        return {"conversation_count": conversation_count, "states": states}
+
     # ============================
     # Diagnostics
     # ============================
