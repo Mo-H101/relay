@@ -5,24 +5,30 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `30b2078` — `fix: serialize WAL/shm init under migration lock
-  in platform store` (committed and pushed to `origin/master`).
+- **HEAD:** `d65e802` — `feat: implement phase 9b model handoff`
+  (committed and pushed to `origin/master`). This is the authoritative
+  Phase 9B implementation checkpoint; the documentation commit recording
+  it follows immediately after.
 - **Working tree:** clean.
 - **CI is green** on all matrix jobs (ubuntu Python 3.11/3.12/3.13,
   windows Python 3.12, packaging) — run #10 (`31907969693`) fully passed
-  after the `f93c112` packaging-test skip.
+  after the `f93c112` packaging-test skip. Phase 9B CI confirmation is
+  not yet run; the push succeeded and the local verification below is
+  green.
 - **Recent history:** Phase 7 at `c41cd22` (actual decision records for
   `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
   doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity);
   CI/3.10–3.11 remediation at `9a8d9d5`; doc state updates at `a5703a2`
   and `3dbeec8`; packaging-test 3.11 skip at `f93c112`; SQLite
-  concurrency/SIGBUS fix at `30b2078`.
-- **Phase 9B has NOT started.**
+  concurrency/SIGBUS fix at `30b2078`; Phase 9B at `d65e802` (model
+  handoff).
+- **Phase 9B (model handoff) is COMPLETED** — implemented and verified
+  at `d65e802` (see What is done).
 - **Resolved:** the SQLite platform-store concurrency/SIGBUS issue is now
   fixed at `30b2078` (see Known failures below for the investigation and
   verification).
-- **Baseline suite:** 2558 passed, 8 skipped, 0 failed (Python 3.13.5,
-  full suite in ~9.5 min), re-verified after the Phase 9A additions.
+- **Baseline suite:** 2589 passed, 8 skipped, 0 failed (Python 3.13,
+  full suite in ~10 min), verified in the Phase 9B pre-commit run.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -200,6 +206,63 @@ Base all work on: current code + this file + `git log --oneline -10`.
   failed). No new locking mechanism; sequential (non-nested) lock
   acquisition, no deadlock. Multi-process safety unchanged (SQLite file
   locking + `busy_timeout=5000`).
+- **Phase 9B (model handoff, implemented + verified, committed at
+  `d65e802`):**
+  - **Durable conversation model anchor** (`app/core/relay.py`,
+    `app/services/handoff.py`, `app/services/continuity_recovery.py`):
+    `Relay.anchor_for()` returns the conversation's last committed
+    logical `(provider, model)` — the in-memory committed view first,
+    durable turn metadata (`ContinuityRecovery.last_provider_model`) as
+    the restart/cross-process fallback. Both lookups are key-scoped, so a
+    conversation id presented by another key never yields another key's
+    anchor. The anchor is also seeded onto fresh `HandoffCoordinator`
+    state for an existing conversation so it survives restarts.
+  - **Anchor-first candidate tiering** (`app/services/candidate_builder.py`):
+    `CandidateBuilder.build(..., anchor=...)` puts every candidate
+    carrying the anchor model (anchor tier, deduplicated, spanning all
+    providers that host it) first, the remaining routing output (fallback
+    tier) second. Health/scoring may reorder within each tier but never
+    across tiers; `ranked_candidates()`/`rankables()` thread the same
+    anchor so the decision engine observes the identical plan (Phase 8
+    single-plan invariant intact). An anchor model no provider can
+    execute yields an empty anchor tier that falls through to the
+    fallback tier (Case D). With no anchor the plan is byte-identical to
+    the pre-Phase 9B output.
+  - **Explicit cross-turn model-selection classification**
+    (`app/services/handoff.py` `record_transition`, wired from
+    `app/api/openai.py` and `Relay.annotate_transition`): after candidate
+    resolution and before execution, the anchor's model is compared with
+    the plan's first candidate. A different model emits exactly one
+    `relay:model_switched` event (`switch_count=0`) —
+    `reason="selection"` for an explicit literal model request,
+    `reason="failover"` for Relay-initiated routing; an identical model
+    emits nothing (provider movement within the same logical model stays
+    with the execution-time `on_switch`, `reason="failover"`). The
+    annotation event is never duplicated by a within-turn switch; a
+    literal selection followed by an execution-time failover emits both
+    events in order.
+  - **Model-lineage reconstruction after restart**: durable per-turn
+    `(provider, model, seq)` metadata seeds both the fresh state's seq
+    counter (no `UNIQUE (conversation_id, seq)` collision) and its model
+    chain, so a resumed conversation reconstructs the anchor and lineage
+    across processes.
+  - **/v1 and /chat continuity behavior**: virtual/omitted models
+    (`auto`/`default`/`relay`, no model) are anchored on resume across
+    `/v1/chat/completions` (stream + non-stream) and `/chat`; explicit
+    literal models are never anchored (verbatim passthrough preserved).
+  - **Tests** (`tests/test_continuity_phase9b.py`, 31 tests): anchor
+    resolution/precedence/key-scoping/durability; transition
+    classification (selection vs failover); anchor tiering (first,
+    health-aware within-tier ordering, cross-provider expansion, no
+    duplicates, unhosted-anchor fall-through, ranked parity); HTTP /v1
+    streaming + non-streaming and /chat resume staying on the anchor;
+    selection-then-failover event ordering; anchor-unavailable
+    fall-through with `reason="failover"`; same-model cross-provider
+    within-turn switch not duplicated by the annotation; restart
+    reconstructing anchor + lineage.
+  - **Verification:** Phase 9B suite 31 passed; full suite 2589 passed,
+    8 skipped, 0 failed in the pre-commit run; `compileall -q app tests`
+    green.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
@@ -228,8 +291,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Next architectural work (Phase 9+ candidates, unverified)
 
-- Model handoff, context compaction, project persistence, and
-  cross-client continuity (explicitly out of scope for Phase 8).
+- **Model handoff — COMPLETED in Phase 9B (`d65e802`).** Remaining
+  Phase 9+ candidates: context compaction, project persistence, and
+  cross-client continuity follow-ups (explicitly out of scope for Phase
+  8).
 - Actual-decision records remain bounded in-memory; a durable schema is
   a later decision only if justified.
 
