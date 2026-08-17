@@ -5,8 +5,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `83a8885` — `docs: draft conversation-states surface example
-  (phase 10a slice 3)` (local master, not yet pushed).
+- **HEAD:** `d99d6e2` — `feat: add relay conversations projects CLI
+  and /diagnostics continuity subsection` (local master, not yet
+  pushed).
 - **Working tree:** clean.
 - **CI is green** on all matrix jobs (ubuntu Python 3.11/3.12/3.13,
   windows Python 3.12, packaging) — run #10 (`31907969693`) fully passed
@@ -18,10 +19,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
   CI/3.10–3.11 remediation at `9a8d9d5`; doc state updates at `a5703a2`
   and `3dbeec8`; packaging-test 3.11 skip at `f93c112`; SQLite
   concurrency/SIGBUS fix at `30b2078`; Phase 9B at `d65e802` (model
-  handoff); Phase 10A at `fdd5af7`–`83a8885` (empty-model seq fix,
-  project_states, conversation snapshot, docs).
+  handoff); Phase 10A at `fdd5af7`–`d99d6e2` (empty-model seq fix,
+  project_state reader, CLI surface, diagnostics subsection, docs).
 - **Phase 10A (empty-model continuity fix, conversation-states surface)
-  is COMPLETED** — implemented and verified at `fdd5af7`–`83a8885` (see
+  is COMPLETED** — implemented and verified at `fdd5af7`–`d99d6e2` (see
   What is done).
 - **Phase 9B (model handoff) is COMPLETED** — implemented and verified
   at `d65e802` (see What is done).
@@ -265,7 +266,7 @@ Base all work on: current code + this file + `git log --oneline -10`.
     8 skipped, 0 failed in the pre-commit run; `compileall -q app tests`
     green.
 - **Phase 10A (empty-model continuity fix + conversation-states
-  surface, implemented + verified, committed at `fdd5af7`–`83a8885`):**
+  surface, implemented + verified, committed at `fdd5af7`–`d99d6e2`):**
   - **Slice 0 — empty-model seq fix** (`app/services/continuity_recovery.py`,
     `app/services/handoff.py`): `durable_last_seq()` now reads the last
     turn's seq independently of `last_provider_model()`; a last turn
@@ -275,37 +276,34 @@ Base all work on: current code + this file + `git log --oneline -10`.
     durable seq source (`durable_last_seq`) from the anchor/model lineage
     source (`last_provider_model`); the anchor stays `None` until a real
     model turn commits.
-  - **Slice 1 — project_states reader** (`app/services/conversation_store.py`):
-    `ConversationStore.project_states(key_id, project_key, limit)` is a
-    bounded, read-only projection of the durable conversation table for
-    one project (key-scoped): each conversation's last committed turn
-    (seq, model, provider, outcome) and the project's total conversation
-    count. Reuses the same single-turn read as `ContinuityRecovery`; no
-    event replay, no meta rows. `ContinuityRecovery` exposes a best-effort
-    passthrough that returns `None` on store failure.
-  - **Slice 2 — coordinator snapshot** (`app/services/handoff.py`):
-    `HandoffCoordinator.build_conversation_snapshot(turn, key_id)` is a
-    bounded diagnostic snapshot of a conversation and its project at this
-    instant. Attaches `turn_id` (`{conversation_id}:{seq}`), `seq`,
-    `last_seq` (falls back to the durable `last_seq` when the live state
-    has not committed anything yet), `anchor_provider`, `anchor_model`,
-    and `model_chain`. The project block is the bounded
-    `project_states` projection (durable truth; the live state is not yet
-    flushed). Never raises: degrades to the live state alone when the
-    store is unavailable.
-  - **Slice 3 — draft surface** (`docs/conversation_states.jsonc`):
-    illustrative JSONC example of the Phase 10A conversation-states
-    shape: one project, several conversations (including one with an
-    absent `last_model`), comments documenting the empty-model contract
-    and live snapshot block.
-  - **Tests:** `test_durable_last_seq_independent_of_model`
-    (recovery), `test_fresh_state_continues_seq_when_last_turn_has_no_model`
-    (handoff) prove the seq is seeded independently of model presence;
-    `test_*_project_states` and `test_*_build_conversation_snapshot`
-    cover the projection and snapshot surfaces. 13 project-states tests,
-    2 new handoff tests, 1 new recovery test; all pass.
-  - **Verification:** compileall green; full suite 2604 passed, 8
-    skipped, 0 failed (Python 3.13). CI push confirmation pending.
+  - **Slice 1 — project_state reader** (`app/services/conversation_store.py`):
+    `ConversationStore.project_states(key_id=None, limit=50)` is a
+    read-only bounded projection of the durable `project_state` checkpoint
+    table. Each row contains `project_key`, `key_id`, `last_models`
+    (parsed JSON list), `counters` (parsed JSON dict), and `last_seen`.
+    Ordered newest `last_seen` first with stable `project_key` tie-break.
+    `ContinuityRecovery.project_states()` passthrough was removed (not in
+    approved spec; callers should use `ConversationStore` directly).
+  - **Slice 2 (removed):** `HandoffCoordinator.build_conversation_snapshot()`
+    was not in the approved spec and has been removed.
+  - **CLI surface** (`app/cli/continuity.py`): `relay conversations projects
+    [--limit N] [--json]` lists project-state checkpoints. Text output
+    shows project_key, key_id, turns, and models. JSON output returns
+    `{"projects": [...]}`. Disabled continuity prints "continuity
+    disabled"; unavailable store prints "continuity unavailable" and
+    exits 1.
+  - **Diagnostics subsection** (`app/services/diagnostics.py`):
+    `_continuity()` returns bounded counts in the `/diagnostics` snapshot:
+    `{enabled, conversations, active, archived, turns, summaries,
+    compactions, projects, replays}`. Disabled returns
+    `{"enabled": false}`; unavailable store returns
+    `{"enabled": true, "available": false}`.
+  - **Tests:** 26 tests total — 9 `project_states` table tests, 4
+    no-authority guardrail tests (regex-based, tolerating enqueue
+    strings), 8 CLI tests (text/JSON/disabled/unavailable/limit), 5
+    diagnostics tests (enabled/disabled/unavailable/zero/keys). All pass.
+  - **Verification:** compileall green; 417 continuity+diagnostics tests
+    pass (Python 3.13). CI push confirmation pending.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
@@ -336,7 +334,7 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 - **Model handoff — COMPLETED in Phase 9B (`d65e802`).**
 - **Empty-model continuity fix + conversation-states surface — COMPLETED
-  in Phase 10A (`fdd5af7`–`83a8885`).** Remaining Phase 9+ candidates:
+  in Phase 10A (`fdd5af7`–`d99d6e2`).** Remaining Phase 9+ candidates:
   context compaction, project persistence, and cross-client continuity
   follow-ups (explicitly out of scope for Phase 8).
 - Actual-decision records remain bounded in-memory; a durable schema is
