@@ -1007,52 +1007,44 @@ class ConversationStore:
         }
 
     def project_states(
-        self, key_id: str, project_key: str, limit: int = 50
-    ) -> dict:
+        self, key_id: Optional[str] = None, limit: int = 50
+    ) -> list:
         """
-        Read-only projection of the durable conversation table for one
-        project (key-scoped): every conversation's last committed turn and
-        the project's total conversation count. Reuses the same bounded
-        single-turn read as ``last_turn`` (no event replay, no meta rows).
-        The ``states`` list is ordered newest-updated first and bounded by
-        ``limit``; ``conversation_count`` reflects the full project, not
-        just the returned page. Used by the Phase 10A conversation-states
-        surface.
+        Read-only bounded projection of the durable ``project_state`` table
+        (key-scoped, newest ``last_seen`` first, stable ``project_key``
+        tie-break). Each row is the metadata-only checkpoint maintained by
+        the write-behind flusher — never used for request-path hydration.
+        Best-effort: an unavailable store yields an empty list.
         """
         limit = max(1, min(int(limit), _MAX_QUERY_LIMIT))
-        conn = self._require_open()
 
-        with self._lock:
-            rows = conn.execute(
-                "SELECT id, key_id, client_bucket, project_key FROM"
-                " conversations WHERE project_key = ? AND key_id = ?"
-                " ORDER BY updated_at DESC, id DESC LIMIT ?",
-                (project_key, key_id, limit),
-            ).fetchall()
-            conversation_count = conn.execute(
-                "SELECT COUNT(*) FROM conversations"
-                " WHERE project_key = ? AND key_id = ?",
-                (project_key, key_id),
-            ).fetchone()[0]
+        if not self._ensure_open():
+            return []
 
-        states = []
-        for row in rows:
-            cid, ckey, client_bucket, pkey = row
-            last = self.last_turn(cid, ckey)
-            states.append(
-                {
-                    "project_key": pkey,
-                    "client_bucket": client_bucket,
-                    "conversation_id": cid,
-                    "key_id": ckey,
-                    "last_seq": last["seq"] if last else None,
-                    "last_model": last["model"] if last else None,
-                    "last_provider": last["provider"] if last else None,
-                    "last_outcome": last["outcome"] if last else None,
-                }
-            )
+        scope = " WHERE key_id = ?" if key_id else ""
 
-        return {"conversation_count": conversation_count, "states": states}
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT project_key, key_id, last_models,"
+                    f"  counters, last_seen FROM project_state{scope}"
+                    f" ORDER BY last_seen DESC, project_key ASC"
+                    f" LIMIT ?",
+                    (key_id, limit) if key_id else (limit,),
+                ).fetchall()
+        except Exception:  # noqa: BLE001 - diagnostics are best-effort
+            return []
+
+        return [
+            {
+                "project_key": row[0],
+                "key_id": row[1],
+                "last_models": json.loads(row[2] or "[]"),
+                "counters": json.loads(row[3] or "{}"),
+                "last_seen": row[4],
+            }
+            for row in rows
+        ]
 
     # ============================
     # Diagnostics
