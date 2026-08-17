@@ -50,6 +50,7 @@ class DiagnosticsService:
             "quality": self._quality(relay),
             "actual_decisions": self._actual_decisions(relay),
             "persistence": self._persistence(relay),
+            "continuity": self._continuity(relay),
         }
 
     def _operations(self) -> dict:
@@ -506,4 +507,32 @@ class DiagnosticsService:
             "load_errors": load_errors,
             "flush_errors": flush_errors,
             "initialization_error": None,
+        }
+
+    def _continuity(self, relay) -> dict:
+        """
+        Phase 10A: bounded continuity counts for the /diagnostics
+        surface. Counts only — no prompts, responses, tokens, summaries,
+        or row content.  When continuity is disabled returns
+        ``{"enabled": false}``; when enabled but the store is unavailable
+        the existing best-effort zero counts apply.
+        """
+        if not settings.continuity_enabled:
+            return {"enabled": False}
+
+        store = relay.conversation_store
+        if store is None:
+            return {"enabled": True, "available": False}
+
+        counts = store.counts()
+        return {
+            "enabled": True,
+            "conversations": counts.get("conversations", 0),
+            "active": counts.get("active", 0),
+            "archived": counts.get("archived", 0),
+            "turns": counts.get("turns", 0),
+            "summaries": counts.get("summaries", 0),
+            "compactions": counts.get("compactions", 0),
+            "projects": counts.get("projects", 0),
+            "replays": counts.get("replays", 0),
         }

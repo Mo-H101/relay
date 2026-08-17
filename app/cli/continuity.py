@@ -102,6 +102,22 @@ def add_continuity_parser(parser) -> None:
         help="Emit machine-readable JSON.",
     )
 
+    projects = sub.add_parser(
+        "projects",
+        help="List project-state checkpoints (read-only, bounded).",
+    )
+    projects.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum rows to show (default 50).",
+    )
+    projects.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON.",
+    )
+
 
 def _run_continuity(args, parser) -> None:
     """``relay conversations``: metadata-only continuity surfaces."""
@@ -133,6 +149,8 @@ def _run_continuity(args, parser) -> None:
         _prune(store, args)
     elif command == "health":
         _health(store, args)
+    elif command == "projects":
+        _projects(store, args)
     else:
         _summary(store)
 
@@ -235,6 +253,31 @@ def _prune(store, args) -> None:
         return
 
     print(f"pruned {removed} conversations (window: {days} days)")
+
+
+def _projects(store, args) -> None:
+    """List project-state checkpoints (read-only, bounded)."""
+    try:
+        rows = store.project_states(limit=args.limit)
+    except Exception as exc:  # noqa: BLE001 - surface short, never values
+        _fail("could not list project states", exc)
+
+    if args.json:
+        print(json.dumps({"projects": rows}, indent=2))
+        return
+
+    if not rows:
+        print("No projects.")
+        return
+
+    for row in rows:
+        models = ", ".join(row.get("last_models", []))
+        counters = row.get("counters", {})
+        turns = counters.get("turns", 0)
+        print(
+            f"{row['project_key']}  {row['key_id']:<12}  "
+            f"turns={turns:<5}  models=[{models}]"
+        )
 
 
 def _recovery_state(conversation_id: str) -> str:

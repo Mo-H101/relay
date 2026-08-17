@@ -113,6 +113,7 @@ class TestDiagnosticsEndpoint:
             "quality",
             "actual_decisions",
             "persistence",
+            "continuity",
         }
         assert payload["generated_at"]
 
