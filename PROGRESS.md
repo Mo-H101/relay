@@ -5,12 +5,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `d5eaba8` — Phase 10A complete (master, pushed).
-- **Working tree:** has uncommitted Phase 10B WIP (overflow-retry wiring).
-- **CI is green** on all matrix jobs (ubuntu Python 3.11/3.12/3.13,
-  windows Python 3.12, packaging) — run #10 (`31907969693`) fully passed
-  after the `f93c112` packaging-test skip. Phase 10A CI confirmation ran
-  green.
+- **HEAD:** `64a660c` — Phase 10B complete (master, pushed).
+- **Working tree:** clean.
+- **CI** on all matrix jobs (ubuntu Python 3.11/3.12/3.13, windows
+  Python 3.12, packaging) — run #10 (`31907969693`) fully passed after
+  the `f93c112` packaging-test skip. Phase 10A CI confirmation ran green.
+  Phase 10B CI confirmation not yet queried from this device (gh
+  unauthenticated).
 - **Recent history:** Phase 7 at `c41cd22` (actual decision records for
   `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
   doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity);
@@ -18,13 +19,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
   and `3dbeec8`; packaging-test 3.11 skip at `f93c112`; SQLite
   concurrency/SIGBUS fix at `30b2078`; Phase 9B at `d65e802` (model
   handoff); Phase 10A at `fdd5af7`–`d5eaba8` (empty-model seq fix,
-  project_state reader, CLI surface, diagnostics subsection, docs).
-- **Phase 10B (overflow-retry wiring) is IN PROGRESS** — _exc on
-  Attempt, TurnContext.invalidate_envelope(), HandoffCoordinator
-  ._invalidate_turn_envelope(), _build_envelope overflow params,
-  metrics counter, and overflow retry logic in all four chat_across*
-  variants implemented. 12 new tests pass. Pending: streaming paths
-  evaluation, PROGRESS update, commit/push (see What is next).
+  project_state reader, CLI surface, diagnostics subsection, docs);
+  Phase 10B at `64a660c` (overflow-retry wiring).
+- **Phase 10B (overflow-retry wiring) is COMPLETED** — implemented and
+  verified at `64a660c` (see What is done).
 - **Phase 10A (empty-model continuity fix, conversation-states surface)
   is COMPLETED** — implemented and verified at `fdd5af7`–`d5eaba8` (see
   What is done).
@@ -33,8 +31,8 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Resolved:** the SQLite platform-store concurrency/SIGBUS issue is now
   fixed at `30b2078` (see Known failures below for the investigation and
   verification).
-- **Baseline suite:** 2604 passed, 8 skipped, 0 failed (Python 3.13,
-  full suite in ~12 min), verified in the Phase 10A close-out run.
+- **Baseline suite:** 2633 passed, 8 skipped, 0 failed (Python 3.13,
+  full suite in ~8 min), verified in the Phase 10B close-out run.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -270,7 +268,7 @@ Base all work on: current code + this file + `git log --oneline -10`.
     8 skipped, 0 failed in the pre-commit run; `compileall -q app tests`
     green.
 - **Phase 10A (empty-model continuity fix + conversation-states
-  surface, implemented + verified, committed at `fdd5af7`–`d99d6e2`):**
+  surface, implemented + verified, committed at `fdd5af7`–`d5eaba8`):**
   - **Slice 0 — empty-model seq fix** (`app/services/continuity_recovery.py`,
     `app/services/handoff.py`): `durable_last_seq()` now reads the last
     turn's seq independently of `last_provider_model()`; a last turn
@@ -308,6 +306,48 @@ Base all work on: current code + this file + `git log --oneline -10`.
     diagnostics tests (enabled/disabled/unavailable/zero/keys). All pass.
   - **Verification:** compileall green; 417 continuity+diagnostics tests
     pass (Python 3.13). CI push confirmation pending.
+- **Phase 10B (overflow-retry wiring, implemented + verified, committed
+  at `64a660c`):**
+  - **Overflow detection** (`app/services/chat_policy.py`): `Attempt` data
+    class gains `_exc: Any` (private, `repr=False`, `compare=False`), set
+    to the original exception on every failed attempt. Not serialized in
+    `to_dict()`.
+  - **Rebuild infrastructure** (`app/services/handoff.py`):
+    `TurnContext.rebuild_for_overflow()` delegates to
+    `HandoffCoordinator._rebuild_envelope_for_overflow()`, which
+    atomically (single `threading.Lock` acquisition) clears stale
+    coordinator state (`state.envelope=None`, `state.envelope_seq=0`),
+    rebuilds the envelope via `_build_envelope(state,
+    _overflow_params=_OVERFLOW_PARAMS)` with aggressive compaction
+    parameters (`tail_max_items=5`, `summary_share=0.7`), updates both
+    coordinator state and turn, and clears `turn._injected_payload`.
+    Delegates to existing `ContextManager.compact()` — no parallel
+    summarization system. `_OVERFLOW_PARAMS` is the single authoritative
+    definition (`handoff.py:41`).
+  - **Overflow retry logic** (`app/services/chat_service.py`,
+    `app/services/async_chat_service.py`): all four non-streaming
+    `chat_across*` variants (`chat_across`, `achat_across`,
+    `chat_across_messages`, `achat_across_messages`) check overflow
+    conditions after each failed attempt: `turn is not None`,
+    `attempt._exc is not None`, `turn.context_manager is not None`,
+    `should_retry_compacted(exc)` returns `True`. On overflow:
+    `overflow_retried=True` (per-candidate flag), `turn.rebuild_for_overflow()`,
+    re-inject message/payload, `relay_metrics.continuity_overflow_retries.inc()`,
+    `continue` (retries within existing loop). Exactly one overflow retry
+    per candidate; subsequent overflows follow normal retry/failover.
+  - **Metrics** (`app/services/metrics.py`): `relay_continuity_overflow_retries_total`
+    counter incremented on each overflow retry.
+  - **Streaming paths:** untouched — no lines containing "stream" in the
+    diff for `chat_service.py` or `async_chat_service.py`.
+  - **Tests** (`tests/test_continuity_overflow.py`, 16 tests):
+    Cases A–G covering sync/async/messages overflow retry, retry
+    exhaustion, non-overflow passthrough, no-turn failover, metrics,
+    `_exc` on Attempt, envelope changes after rebuild (real coordinator
+    with committed turns), empty-envelope recovery, payload-cache
+    invalidation, and one-retry invariant.
+  - **Verification:** compileall clean; 16/16 overflow tests pass; 2633
+    passed, 8 skipped, 0 failures full local suite (Python 3.13). CI
+    confirmation not yet queried from this device (gh unauthenticated).
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism.
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
@@ -316,10 +356,6 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## What is next (candidate backlog)
 
-- **Phase 10B (overflow-retry wiring) — IN PROGRESS:** wired the
-  dormant overflow-retry infrastructure into sync/async chat_across*
-  variants. 12 tests pass. Remaining: evaluate streaming paths, final
-  review, commit.
 - **Problem F (mostly done in Phase 8):** `/v1` and `/chat` both record
   actual decisions and `/diagnostics` surfaces them. Remaining: nothing
   in this phase — handoff/context-compaction/project-persistence and
@@ -343,9 +379,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Model handoff — COMPLETED in Phase 9B (`d65e802`).**
 - **Empty-model continuity fix + conversation-states surface — COMPLETED
   in Phase 10A (`fdd5af7`–`d5eaba8`).**
-- **Overflow-retry wiring (Phase 10B) — IN PROGRESS.** Remaining Phase
-  9+ candidates: context compaction, project persistence, and
-  cross-client continuity follow-ups (explicitly out of scope for Phase 8).
+- **Overflow-retry wiring — COMPLETED in Phase 10B (`64a660c`).**
+  Remaining Phase 9+ candidates: context compaction, project persistence,
+  and cross-client continuity follow-ups (explicitly out of scope for Phase 8).
 - Actual-decision records remain bounded in-memory; a durable schema is
   a later decision only if justified.
 
