@@ -59,6 +59,7 @@ class _FakeClient:
     def __init__(self):
         self._outcomes = []
         self.chat_calls = []
+        self.chat_messages_calls = []
 
     def set_outcomes(self, outcomes):
         self._outcomes = list(outcomes)
@@ -83,6 +84,7 @@ class _FakeClient:
 
     def chat_messages(self, provider, payload):
         self.chat_calls.append((provider.name, payload["model"]))
+        self.chat_messages_calls.append(dict(payload))
         if not self._outcomes:
             raise RuntimeError("no outcome configured")
         outcome = self._outcomes.pop(0)
@@ -604,3 +606,335 @@ class TestOneRetryInvariant:
         assert result["success"] is False
         # 1 initial + 1 overflow retry = 2 calls
         assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Double-envelope regression tests (Phase 10B fix)
+# ---------------------------------------------------------------------------
+
+class TestDoubleEnvelopeRegression:
+    """
+    Verify that overflow retry re-injects using the ORIGINAL pre-injection
+    input, so the retry payload contains exactly ONE envelope — never
+    [new_envelope, old_envelope, original_content].
+    """
+
+    # -- A. String/message path (sync) ------------------------------------
+
+    def test_string_overflow_retry_single_envelope_sync(self):
+        """Sync chat_across: after overflow retry, the message sent to the
+        provider contains exactly one [continuity context] block."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "compacted reply",
+        ])
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+
+        result = svc.chat_across(
+            [(_provider(), "m1")],
+            "hello",
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        assert len(result["attempts"]) == 2
+
+        # The second call (retry) is the one that succeeded.
+        retry_message = client.chat_calls[1][2]
+        envelope_count = retry_message.count("[continuity context]")
+        assert envelope_count == 1, (
+            f"Expected exactly 1 envelope in retry message, got {envelope_count}"
+        )
+        assert retry_message.endswith("hello"), (
+            "Original user message must appear at the end"
+        )
+
+    def test_string_no_double_envelope_regression_sync(self):
+        """Regression: overflow retry must NOT produce
+        [new_envelope, old_envelope, original_message]."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "ok",
+        ])
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+
+        result = svc.chat_across(
+            [(_provider(), "m1")],
+            "hello",
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        retry_message = client.chat_calls[1][2]
+
+        # There must be exactly one envelope.
+        assert retry_message.count("[continuity context]") == 1
+
+    # -- A2. String/message path (async) ----------------------------------
+
+    @pytest.mark.asyncio
+    async def test_string_overflow_retry_single_envelope_async(self):
+        """Async achat_across: after overflow retry, the message contains
+        exactly one [continuity context] block."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "compacted reply async",
+        ])
+        svc = _make_svc(AsyncChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+
+        result = await svc.achat_across(
+            [(_provider(), "m1")],
+            "hello",
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        retry_message = client.chat_calls[1][2]
+        envelope_count = retry_message.count("[continuity context]")
+        assert envelope_count == 1, (
+            f"Expected exactly 1 envelope in retry message, got {envelope_count}"
+        )
+        assert retry_message.endswith("hello"), (
+            "Original user message must appear at the end"
+        )
+
+    # -- B. Dict/messages path (sync) -------------------------------------
+
+    def test_messages_overflow_retry_single_envelope_sync(self):
+        """Sync chat_across_messages: after overflow retry, the payload
+        contains exactly one envelope system message."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "compacted reply msgs",
+        ])
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = svc.chat_across_messages(
+            [(_provider(), "m1")],
+            payload,
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        assert len(result["attempts"]) == 2
+
+        # Inspect the actual payload sent on the retry call.
+        retry_payload = client.chat_messages_calls[-1]
+        messages = retry_payload["messages"]
+
+        # Exactly one system message (the envelope).
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 1, (
+            f"Expected exactly 1 system (envelope) message, got {len(system_msgs)}"
+        )
+
+        # The original user message must appear exactly once.
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        assert len(user_msgs) == 1, (
+            f"Expected exactly 1 user message, got {len(user_msgs)}"
+        )
+        assert user_msgs[0]["content"] == "hi"
+
+    def test_messages_no_double_envelope_regression_sync(self):
+        """Regression: overflow retry must NOT produce
+        [new_envelope_sys, old_envelope_sys, ...original_messages]."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "ok",
+        ])
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = svc.chat_across_messages(
+            [(_provider(), "m1")],
+            payload,
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        retry_payload = client.chat_messages_calls[-1]
+        messages = retry_payload["messages"]
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 1
+
+    # -- B2. Dict/messages path (async) -----------------------------------
+
+    @pytest.mark.asyncio
+    async def test_messages_overflow_retry_single_envelope_async(self):
+        """Async achat_across_messages: after overflow retry, the payload
+        contains exactly one envelope system message."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "compacted reply async msgs",
+        ])
+        svc = _make_svc(AsyncChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = await svc.achat_across_messages(
+            [(_provider(), "m1")],
+            payload,
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        retry_payload = client.chat_messages_calls[-1]
+        messages = retry_payload["messages"]
+
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 1, (
+            f"Expected exactly 1 system (envelope) message, got {len(system_msgs)}"
+        )
+
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        assert len(user_msgs) == 1
+        assert user_msgs[0]["content"] == "hi"
+
+    # -- D. One-overflow-retry invariant ----------------------------------
+
+    def test_one_overflow_retry_invariant_still_holds_string(self):
+        """Exactly one overflow retry fires per candidate (string path)."""
+        from app.services.chat_service import ChatService
+
+        call_count = 0
+
+        def counting_chat(provider, model, message, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise _OverflowError()
+
+        client = _FakeClient()
+        client.chat = counting_chat
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+
+        result = svc.chat_across(
+            [(_provider(), "m1")],
+            "hello",
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is False
+        assert call_count == 2  # 1 initial + 1 overflow retry
+
+    def test_one_overflow_retry_invariant_still_holds_messages(self):
+        """Exactly one overflow retry fires per candidate (messages path)."""
+        from app.services.chat_service import ChatService
+
+        call_count = 0
+
+        def counting_chat_messages(provider, payload):
+            nonlocal call_count
+            call_count += 1
+            raise _OverflowError()
+
+        client = _FakeClient()
+        client.chat_messages = counting_chat_messages
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = svc.chat_across_messages(
+            [(_provider(), "m1")],
+            payload,
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is False
+        assert call_count == 2
+
+    # -- E. Cache cleared by rebuild_for_overflow -------------------------
+
+    def test_rebuild_clears_cache_inject_uses_new_envelope_string(self):
+        """After rebuild_for_overflow, inject_message uses the NEW envelope,
+        not the old cached one. The final message has exactly one envelope
+        matching the rebuilt state."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "ok",
+        ])
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        original_envelope = dict(turn.envelope)
+
+        result = svc.chat_across(
+            [(_provider(), "m1")],
+            "hello",
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        # The envelope must have changed after rebuild.
+        assert turn.envelope != original_envelope
+        assert "compacted" in turn.envelope
+        # The retry message must have exactly one envelope.
+        retry_message = client.chat_calls[1][2]
+        assert retry_message.count("[continuity context]") == 1
+
+    def test_rebuild_clears_cache_inject_uses_new_envelope_messages(self):
+        """After rebuild_for_overflow, inject_payload uses the NEW envelope
+        in the system message, not the old cached one."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeClient()
+        client.set_outcomes([
+            _OverflowError(),
+            "ok",
+        ])
+        svc = _make_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        original_envelope = dict(turn.envelope)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = svc.chat_across_messages(
+            [(_provider(), "m1")],
+            payload,
+            max_retries=0,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        assert turn.envelope != original_envelope
+        retry_payload = client.chat_messages_calls[-1]
+        messages = retry_payload["messages"]
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 1
+        # The system message content must match the NEW envelope render.
+        from app.services.handoff import render_envelope
+        assert system_msgs[0]["content"] == render_envelope(turn.envelope)

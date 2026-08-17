@@ -155,6 +155,8 @@ class AsyncChatService:
         max_retries = max(0, int(max_retries))
         start_wall = asyncio.get_running_loop().time()
 
+        original_message = message
+
         if turn is not None:
             message = turn.inject_message(message)
 
@@ -246,7 +248,7 @@ class AsyncChatService:
                 ):
                     overflow_retried = True
                     turn.rebuild_for_overflow()
-                    message = turn.inject_message(message)
+                    message = turn.inject_message(original_message)
                     relay_metrics.continuity_overflow_retries.inc()
                     continue
 
@@ -528,6 +530,8 @@ class AsyncChatService:
         max_retries = max(0, int(max_retries))
         start_wall = asyncio.get_running_loop().time()
 
+        original_payload = payload
+
         if turn is not None:
             payload = turn.inject_payload(payload)
 
@@ -617,7 +621,7 @@ class AsyncChatService:
                 ):
                     overflow_retried = True
                     turn.rebuild_for_overflow()
-                    payload = turn.inject_payload(payload)
+                    payload = turn.inject_payload(original_payload)
                     relay_metrics.continuity_overflow_retries.inc()
                     continue
 
