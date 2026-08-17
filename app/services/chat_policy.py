@@ -7,7 +7,7 @@ wall-clock reads. Both services import the same helpers so candidate
 failover, retry, and request-timeout-budget decisions cannot drift between
 the sync and async stacks.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Tuple
 
 from app.core.config import settings
@@ -27,6 +27,7 @@ class Attempt:
     failure_type: str = ""
     reason: str = ""
     retry_after: float | None = None
+    _exc: Any = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         return {

@@ -581,6 +581,10 @@ class RelayMetrics:
             "relay_continuity_compactions_total",
             "Envelope compactions performed by the continuity coordinator.",
         )
+        self.continuity_overflow_retries = r.counter(
+            "relay_continuity_overflow_retries_total",
+            "Overflow-triggered re-compaction retries.",
+        )
         self.continuity_resumes = r.counter(
             "relay_continuity_resumes_total",
             "Resume tokens accepted by continuity recovery.",

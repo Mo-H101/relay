@@ -18,6 +18,7 @@ from app.services.failure_classifier import (
     FailureKind,
     classify,
 )
+from app.services.metrics import relay_metrics
 
 
 class ChatService:
@@ -68,6 +69,7 @@ class ChatService:
                     failure_type=kind.value,
                     reason=str(exc),
                     retry_after=getattr(exc, "retry_after", None),
+                    _exc=exc,
                 ),
                 None,
                 kind,
@@ -146,6 +148,7 @@ class ChatService:
                 continue
 
             retry_no = 0
+            overflow_retried = False
 
             while retry_no <= max_retries:
 
@@ -206,6 +209,24 @@ class ChatService:
                     return result
 
                 errors.append(f"{model} ({provider.name}): {attempt.reason}")
+
+                # Phase 10B: overflow-retry with a more aggressively
+                # compacted envelope, independent of the normal retry
+                # budget.  Exactly one overflow retry per candidate.
+                if (
+                    not overflow_retried
+                    and turn is not None
+                    and attempt._exc is not None
+                    and turn.context_manager is not None
+                    and turn.context_manager.should_retry_compacted(
+                        attempt._exc
+                    )
+                ):
+                    overflow_retried = True
+                    turn.rebuild_for_overflow()
+                    message = turn.inject_message(message)
+                    relay_metrics.continuity_overflow_retries.inc()
+                    continue
 
                 if kind in PROVIDER_LEVEL:
                     skip_providers.add(provider.name)
@@ -279,6 +300,7 @@ class ChatService:
                     failure_type=kind.value,
                     reason=str(exc),
                     retry_after=getattr(exc, "retry_after", None),
+                    _exc=exc,
                 ),
                 None,
                 kind,
@@ -335,6 +357,7 @@ class ChatService:
                 continue
 
             retry_no = 0
+            overflow_retried = False
 
             while retry_no <= max_retries:
 
@@ -394,6 +417,23 @@ class ChatService:
                     return result
 
                 errors.append(f"{model} ({provider.name}): {attempt.reason}")
+
+                # Phase 10B: overflow-retry with a more aggressively
+                # compacted envelope.
+                if (
+                    not overflow_retried
+                    and turn is not None
+                    and attempt._exc is not None
+                    and turn.context_manager is not None
+                    and turn.context_manager.should_retry_compacted(
+                        attempt._exc
+                    )
+                ):
+                    overflow_retried = True
+                    turn.rebuild_for_overflow()
+                    payload = turn.inject_payload(payload)
+                    relay_metrics.continuity_overflow_retries.inc()
+                    continue
 
                 if kind in PROVIDER_LEVEL:
                     skip_providers.add(provider.name)

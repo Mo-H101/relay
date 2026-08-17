@@ -38,6 +38,11 @@ from app.services.continuity_headers import new_conversation_id
 from app.services.context_manager import ContextManager
 from app.services.metrics import relay_metrics
 
+_OVERFLOW_PARAMS = {
+    "tail_max_items": 5,
+    "summary_share": 0.7,
+}
+
 _logger = logging.getLogger("relay")
 
 # Bounded in-memory state so a flood of distinct conversation ids cannot
@@ -238,6 +243,42 @@ class TurnContext:
     def attach(self, result: dict) -> None:
         """Attach metadata-only continuity info to a chat result dict."""
         result["continuity"] = self.metadata()
+
+    def invalidate_envelope(self) -> None:
+        """Invalidate the cached envelope so the next inject_* call rebuilds
+        it.  Used by the overflow-retry path (Phase 10B) to force a more
+        aggressively compacted envelope after a context-overflow error.
+        Never raises.
+        """
+        self.envelope = None
+        self._injected_payload = None
+        if self._handoff is not None:
+            try:
+                self._handoff._invalidate_turn_envelope(self)
+            except Exception:  # noqa: BLE001 - continuity never breaks chat
+                pass
+
+    def rebuild_for_overflow(self) -> None:
+        """Invalidate, recompact with aggressive overflow params, and
+        update this turn's envelope.  Used by the single-allowed overflow
+        retry (Phase 10B) to force a more aggressively compacted envelope
+        after a context-overflow error.
+
+        Clears the injected-payload cache so the next ``inject_message`` /
+        ``inject_payload`` call renders the new envelope.
+
+        Never raises; a best-effort fallback so continuity can never break
+        chat.
+        """
+        if self._handoff is None:
+            self.envelope = None
+            self._injected_payload = None
+            return
+        try:
+            self._handoff._rebuild_envelope_for_overflow(self)
+        except Exception:  # noqa: BLE001 - continuity never breaks chat
+            self.envelope = None
+            self._injected_payload = None
 
     def metadata(self) -> dict:
         """Metadata-only projection consumed by logs/metrics/SSE layers."""
@@ -810,11 +851,62 @@ class HandoffCoordinator:
         state.envelope = turn.envelope
         state.envelope_seq = current_seq
 
-    def _build_envelope(self, state: _ConversationState) -> dict:
+    def _invalidate_turn_envelope(self, turn: TurnContext) -> None:
+        """Clear the cached envelope for a conversation so the next
+        ``_ensure_envelope`` call rebuilds it (used by overflow retry).
+        """
+        with self._lock:
+            state = self._states.get(
+                _state_key(turn.key_id, turn.conversation_id)
+            )
+            if state is not None:
+                state.envelope = None
+                state.envelope_seq = 0
+
+    def _rebuild_envelope_for_overflow(self, turn: TurnContext) -> None:
+        """Invalidate, recompact with aggressive overflow params, and update
+        the turn's envelope in a single lock-held operation.
+
+        Called by ``TurnContext.rebuild_for_overflow`` during the single-
+        allowed overflow retry (Phase 10B).  Clears the injected-payload
+        cache so the next ``inject_message`` / ``inject_payload`` call
+        renders the new envelope.
+
+        Never raises; called under a ``try/except`` at the TurnContext
+        level.
+        """
+        with self._lock:
+            state = self._states.get(
+                _state_key(turn.key_id, turn.conversation_id)
+            )
+            if state is None:
+                turn.envelope = None
+                turn._injected_payload = None
+                return
+            state.envelope = None
+            state.envelope_seq = 0
+            current_seq = state.next_seq - 1
+            turn.envelope = self._build_envelope(
+                state, _overflow_params=_OVERFLOW_PARAMS
+            )
+            state.envelope = turn.envelope
+            state.envelope_seq = current_seq
+            turn._injected_payload = None
+
+    def _build_envelope(
+        self,
+        state: _ConversationState,
+        *,
+        _overflow_params: Optional[dict] = None,
+    ) -> dict:
         """
         Assemble the envelope: summary + bounded tail when the context
         overflows the budget, tail-only otherwise. Compaction persistence
         is enqueued here (the same compaction that produced the envelope).
+
+        When ``_overflow_params`` is provided (Phase 10B overflow retry),
+        compaction uses overridden parameters for a more aggressive
+        summary+tail split.
         """
         now = time.time()
         turns = list(state.committed_turns)
@@ -858,10 +950,15 @@ class HandoffCoordinator:
             - self._manager.output_reserve_tokens,
         )
 
-        if estimate > usable:
+        if estimate > usable or _overflow_params is not None:
             result = self._manager.compact(
                 turns,
-                reason=CompactionReason.PREFLIGHT.value,
+                reason=(
+                    CompactionReason.OVERFLOW.value
+                    if _overflow_params is not None
+                    else CompactionReason.PREFLIGHT.value
+                ),
+                params=_overflow_params,
                 now=now,
             )
             summary = result.summary

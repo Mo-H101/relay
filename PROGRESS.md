@@ -5,24 +5,28 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `d99d6e2` — `feat: add relay conversations projects CLI
-  and /diagnostics continuity subsection` (local master, not yet
-  pushed).
-- **Working tree:** clean.
+- **HEAD:** `d5eaba8` — Phase 10A complete (master, pushed).
+- **Working tree:** has uncommitted Phase 10B WIP (overflow-retry wiring).
 - **CI is green** on all matrix jobs (ubuntu Python 3.11/3.12/3.13,
   windows Python 3.12, packaging) — run #10 (`31907969693`) fully passed
-  after the `f93c112` packaging-test skip. Phase 10A CI confirmation will
-  run after the push.
+  after the `f93c112` packaging-test skip. Phase 10A CI confirmation ran
+  green.
 - **Recent history:** Phase 7 at `c41cd22` (actual decision records for
   `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
   doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity);
   CI/3.10–3.11 remediation at `9a8d9d5`; doc state updates at `a5703a2`
   and `3dbeec8`; packaging-test 3.11 skip at `f93c112`; SQLite
   concurrency/SIGBUS fix at `30b2078`; Phase 9B at `d65e802` (model
-  handoff); Phase 10A at `fdd5af7`–`d99d6e2` (empty-model seq fix,
+  handoff); Phase 10A at `fdd5af7`–`d5eaba8` (empty-model seq fix,
   project_state reader, CLI surface, diagnostics subsection, docs).
+- **Phase 10B (overflow-retry wiring) is IN PROGRESS** — _exc on
+  Attempt, TurnContext.invalidate_envelope(), HandoffCoordinator
+  ._invalidate_turn_envelope(), _build_envelope overflow params,
+  metrics counter, and overflow retry logic in all four chat_across*
+  variants implemented. 12 new tests pass. Pending: streaming paths
+  evaluation, PROGRESS update, commit/push (see What is next).
 - **Phase 10A (empty-model continuity fix, conversation-states surface)
-  is COMPLETED** — implemented and verified at `fdd5af7`–`d99d6e2` (see
+  is COMPLETED** — implemented and verified at `fdd5af7`–`d5eaba8` (see
   What is done).
 - **Phase 9B (model handoff) is COMPLETED** — implemented and verified
   at `d65e802` (see What is done).
@@ -312,6 +316,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## What is next (candidate backlog)
 
+- **Phase 10B (overflow-retry wiring) — IN PROGRESS:** wired the
+  dormant overflow-retry infrastructure into sync/async chat_across*
+  variants. 12 tests pass. Remaining: evaluate streaming paths, final
+  review, commit.
 - **Problem F (mostly done in Phase 8):** `/v1` and `/chat` both record
   actual decisions and `/diagnostics` surfaces them. Remaining: nothing
   in this phase — handoff/context-compaction/project-persistence and
@@ -334,9 +342,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 - **Model handoff — COMPLETED in Phase 9B (`d65e802`).**
 - **Empty-model continuity fix + conversation-states surface — COMPLETED
-  in Phase 10A (`fdd5af7`–`d99d6e2`).** Remaining Phase 9+ candidates:
-  context compaction, project persistence, and cross-client continuity
-  follow-ups (explicitly out of scope for Phase 8).
+  in Phase 10A (`fdd5af7`–`d5eaba8`).**
+- **Overflow-retry wiring (Phase 10B) — IN PROGRESS.** Remaining Phase
+  9+ candidates: context compaction, project persistence, and
+  cross-client continuity follow-ups (explicitly out of scope for Phase 8).
 - Actual-decision records remain bounded in-memory; a durable schema is
   a later decision only if justified.
 
