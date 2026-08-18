@@ -522,6 +522,8 @@ class ChatService:
         errors: List[str] = []
         skip_providers = set()
 
+        original_message = message
+
         if turn is not None:
             message = turn.inject_message(message)
 
@@ -531,6 +533,8 @@ class ChatService:
 
             if provider.name in skip_providers:
                 continue
+
+            overflow_retried = False
 
             if (
                 turn is not None
@@ -547,66 +551,79 @@ class ChatService:
                 if not decision.get("allowed", True):
                     break
 
-            start = time.perf_counter()
+            while True:
+                start = time.perf_counter()
 
-            try:
-                stream_gen = self._try_stream_once(
-                    provider,
-                    model,
-                    message,
-                    **generation_kwargs,
-                )
-                # Pull the first chunk to verify the stream actually started.
-                first_chunk = next(stream_gen)
-            except StopIteration:
-                attempts.append({
+                try:
+                    stream_gen = self._try_stream_once(
+                        provider,
+                        model,
+                        message,
+                        **generation_kwargs,
+                    )
+                    # Pull the first chunk to verify the stream actually started.
+                    first_chunk = next(stream_gen)
+                except StopIteration:
+                    attempts.append({
+                        "provider": provider.name,
+                        "model": model,
+                        "latency_ms": int((time.perf_counter() - start) * 1000),
+                        "failure_type": "empty_stream",
+                        "reason": "stream ended before producing content",
+                    })
+                    errors.append(f"{model} ({provider.name}): empty stream")
+                    last_key = (provider.name, model)
+                    break
+                except Exception as exc:
+                    kind = classify(exc)
+                    attempts.append({
+                        "provider": provider.name,
+                        "model": model,
+                        "latency_ms": int((time.perf_counter() - start) * 1000),
+                        "failure_type": kind.value,
+                        "reason": str(exc),
+                    })
+                    errors.append(f"{model} ({provider.name}): {exc}")
+
+                    if (
+                        not overflow_retried
+                        and turn is not None
+                        and turn.context_manager is not None
+                        and turn.context_manager.should_retry_compacted(exc)
+                    ):
+                        overflow_retried = True
+                        turn.rebuild_for_overflow()
+                        message = turn.inject_message(original_message)
+                        relay_metrics.continuity_overflow_retries.inc()
+                        continue
+
+                    if kind in PROVIDER_LEVEL:
+                        skip_providers.add(provider.name)
+                    last_key = (provider.name, model)
+                    break
+
+                def gen() -> Generator[str, None, None]:
+                    yield first_chunk
+                    yield from stream_gen
+
+                result = {
+                    "success": True,
                     "provider": provider.name,
                     "model": model,
-                    "latency_ms": int((time.perf_counter() - start) * 1000),
-                    "failure_type": "empty_stream",
-                    "reason": "stream ended before producing content",
-                })
-                errors.append(f"{model} ({provider.name}): empty stream")
-                last_key = (provider.name, model)
-                continue
-            except Exception as exc:
-                kind = classify(exc)
-                attempts.append({
-                    "provider": provider.name,
-                    "model": model,
-                    "latency_ms": int((time.perf_counter() - start) * 1000),
-                    "failure_type": kind.value,
-                    "reason": str(exc),
-                })
-                errors.append(f"{model} ({provider.name}): {exc}")
+                    "stream_gen": gen(),
+                    "error": None,
+                    "attempts": attempts,
+                }
 
-                if kind in PROVIDER_LEVEL:
-                    skip_providers.add(provider.name)
-                last_key = (provider.name, model)
-                continue
+                if turn is not None:
+                    turn.finish(
+                        provider=provider.name,
+                        model=model,
+                        outcome="ok",
+                    )
+                    turn.attach(result)
 
-            def gen() -> Generator[str, None, None]:
-                yield first_chunk
-                yield from stream_gen
-
-            result = {
-                "success": True,
-                "provider": provider.name,
-                "model": model,
-                "stream_gen": gen(),
-                "error": None,
-                "attempts": attempts,
-            }
-
-            if turn is not None:
-                turn.finish(
-                    provider=provider.name,
-                    model=model,
-                    outcome="ok",
-                )
-                turn.attach(result)
-
-            return result
+                return result
 
         first_provider = candidates[0][0].name if candidates else ""
         first_model = candidates[0][1] if candidates else ""
@@ -684,6 +701,8 @@ class ChatService:
         skip_providers = set()
         total = len(candidates)
 
+        original_payload = payload
+
         if turn is not None:
             payload = turn.inject_payload(payload)
 
@@ -693,6 +712,8 @@ class ChatService:
 
             if provider.name in skip_providers:
                 continue
+
+            overflow_retried = False
 
             if on_progress is not None:
                 on_progress({
@@ -718,94 +739,108 @@ class ChatService:
                 if not decision.get("allowed", True):
                     break
 
-            start = time.perf_counter()
+            while True:
+                start = time.perf_counter()
 
-            try:
-                # The shared payload is rebound to the candidate model so
-                # each attempt targets the correct endpoint.
-                payload["model"] = model
-                stream_gen = self._try_stream_once_messages(
-                    provider,
-                    model,
-                    payload,
-                )
-                first_chunk = next(stream_gen)
-            except StopIteration:
-                attempts.append({
-                    "provider": provider.name,
-                    "model": model,
-                    "latency_ms": int((time.perf_counter() - start) * 1000),
-                    "failure_type": "empty_stream",
-                    "reason": "stream ended before producing content",
-                })
-                errors.append(f"{model} ({provider.name}): empty stream")
-                if on_progress is not None:
-                    on_progress({
-                        "stage": "failed",
-                        "index": index,
-                        "total": total,
+                try:
+                    # The shared payload is rebound to the candidate model so
+                    # each attempt targets the correct endpoint.
+                    payload["model"] = model
+                    stream_gen = self._try_stream_once_messages(
+                        provider,
+                        model,
+                        payload,
+                    )
+                    first_chunk = next(stream_gen)
+                except StopIteration:
+                    attempts.append({
                         "provider": provider.name,
                         "model": model,
+                        "latency_ms": int((time.perf_counter() - start) * 1000),
+                        "failure_type": "empty_stream",
                         "reason": "stream ended before producing content",
                     })
-                last_key = (provider.name, model)
-                continue
-            except Exception as exc:
-                kind = classify(exc)
-                attempts.append({
-                    "provider": provider.name,
-                    "model": model,
-                    "latency_ms": int((time.perf_counter() - start) * 1000),
-                    "failure_type": kind.value,
-                    "reason": str(exc),
-                })
-                errors.append(f"{model} ({provider.name}): {exc}")
+                    errors.append(f"{model} ({provider.name}): empty stream")
+                    if on_progress is not None:
+                        on_progress({
+                            "stage": "failed",
+                            "index": index,
+                            "total": total,
+                            "provider": provider.name,
+                            "model": model,
+                            "reason": "stream ended before producing content",
+                        })
+                    last_key = (provider.name, model)
+                    break
+                except Exception as exc:
+                    kind = classify(exc)
+                    attempts.append({
+                        "provider": provider.name,
+                        "model": model,
+                        "latency_ms": int((time.perf_counter() - start) * 1000),
+                        "failure_type": kind.value,
+                        "reason": str(exc),
+                    })
+                    errors.append(f"{model} ({provider.name}): {exc}")
+
+                    if (
+                        not overflow_retried
+                        and turn is not None
+                        and turn.context_manager is not None
+                        and turn.context_manager.should_retry_compacted(exc)
+                    ):
+                        overflow_retried = True
+                        turn.rebuild_for_overflow()
+                        payload = turn.inject_payload(original_payload)
+                        relay_metrics.continuity_overflow_retries.inc()
+                        continue
+
+                    if on_progress is not None:
+                        on_progress({
+                            "stage": "failed",
+                            "index": index,
+                            "total": total,
+                            "provider": provider.name,
+                            "model": model,
+                            "reason": str(exc),
+                        })
+
+                    if kind in PROVIDER_LEVEL:
+                        skip_providers.add(provider.name)
+                    last_key = (provider.name, model)
+                    break
+
                 if on_progress is not None:
                     on_progress({
-                        "stage": "failed",
+                        "stage": "started",
                         "index": index,
                         "total": total,
                         "provider": provider.name,
                         "model": model,
-                        "reason": str(exc),
                     })
 
-                if kind in PROVIDER_LEVEL:
-                    skip_providers.add(provider.name)
-                last_key = (provider.name, model)
-                continue
+                def gen() -> Generator[dict, None, None]:
+                    yield first_chunk
+                    yield from stream_gen
 
-            if on_progress is not None:
-                on_progress({
-                    "stage": "started",
-                    "index": index,
-                    "total": total,
+                result = {
+                    "success": True,
                     "provider": provider.name,
                     "model": model,
-                })
+                    "stream_gen": gen(),
+                    "error": None,
+                    "attempts": attempts,
+                }
 
-            def gen() -> Generator[dict, None, None]:
-                yield first_chunk
-                yield from stream_gen
+                if turn is not None:
+                    turn.finish(
+                        provider=provider.name,
+                        model=model,
+                        outcome="ok",
+                    )
+                    turn.attach(result)
 
-            result = {
-                "success": True,
-                "provider": provider.name,
-                "model": model,
-                "stream_gen": gen(),
-                "error": None,
-                "attempts": attempts,
-            }
-
-            if turn is not None:
-                turn.finish(
-                    provider=provider.name,
-                    model=model,
-                    outcome="ok",
-                )
-                turn.attach(result)
-
-            return result
+                return result
 
         first_provider = candidates[0][0].name if candidates else ""
         first_model = candidates[0][1] if candidates else ""

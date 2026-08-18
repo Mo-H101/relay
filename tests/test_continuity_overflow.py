@@ -25,6 +25,7 @@ import pytest
 from unittest.mock import patch, MagicMock, call
 
 from app.providers.base import Provider
+from app.providers.exceptions import ProviderHTTPError, ProviderTimeout
 from app.services.context_manager import ContextManager, ContextOverflowSignal
 from app.services.handoff import HandoffCoordinator, TurnContext
 from app.services.metrics import relay_metrics
@@ -938,3 +939,853 @@ class TestDoubleEnvelopeRegression:
         # The system message content must match the NEW envelope render.
         from app.services.handoff import render_envelope
         assert system_msgs[0]["content"] == render_envelope(turn.envelope)
+
+
+# ===========================================================================
+# Phase 11: Streaming overflow retry tests (S-A through S-J)
+# ===========================================================================
+
+class _FakeStreamingClient:
+    """Queue-based fake for streaming methods.
+
+    Outcomes per method are popped in order.  An Exception outcome is
+    raised before any yield (simulating a pre-first-chunk failure).  A
+    list-of-chunks outcome is yielded element-by-element.
+    """
+
+    def __init__(self):
+        self._stream_outcomes = []
+        self._stream_messages_outcomes = []
+        self.chat_stream_calls = []
+        self.achat_stream_calls = []
+        self.chat_stream_messages_calls = []
+        self.achat_stream_messages_calls = []
+
+    def set_stream_outcomes(self, outcomes):
+        self._stream_outcomes = list(outcomes)
+
+    def set_stream_messages_outcomes(self, outcomes):
+        self._stream_messages_outcomes = list(outcomes)
+
+    # -- sync single-message -----------------------------------------------
+
+    def chat_stream(self, provider, model, message, **kwargs):
+        self.chat_stream_calls.append((provider.name, model, message))
+        if not self._stream_outcomes:
+            raise RuntimeError("no stream outcome configured")
+        outcome = self._stream_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        for chunk in outcome:
+            yield chunk
+
+    # -- async single-message ----------------------------------------------
+
+    async def achat_stream(self, provider, model, message, **kwargs):
+        self.achat_stream_calls.append((provider.name, model, message))
+        if not self._stream_outcomes:
+            raise RuntimeError("no stream outcome configured")
+        outcome = self._stream_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        for chunk in outcome:
+            yield chunk
+
+    # -- sync messages -----------------------------------------------------
+
+    def chat_stream_messages(self, provider, payload):
+        self.chat_stream_messages_calls.append(
+            (provider.name, dict(payload))
+        )
+        if not self._stream_messages_outcomes:
+            raise RuntimeError("no stream messages outcome configured")
+        outcome = self._stream_messages_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        for chunk in outcome:
+            yield chunk
+
+    # -- async messages ----------------------------------------------------
+
+    async def achat_stream_messages(self, provider, payload):
+        self.achat_stream_messages_calls.append(
+            (provider.name, dict(payload))
+        )
+        if not self._stream_messages_outcomes:
+            raise RuntimeError("no stream messages outcome configured")
+        outcome = self._stream_messages_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        for chunk in outcome:
+            yield chunk
+
+
+def _make_streaming_svc(cls, client):
+    svc = cls()
+    svc.registry = _FakeRegistry(client)
+    return svc
+
+
+def _ok_chunk(content="ok"):
+    """Build a minimal streaming chunk dict."""
+    return {
+        "choices": [{
+            "index": 0,
+            "delta": {"content": content},
+            "finish_reason": None,
+        }]
+    }
+
+
+# ---------------------------------------------------------------------------
+# S-A: overflow → rebuild → retry same candidate → first chunk succeeds
+# ---------------------------------------------------------------------------
+
+class TestStreamingOverflowRetry:
+
+    def test_sync_stream_overflow_retry_succeeds(self):
+        """S-A (sync single-message): overflow → compact retry → stream starts."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            _OverflowError(),
+            [_ok_chunk("compacted")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ), patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = svc.chat_across_stream(
+                [(_provider(), "m1")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "p1"
+        assert len(result["attempts"]) == 1
+        rebuild.assert_called_once()
+        # The retry call produced the stream.
+        assert len(client.chat_stream_calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_async_stream_overflow_retry_succeeds(self):
+        """S-A (async single-message): overflow → compact retry → stream starts."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            _OverflowError(),
+            [_ok_chunk("compacted async")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ), patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = await svc.achat_across_stream(
+                [(_provider(), "m1")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        rebuild.assert_called_once()
+        assert len(client.achat_stream_calls) == 2
+
+    def test_sync_messages_overflow_retry_succeeds(self):
+        """S-A (sync messages): overflow → compact retry → stream starts."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("compacted msgs")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ), patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = svc.chat_across_stream_messages(
+                [(_provider(), "m1")],
+                payload,
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        rebuild.assert_called_once()
+        assert len(client.chat_stream_messages_calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_async_messages_overflow_retry_succeeds(self):
+        """S-A (async messages): overflow → compact retry → stream starts."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("compacted async msgs")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ), patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = await svc.achat_across_stream_messages(
+                [(_provider(), "m1")],
+                payload,
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        rebuild.assert_called_once()
+        assert len(client.achat_stream_messages_calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# S-B: overflow → compact retry → second overflow → no third attempt
+# ---------------------------------------------------------------------------
+
+class TestStreamingOverflowExhausted:
+
+    def test_sync_stream_overflow_exhausted(self):
+        """S-B (sync single-message): overflow × 2 → fail for that candidate."""
+        from app.services.chat_service import ChatService
+
+        call_count = 0
+
+        def counting_stream(provider, model, message, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise _OverflowError()
+
+        client = _FakeStreamingClient()
+        client.chat_stream = counting_stream
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = svc.chat_across_stream(
+                [(_provider(), "m1")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is False
+        assert call_count == 2
+        assert len(result["attempts"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_async_stream_overflow_exhausted(self):
+        """S-B (async single-message): overflow × 2 → fail."""
+        from app.services.async_chat_service import AsyncChatService
+
+        call_count = 0
+
+        async def counting_stream(provider, model, message, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if True:
+                raise _OverflowError()
+            yield  # pragma: no cover – makes this an async generator
+
+        client = _FakeStreamingClient()
+        client.achat_stream = counting_stream
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = await svc.achat_across_stream(
+                [(_provider(), "m1")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is False
+        assert call_count == 2
+
+    def test_sync_messages_overflow_exhausted(self):
+        """S-B (sync messages): overflow × 2 → fail."""
+        from app.services.chat_service import ChatService
+
+        call_count = 0
+
+        def counting_stream_messages(provider, payload):
+            nonlocal call_count
+            call_count += 1
+            raise _OverflowError()
+
+        client = _FakeStreamingClient()
+        client.chat_stream_messages = counting_stream_messages
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = svc.chat_across_stream_messages(
+                [(_provider(), "m1")],
+                payload,
+                turn=turn,
+            )
+
+        assert result["success"] is False
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_async_messages_overflow_exhausted(self):
+        """S-B (async messages): overflow × 2 → fail."""
+        from app.services.async_chat_service import AsyncChatService
+
+        call_count = 0
+
+        async def counting_stream_messages(provider, payload):
+            nonlocal call_count
+            call_count += 1
+            if True:
+                raise _OverflowError()
+            yield  # pragma: no cover – makes this an async generator
+
+        client = _FakeStreamingClient()
+        client.achat_stream_messages = counting_stream_messages
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = await svc.achat_across_stream_messages(
+                [(_provider(), "m1")],
+                payload,
+                turn=turn,
+            )
+
+        assert result["success"] is False
+        assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# S-C: overflow → compact retry → non-overflow error → failover
+# ---------------------------------------------------------------------------
+
+class TestStreamingOverflowRetryNonOverflowFail:
+
+    def test_sync_stream_overflow_then_non_overflow(self):
+        """S-C (sync): overflow → retry → timeout → failover."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            _OverflowError(),
+            ProviderTimeout("timeout"),
+            [_ok_chunk("from candidate 2")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = svc.chat_across_stream(
+                [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "p2"
+        assert len(result["attempts"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_async_messages_overflow_then_non_overflow(self):
+        """S-C (async messages): overflow → retry → timeout → failover."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            ProviderTimeout("timeout"),
+            [_ok_chunk("from candidate 2 async msgs")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = await svc.achat_across_stream_messages(
+                [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+                payload,
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "p2"
+
+
+# ---------------------------------------------------------------------------
+# S-D: non-overflow HTTP 400 → NO retry → normal failover
+# ---------------------------------------------------------------------------
+
+class TestStreamingNonOverflowNoRetry:
+
+    def test_sync_stream_non_overflow_no_retry(self):
+        """S-D (sync): non-overflow 400 → no compaction retry."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            ProviderHTTPError(400, "bad request"),
+            [_ok_chunk("from candidate 2")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = svc.chat_across_stream(
+                [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "p2"
+        rebuild.assert_not_called()
+        # Only 2 calls total: 1 failed + 1 success (no retry of p1)
+        assert len(client.chat_stream_calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_async_stream_non_overflow_no_retry(self):
+        """S-D (async): non-overflow 400 → no compaction retry."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            ProviderHTTPError(400, "bad request"),
+            [_ok_chunk("from candidate 2 async")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = await svc.achat_across_stream(
+                [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "p2"
+        rebuild.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# S-E: overflow when turn=None → NO retry
+# ---------------------------------------------------------------------------
+
+class TestStreamingOverflowNoTurn:
+
+    def test_sync_stream_overflow_no_turn(self):
+        """S-E (sync): overflow but no turn → no compaction retry."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            _OverflowError(),
+            [_ok_chunk("from candidate 2")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+
+        result = svc.chat_across_stream(
+            [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+            "hello",
+        )
+
+        assert result["success"] is True
+        assert result["provider"] == "p2"
+        assert len(result["attempts"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_messages_overflow_no_turn(self):
+        """S-E (async messages): overflow but no turn → no compaction retry."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("from candidate 2")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = await svc.achat_across_stream_messages(
+            [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+            payload,
+        )
+
+        assert result["success"] is True
+        assert result["provider"] == "p2"
+        assert len(result["attempts"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# S-F: overflow retry increments continuity_overflow_retries
+# ---------------------------------------------------------------------------
+
+class TestStreamingOverflowMetrics:
+
+    def test_sync_stream_metrics_inc(self):
+        """S-F (sync): overflow retry increments continuity_overflow_retries."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            _OverflowError(),
+            [_ok_chunk("ok")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ), patch.object(
+            relay_metrics.continuity_overflow_retries, "inc"
+        ) as inc:
+            svc.chat_across_stream(
+                [(_provider(), "m1")],
+                "hello",
+                turn=turn,
+            )
+
+        inc.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_messages_metrics_inc(self):
+        """S-F (async messages): overflow retry increments counter."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("ok")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ), patch.object(
+            relay_metrics.continuity_overflow_retries, "inc"
+        ) as inc:
+            await svc.achat_across_stream_messages(
+                [(_provider(), "m1")],
+                payload,
+                turn=turn,
+            )
+
+        inc.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# S-G: post-first-chunk failure → NO retry
+# ---------------------------------------------------------------------------
+
+class TestStreamingPostFirstChunkNoRetry:
+
+    def test_sync_stream_post_first_chunk_no_retry(self):
+        """S-G (sync): overflow after first chunk → no retry, stream returned."""
+        from app.services.chat_service import ChatService
+
+        call_count = 0
+
+        def stream_with_late_error(provider, model, message, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            yield _ok_chunk("first")
+            raise _OverflowError()
+
+        client = _FakeStreamingClient()
+        client.chat_stream = stream_with_late_error
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = svc.chat_across_stream(
+                [(_provider(), "m1")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        rebuild.assert_not_called()
+        assert call_count == 1
+        # Drain the generator to verify it yields the first chunk.
+        # The post-first-chunk overflow should propagate (no retry).
+        chunks = []
+        try:
+            for chunk in result["stream_gen"]:
+                chunks.append(chunk)
+        except _OverflowError:
+            pass
+        assert chunks[0]["choices"][0]["delta"]["content"] == "first"
+
+    @pytest.mark.asyncio
+    async def test_async_stream_post_first_chunk_no_retry(self):
+        """S-G (async): overflow after first chunk → no retry, stream returned."""
+        from app.services.async_chat_service import AsyncChatService
+
+        call_count = 0
+
+        async def stream_with_late_error(provider, model, message, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            yield _ok_chunk("first async")
+            raise _OverflowError()
+
+        client = _FakeStreamingClient()
+        client.achat_stream = stream_with_late_error
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn, "rebuild_for_overflow"
+        ) as rebuild:
+            result = await svc.achat_across_stream(
+                [(_provider(), "m1")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        rebuild.assert_not_called()
+        assert call_count == 1
+        chunks = []
+        try:
+            async for chunk in result["stream_gen"]:
+                chunks.append(chunk)
+        except _OverflowError:
+            pass
+        assert chunks[0]["choices"][0]["delta"]["content"] == "first async"
+
+
+# ---------------------------------------------------------------------------
+# S-H: two candidates, each independently gets at most one overflow retry
+# ---------------------------------------------------------------------------
+
+class TestStreamingTwoCandidateOverflow:
+
+    def test_sync_stream_two_candidates_each_overflow(self):
+        """S-H (sync): both candidates overflow → each gets one retry → second wins."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_outcomes([
+            _OverflowError(),
+            [_ok_chunk("compacted p1")],
+            _OverflowError(),
+            [_ok_chunk("compacted p2")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn()
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = svc.chat_across_stream(
+                [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+                "hello",
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "p1"
+        assert len(result["attempts"]) == 1
+        assert len(client.chat_stream_calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_async_messages_two_candidates_each_overflow(self):
+        """S-H (async messages): both overflow → second candidate wins."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("compacted p1 async")],
+            _OverflowError(),
+            [_ok_chunk("compacted p2 async")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn()
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        with patch.object(
+            turn.context_manager, "should_retry_compacted", return_value=True
+        ):
+            result = await svc.achat_across_stream_messages(
+                [(_provider("p1"), "m1"), (_provider("p2"), "m2")],
+                payload,
+                turn=turn,
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "p1"
+        assert len(result["attempts"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# S-I: messages path uses original pre-injection payload on retry
+# ---------------------------------------------------------------------------
+
+class TestStreamingMessagesOriginalPayload:
+
+    def test_sync_messages_single_envelope_on_retry(self):
+        """S-I (sync): retry payload has exactly one envelope, original preserved."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("ok")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = svc.chat_across_stream_messages(
+            [(_provider(), "m1")],
+            payload,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        assert len(result["attempts"]) == 1
+
+        # Inspect the retry call payload.
+        retry_payload = client.chat_stream_messages_calls[1][1]
+        messages = retry_payload["messages"]
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 1, (
+            f"Expected exactly 1 system (envelope) message, got {len(system_msgs)}"
+        )
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        assert len(user_msgs) == 1
+        assert user_msgs[0]["content"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_async_messages_single_envelope_on_retry(self):
+        """S-I (async): retry payload has exactly one envelope."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("ok")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = await svc.achat_across_stream_messages(
+            [(_provider(), "m1")],
+            payload,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        retry_payload = client.achat_stream_messages_calls[1][1]
+        messages = retry_payload["messages"]
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 1
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        assert len(user_msgs) == 1
+        assert user_msgs[0]["content"] == "hi"
+
+
+# ---------------------------------------------------------------------------
+# S-J: original payload remains unmodified (model mutation is safe)
+# ---------------------------------------------------------------------------
+
+class TestStreamingPayloadNotMutated:
+
+    def test_sync_messages_original_payload_unchanged(self):
+        """S-J (sync): the original payload dict is not mutated by the retry."""
+        from app.services.chat_service import ChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("ok")],
+        ])
+        svc = _make_streaming_svc(ChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = svc.chat_across_stream_messages(
+            [(_provider(), "m1")],
+            payload,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        # The original payload should not have extra keys added by inject.
+        assert "messages" in payload
+        messages = payload["messages"]
+        # Original messages should not have a system envelope prepended.
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 0
+
+    @pytest.mark.asyncio
+    async def test_async_messages_original_payload_unchanged(self):
+        """S-J (async): the original payload dict is not mutated."""
+        from app.services.async_chat_service import AsyncChatService
+
+        client = _FakeStreamingClient()
+        client.set_stream_messages_outcomes([
+            _OverflowError(),
+            [_ok_chunk("ok")],
+        ])
+        svc = _make_streaming_svc(AsyncChatService, client)
+        turn = _make_turn_with_committed_turns(4)
+        payload = {"model": "m1", "messages": [{"role": "user", "content": "hi"}]}
+
+        result = await svc.achat_across_stream_messages(
+            [(_provider(), "m1")],
+            payload,
+            turn=turn,
+        )
+
+        assert result["success"] is True
+        messages = payload["messages"]
+        system_msgs = [m for m in messages if m["role"] == "system"]
+        assert len(system_msgs) == 0
