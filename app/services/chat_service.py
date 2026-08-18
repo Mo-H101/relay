@@ -284,9 +284,11 @@ class ChatService:
 
         try:
             client = self.registry.get(provider.identity())
+            attempt_payload = dict(payload)
+            attempt_payload["model"] = model
             response = client.chat_messages(
                 provider=provider,
-                payload=payload,
+                payload=attempt_payload,
             )
         except Exception as exc:
             latency = int((time.perf_counter() - start) * 1000)

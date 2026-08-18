@@ -15,6 +15,7 @@ from app.services.decision_record import record_actual_decision
 from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
+from app.services.redaction import redact_text
 from app.services.routing import TASK_CATEGORIES
 from app.services.task_classifier import classify_task
 from app.schemas.openai import (
@@ -557,7 +558,7 @@ async def openai_chat_completion(
                 failure_type = classify(exc).value
                 error_chunk = {
                     "error": {
-                        "message": str(exc),
+                        "message": redact_text(str(exc)),
                         "type": "stream_error",
                         "code": "stream_error"
                     }

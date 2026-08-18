@@ -727,3 +727,75 @@ class TestReconcile:
         assert report["requires_review"] == 0
         assert recovery.state(cid) == RecoveryState.ARCHIVED.value
         store.close()
+
+    def test_reconcile_acquires_lock_on_state_write(self, tmp_path):
+        """Regression: reconcile() must write _states under self._lock,
+        matching the locking discipline used by transition()."""
+        import threading
+
+        class _CountingLock:
+            """Wrapper that tracks acquire count while delegating to a real lock."""
+
+            def __init__(self):
+                self._lock = threading.Lock()
+                self.acquire_count = 0
+
+            def acquire(self, *a, **kw):
+                self.acquire_count += 1
+                return self._lock.acquire(*a, **kw)
+
+            def release(self):
+                self._lock.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *a):
+                self.release()
+
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        counting_lock = _CountingLock()
+        recovery._lock = counting_lock
+
+        _commit_turn(
+            store,
+            seq=1,
+            resume_token_hash=derive_resume_token_hash("tok"),
+        )
+
+        report = recovery.reconcile()
+
+        assert report["recoverable"] >= 1
+        assert counting_lock.acquire_count >= 1
+        store.close()
+
+    def test_reconcile_sets_recoverable_under_lock(self, tmp_path):
+        """Verify reconcile correctly sets RECOVERABLE state."""
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        cid = _commit_turn(
+            store,
+            seq=1,
+            resume_token_hash=derive_resume_token_hash("tok"),
+        )
+
+        report = recovery.reconcile()
+
+        assert report["recoverable"] == 1
+        assert recovery.state(cid) == RecoveryState.RECOVERABLE.value
+        store.close()
+
+    def test_reconcile_sets_active_when_no_resume_token(self, tmp_path):
+        """Verify reconcile correctly sets ACTIVE state for healthy convos
+        without resume tokens."""
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        cid = _commit_turn(store, seq=1)
+
+        report = recovery.reconcile()
+
+        assert report["healthy"] == 1
+        assert recovery.state(cid) == RecoveryState.ACTIVE.value
+        store.close()

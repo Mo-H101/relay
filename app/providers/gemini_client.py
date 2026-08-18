@@ -614,7 +614,7 @@ class GeminiClient:
             details = f"HTTP {response.status_code}"
         except Exception as exc:
             ok = False
-            details = str(exc)
+            details = safe_error_body(provider, 0, str(exc))
 
         latency = int((time.perf_counter() - start) * 1000)
         return ok, details, latency
@@ -636,7 +636,9 @@ class GeminiClient:
                 f"{self.name} model discovery timed out."
             ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
         if response.status_code >= 400:
             raise ProviderHTTPError(
@@ -662,7 +664,7 @@ class GeminiClient:
                 **proxy_request_kwargs(provider, url),
             )
         except httpx.HTTPError as exc:
-            return None, str(exc)
+            return None, safe_error_body(provider, 0, str(exc))
 
         return response.status_code, response.text
 
@@ -694,7 +696,7 @@ class GeminiClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                safe_error_body(provider, 0, str(exc)),
             )
 
         latency = int((time.perf_counter() - start) * 1000)
@@ -776,7 +778,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -849,7 +853,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -978,7 +984,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
     def chat_stream_messages(
         self,
@@ -1063,7 +1071,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
     async def achat(
         self,
@@ -1135,7 +1145,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -1260,7 +1272,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
     async def achat_messages(self, provider, payload: dict) -> dict:
         """
@@ -1313,7 +1327,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -1425,7 +1441,9 @@ class GeminiClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
     async def alist_models(self, provider) -> list:
         """
@@ -1443,7 +1461,9 @@ class GeminiClient:
                 f"{self.name} model discovery timed out."
             ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(
+                0, safe_error_body(provider, 0, str(exc))
+            ) from exc
 
         if response.status_code >= 400:
             raise ProviderHTTPError(
@@ -1483,7 +1503,7 @@ class GeminiClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                safe_error_body(provider, 0, str(exc)),
             )
 
         latency = int((time.perf_counter() - start) * 1000)

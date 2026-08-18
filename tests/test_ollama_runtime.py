@@ -416,6 +416,26 @@ class TestChatSync:
         assert chunks == ["Hel", "lo"]
         assert recorded["json"]["stream"] is True
 
+    def test_chat_stream_raises_on_inline_error(self, monkeypatch):
+        body = '{"error": "model not found"}\n'
+        patch_stream(monkeypatch, FakeStreamResponse(body.splitlines()))
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            list(OllamaClient().chat_stream(make_provider(), "m", "hi"))
+
+        assert exc.value.status_code == 0
+        assert "model not found" in exc.value.message
+
+    def test_chat_stream_yields_content_before_error(self, monkeypatch):
+        body = (
+            '{"message": {"role": "assistant", "content": "partial"}}\n'
+            '{"error": "interrupted"}\n'
+        )
+        patch_stream(monkeypatch, FakeStreamResponse(body.splitlines()))
+
+        with pytest.raises(ProviderHTTPError):
+            list(OllamaClient().chat_stream(make_provider(), "m", "hi"))
+
 
 class TestMessagesSync:
     def test_chat_messages_returns_openai_shaped_response(self, monkeypatch):
@@ -669,6 +689,24 @@ class TestAsyncSurface:
         with pytest.raises(ProviderHTTPError):
             async for _ in stream:
                 pass
+
+    @pytest.mark.asyncio
+    async def test_achat_stream_raises_on_inline_error(self, monkeypatch):
+        body = '{"error": "model not found"}\n'
+
+        def handler(request):
+            return httpx.Response(200, text=body, request=request)
+
+        install_async_client(monkeypatch, handler)
+
+        stream = OllamaClient().achat_stream(make_provider(), "m", "hi")
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            async for _ in stream:
+                pass
+
+        assert exc.value.status_code == 0
+        assert "model not found" in exc.value.message
 
 
 class TestHealthCheck:

@@ -618,6 +618,13 @@ class OllamaClient:
                         chunk = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if "error" in chunk:
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, str(chunk["error"])
+                            ),
+                        )
                     message_chunk = chunk.get("message") or {}
                     content = message_chunk.get("content")
                     if content:
@@ -905,6 +912,13 @@ class OllamaClient:
                             chunk = json.loads(line)
                         except json.JSONDecodeError:
                             continue
+                        if "error" in chunk:
+                            raise ProviderHTTPError(
+                                0,
+                                safe_error_body(
+                                    provider, 0, str(chunk["error"])
+                                ),
+                            )
                         message = chunk.get("message") or {}
                         content = message.get("content")
                         if content:

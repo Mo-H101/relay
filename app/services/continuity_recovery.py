@@ -538,10 +538,12 @@ class ContinuityRecovery:
                 except Exception:  # noqa: BLE001
                     last = None
                 if last and last.get("resume_token_hash"):
-                    self._states[cid] = RecoveryState.RECOVERABLE
+                    with self._lock:
+                        self._states[cid] = RecoveryState.RECOVERABLE
                     report["recoverable"] += 1
                     continue
-            self._states[cid] = RecoveryState.ACTIVE
+            with self._lock:
+                self._states[cid] = RecoveryState.ACTIVE
 
         relay_metrics.continuity_reconciliations.inc()
         self._emit_reconcile_audit(report)

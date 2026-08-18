@@ -30,6 +30,7 @@ class FakeClient:
 
     def __init__(self):
         self.calls = []
+        self.chat_messages_calls = []
         self._outcomes = {}
 
     def set_outcomes(self, model, outcomes):
@@ -52,6 +53,43 @@ class FakeClient:
             raise outcome
 
         return outcome
+
+    def chat_messages(self, provider, payload):
+        self.calls.append((provider.name, payload["model"]))
+        self.chat_messages_calls.append(dict(payload))
+
+        model = payload["model"]
+        queue = self._outcomes.get(model)
+
+        if not queue:
+            raise ProviderError(f"no outcome configured for {model}")
+
+        outcome = queue[0]
+
+        if len(queue) > 1:
+            queue.pop(0)
+
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        return {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": str(outcome)},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -775,3 +813,55 @@ class TestStreamMessagesProgress:
         assert result["success"] is True
         chunks = list(result["stream_gen"])
         assert chunks[0]["choices"][0]["delta"]["content"] == "ok"
+
+
+class TestSyncModelCorrection:
+    """Regression: sync _try_once_messages must send the resolved concrete
+    model in the payload, matching the async _atry_once_messages behaviour."""
+
+    def test_model_overridden_in_payload(self, fake_registry):
+        provider = make_provider("A", ["resolved-model"])
+        client = make_client(
+            fake_registry,
+            "A",
+            {"resolved-model": ["ok"]},
+        )
+        svc = ChatService()
+        original_payload = {
+            "model": "virtual/original-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        attempt, response, kind = svc._try_once_messages(
+            provider,
+            "resolved-model",
+            original_payload,
+            1,
+        )
+
+        assert attempt.success is True
+        assert len(client.chat_messages_calls) == 1
+        sent_payload = client.chat_messages_calls[0]
+        assert sent_payload["model"] == "resolved-model"
+
+    def test_original_payload_not_mutated(self, fake_registry):
+        provider = make_provider("A", ["resolved-model"])
+        make_client(
+            fake_registry,
+            "A",
+            {"resolved-model": ["ok"]},
+        )
+        svc = ChatService()
+        original_payload = {
+            "model": "virtual/original-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        svc._try_once_messages(
+            provider,
+            "resolved-model",
+            original_payload,
+            1,
+        )
+
+        assert original_payload["model"] == "virtual/original-model"
