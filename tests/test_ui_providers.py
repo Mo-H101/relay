@@ -338,12 +338,16 @@ async def test_setup_adapter_masks_key_input(monkeypatch, tmp_path):
             None, lambda: adapter.ask("API key for OpenAI (blank to skip)", "")
         )
 
-        await _wait_until(pilot, lambda: isinstance(app.screen, PromptScreen))
-        modal = app.screen
-        from textual.widgets import Input
+        try:
+            await _wait_until(pilot, lambda: isinstance(app.screen, PromptScreen))
+            modal = app.screen
+            from textual.widgets import Input
 
-        assert modal.query_one("#prompt-input", Input).password is True
-        await pilot.press("escape")
+            assert modal.query_one("#prompt-input", Input).password is True
+            await pilot.press("escape")
+        finally:
+            if isinstance(app.screen, PromptScreen):
+                await pilot.press("escape")
 
         result = await asyncio.wait_for(future, timeout=5.0)
         assert result == ""  # cancel resolves as an empty key
