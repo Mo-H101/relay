@@ -31,6 +31,7 @@ from app.providers.openai_compat_client import (
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
+from app.services.redaction import redact_text
 
 
 def _image_source(url: str) -> dict | None:
@@ -485,7 +486,7 @@ class AnthropicClient:
             details = f"HTTP {response.status_code}"
         except Exception as exc:
             ok = False
-            details = str(exc)
+            details = redact_text(str(exc))
 
         latency = int((time.perf_counter() - start) * 1000)
         return ok, details, latency
@@ -508,7 +509,7 @@ class AnthropicClient:
                 f"{self.name} model discovery timed out."
             ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
         if response.status_code >= 400:
             raise ProviderHTTPError(
@@ -538,7 +539,7 @@ class AnthropicClient:
                 **proxy_request_kwargs(provider, url),
             )
         except httpx.HTTPError as exc:
-            return None, str(exc)
+            return None, redact_text(str(exc))
 
         return response.status_code, response.text
 
@@ -581,7 +582,7 @@ class AnthropicClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                redact_text(str(exc)),
             )
 
         latency = int((time.perf_counter() - start) * 1000)
@@ -672,7 +673,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -744,7 +745,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -879,7 +880,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
     def chat_stream_messages(
         self,
@@ -964,7 +965,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
     async def achat(
         self,
@@ -1039,7 +1040,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -1171,7 +1172,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
     async def achat_messages(self, provider, payload: dict) -> dict:
         """
@@ -1224,7 +1225,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -1336,7 +1337,7 @@ class AnthropicClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
     async def alist_models(self, provider) -> list:
         """
@@ -1358,7 +1359,7 @@ class AnthropicClient:
                 f"{self.name} model discovery timed out."
             ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, redact_text(str(exc))) from exc
 
         if response.status_code >= 400:
             raise ProviderHTTPError(
@@ -1414,7 +1415,7 @@ class AnthropicClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                redact_text(str(exc)),
             )
 
         latency = int((time.perf_counter() - start) * 1000)

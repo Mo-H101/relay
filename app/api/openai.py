@@ -608,7 +608,7 @@ async def openai_chat_completion(
     except Exception as exc:
         return _openai_error_response(
             500,
-            str(exc),
+            redact_text(str(exc)),
             error_type="server_error",
             code="relay_error",
             correlation_id=correlation_id,

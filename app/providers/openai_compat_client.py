@@ -13,7 +13,7 @@ from app.providers.exceptions import (
     ProviderTimeout,
 )
 from app.services.metrics import relay_metrics
-from app.services.redaction import redact_provider_error
+from app.services.redaction import redact_provider_error, redact_text
 
 
 def _safe_provider_body(provider: Provider, status_code: int, body: str) -> str:
@@ -252,7 +252,7 @@ class OpenAICompatibleClient:
             details = f"HTTP {response.status_code}"
         except Exception as exc:
             ok = False
-            details = str(exc)
+            details = redact_text(str(exc))
 
         latency = int((time.perf_counter() - start) * 1000)
         return ok, details, latency
@@ -346,7 +346,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
@@ -436,7 +436,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
@@ -503,7 +503,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
@@ -559,7 +559,7 @@ class OpenAICompatibleClient:
                 ),
             )
         except httpx.HTTPError as exc:
-            return None, str(exc)
+            return None, redact_text(str(exc))
 
         return response.status_code, response.text
 
@@ -633,7 +633,7 @@ class OpenAICompatibleClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                redact_text(str(exc)),
             )
 
         latency = int((time.perf_counter() - start) * 1000)
@@ -801,7 +801,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
     def chat_stream_messages(
@@ -907,7 +907,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
     async def achat(
@@ -1005,7 +1005,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
@@ -1168,7 +1168,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
     async def achat_messages(
@@ -1235,7 +1235,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
@@ -1367,7 +1367,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
     async def alist_models(self, provider: Provider) -> List[str]:
@@ -1413,7 +1413,7 @@ class OpenAICompatibleClient:
             )
             raise ProviderHTTPError(
                 0,
-                str(exc),
+                redact_text(str(exc)),
             ) from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
@@ -1511,7 +1511,7 @@ class OpenAICompatibleClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                redact_text(str(exc)),
             )
 
         latency = int((time.perf_counter() - start) * 1000)
