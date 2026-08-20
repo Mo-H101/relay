@@ -1,0 +1,314 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Relay TUI — Base Design System Stylesheet
+   
+   Single source of truth for all global CSS. Uses hardcoded hex values
+   that match app/ui/theme.py tokens. Screen-specific stylesheets will
+   be added in later stages.
+   
+   Color reference (matches theme.py):
+     Background:  #0d1117    Surface:     #161b22
+     Raised:      #1c2128    Sunken:      #010409
+     Border:      #30363d    Border-subtle: #21262d
+     Accent:      #58a6ff    Info:        #58a6ff
+     OK:          #3fb950    Warn:        #d29922    Error: #f85149
+     Text:        #e6edf3    Text-bright: #ffffff
+     Text-dim:    #c9d1d9    Text-muted:  #8b949e
+     Text-subtle: #6e7681    Text-disabled: #484f58
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Global ─────────────────────────────────────────────────────── */
+
+Screen {
+    background: #0d1117;
+    color: #e6edf3;
+}
+
+/* ── Typography Hierarchy ───────────────────────────────────────── */
+
+.screen-title {
+    height: 1;
+    padding: 0 1;
+    margin-bottom: 1;
+    text-style: bold;
+    color: #58a6ff;
+}
+
+/* ── Stat Tiles ─────────────────────────────────────────────────── */
+
+.tile-row {
+    height: 5;
+    margin: 0 1 1 1;
+}
+
+StatTile {
+    border: round #30363d;
+    background: #161b22;
+    padding: 0 1;
+    width: 1fr;
+    margin: 0 1;
+}
+
+.stat-label {
+    color: #8b949e;
+    height: 1;
+}
+
+.stat-value {
+    color: #e6edf3;
+    height: 1;
+    text-overflow: ellipsis;
+}
+
+/* ── Status Lines ───────────────────────────────────────────────── */
+
+.status-line {
+    padding: 0 1;
+    height: 1;
+    color: #8b949e;
+}
+
+/* ── Chat Screen ────────────────────────────────────────────────── */
+
+#chat-root {
+    padding: 0 1;
+    height: 1fr;
+}
+
+#chat-controls {
+    height: 3;
+    margin-bottom: 1;
+    align: center middle;
+}
+
+#chat-controls Input {
+    width: 2fr;
+    margin: 0 1;
+}
+
+#model-picker {
+    width: 30;
+    margin: 0 1;
+}
+
+#chat-status {
+    height: 1;
+    padding: 0 1;
+    margin-top: 1;
+    color: #8b949e;
+}
+
+/* ── DataTable Screens (Models, Providers) ──────────────────────── */
+
+#models-root, #providers-root {
+    padding: 0 1;
+    height: 1fr;
+}
+
+#models-controls, #providers-controls {
+    height: 3;
+    margin-bottom: 1;
+    align: center middle;
+}
+
+#models-controls > *, #providers-controls > * {
+    margin: 0 1;
+}
+
+#provider-toggle {
+    width: 24;
+}
+
+#models-root DataTable, #providers-root DataTable {
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+#models-status, #providers-status {
+    height: 1;
+    padding: 0 1;
+    margin-top: 1;
+    color: #8b949e;
+}
+
+/* ── Configuration Screen ───────────────────────────────────────── */
+
+#config-root {
+    padding: 0 1;
+    height: 1fr;
+}
+
+.config-group {
+    color: #58a6ff;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.config-note {
+    color: #d29922;
+    height: 1;
+    margin-top: 1;
+}
+
+.config-field {
+    margin-bottom: 1;
+}
+
+.config-row {
+    height: auto;
+}
+
+.config-label {
+    width: 32;
+    color: #e6edf3;
+    padding: 0 1 0 0;
+}
+
+.config-hint {
+    color: #8b949e;
+    height: 1;
+}
+
+.config-secret {
+    color: #d29922;
+}
+
+#config-controls {
+    height: 3;
+    margin: 1 0;
+    align: left middle;
+}
+
+#config-controls > * {
+    margin: 0 1 0 0;
+}
+
+#config-status {
+    height: 1;
+    padding: 0 1;
+    margin-top: 1;
+    color: #8b949e;
+}
+
+/* ── Applications Screen ────────────────────────────────────────── */
+
+#applications-root {
+    padding: 0 1;
+    height: 1fr;
+}
+
+#applications-root DataTable {
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+#applications-controls {
+    height: 3;
+    margin: 1 0;
+    align: left middle;
+}
+
+#applications-controls > * {
+    margin: 0 1 0 0;
+}
+
+#applications-status {
+    height: 1;
+    padding: 0 1;
+    margin-top: 1;
+    color: #8b949e;
+}
+
+#auth-line, #endpoint-line {
+    height: 1;
+    color: #e6edf3;
+    margin-bottom: 1;
+}
+
+/* ── Diagnostics Screen ─────────────────────────────────────────── */
+
+#diagnostics-root {
+    padding: 0 1;
+    height: 1fr;
+}
+
+#diagnostics-root DataTable {
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+#diag-controls, #diag-probe-controls {
+    height: 3;
+    margin: 1 0;
+    align: left middle;
+}
+
+#diag-controls > *, #diag-probe-controls > * {
+    margin: 0 1 0 0;
+}
+
+#diagnostics-status {
+    height: 1;
+    padding: 0 1;
+    margin-top: 1;
+    color: #8b949e;
+}
+
+#diag-summary {
+    height: 1;
+    color: #e6edf3;
+    margin-bottom: 1;
+}
+
+#export-path {
+    width: 40;
+}
+
+#provider-select {
+    width: 24;
+}
+
+/* ── Utilities ──────────────────────────────────────────────────── */
+
+.hidden {
+    display: none;
+}
+
+.placeholder-title {
+    color: #58a6ff;
+    text-style: bold;
+}
+
+.placeholder-note {
+    color: #8b949e;
+}
+
+/* ── Responsive Foundations ─────────────────────────────────────── */
+
+#chat-controls, #models-controls, #providers-controls,
+#config-controls, #applications-controls, #diag-controls,
+#diag-probe-controls {
+    min-height: 3;
+}
+
+DataTable {
+    min-height: 1;
+}
+
+.status-line,
+#chat-status, #models-status, #providers-status,
+#config-status, #applications-status, #diagnostics-status {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+Input {
+    min-width: 10;
+}
+
+Select {
+    min-width: 10;
+}
+
+Button {
+    min-width: 8;
+}

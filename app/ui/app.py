@@ -14,6 +14,7 @@ import logging
 from textual.app import App, Binding
 from textual.binding import BindingType
 
+from app import __version__
 from app.core import config
 from app.core.server import EmbeddedServer
 from app.ui.data import ServiceFacade
@@ -24,18 +25,8 @@ from app.ui.screens.dashboard import DashboardScreen
 from app.ui.screens.diagnostics import DiagnosticsScreen
 from app.ui.screens.models import ModelsScreen
 from app.ui.screens.providers import ProvidersScreen
-from app.ui.theme import theme
 
 _logger = logging.getLogger("relay.ui")
-
-NOTES = {
-    "chat": "Chat with your configured providers.",
-    "models": "Model availability and priority controls.",
-    "providers": "Provider keys, scanning, and setup.",
-    "configuration": "Routing, failover, and server settings.",
-    "applications": "Client activity and endpoint/auth status.",
-    "diagnostics": "Operations tail, health, and export.",
-}
 
 
 class RelayApp(App[None]):
@@ -46,7 +37,9 @@ class RelayApp(App[None]):
     """
 
     TITLE = "Relay"
-    SUB_TITLE = "AI gateway terminal"
+    SUB_TITLE = f"AI gateway terminal  ·  v{__version__}"
+
+    CSS_PATH = "styles/base.tcss"
 
     BINDINGS: list[BindingType] = [
         Binding("1", "tab('dashboard')", "Dashboard"),
@@ -70,192 +63,6 @@ class RelayApp(App[None]):
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+c", "quit", "Quit", priority=True),
     ]
-
-    CSS = f"""
-    Screen {{
-        background: {theme.background};
-    }}
-
-    .screen-title {{
-        padding: 0 1;
-        height: 1;
-        margin-bottom: 1;
-    }}
-
-    .tile-row {{
-        height: 5;
-        margin: 0 1 1 1;
-    }}
-
-    StatTile {{
-        border: round {theme.panel_border};
-        background: {theme.surface};
-        padding: 0 1;
-        width: 1fr;
-        margin: 0 1;
-    }}
-
-    .stat-label {{
-        color: {theme.muted};
-        height: 1;
-    }}
-
-    .stat-value {{
-        color: {theme.text_bright};
-        height: 1;
-        text-overflow: ellipsis;
-    }}
-
-    .status-line {{
-        padding: 0 1;
-        height: 1;
-    }}
-
-    .placeholder-title {{
-        color: {theme.accent};
-        text-style: bold;
-    }}
-
-    .placeholder-note {{
-        color: {theme.muted};
-    }}
-
-    #chat-root {{
-        padding: 0 1;
-        height: 1fr;
-    }}
-
-    #chat-controls {{
-        height: 3;
-        margin-bottom: 1;
-        align: center middle;
-    }}
-
-    #chat-controls Input {{
-        width: 2fr;
-        margin: 0 1;
-    }}
-
-    #model-picker {{
-        width: 30;
-        margin: 0 1;
-    }}
-
-    #chat-status {{
-        height: 1;
-        padding: 0 1;
-        margin-top: 1;
-    }}
-
-    .hidden {{
-        display: none;
-    }}
-
-    #models-root, #providers-root {{
-        padding: 0 1;
-        height: 1fr;
-    }}
-
-    #models-controls, #providers-controls {{
-        height: 3;
-        margin-bottom: 1;
-        align: center middle;
-    }}
-
-    #models-controls > *, #providers-controls > * {{
-        margin: 0 1;
-    }}
-
-    #provider-toggle {{
-        width: 24;
-    }}
-
-    #models-root DataTable, #providers-root DataTable {{
-        height: 1fr;
-        margin-bottom: 1;
-    }}
-
-    #models-status, #providers-status {{
-        height: 1;
-        padding: 0 1;
-        margin-top: 1;
-    }}
-
-    #config-root, #applications-root, #diagnostics-root {{
-        padding: 0 1;
-        height: 1fr;
-    }}
-
-    .config-group {{
-        color: {theme.accent};
-        text-style: bold;
-        margin-top: 1;
-    }}
-
-    .config-note {{
-        color: {theme.warn};
-        height: 1;
-        margin-top: 1;
-    }}
-
-    .config-field {{
-        margin-bottom: 1;
-    }}
-
-    .config-row {{
-        height: auto;
-    }}
-
-    .config-label {{
-        width: 32;
-        color: {theme.text_bright};
-        padding: 0 1 0 0;
-    }}
-
-    .config-hint {{
-        color: {theme.muted};
-        height: 1;
-    }}
-
-    .config-secret {{
-        color: {theme.warn};
-    }}
-
-    #config-controls, #applications-controls, #diag-controls, #diag-probe-controls {{
-        height: 3;
-        margin: 1 0;
-        align: left middle;
-    }}
-
-    #config-controls > *, #applications-controls > *, #diag-controls > *, #diag-probe-controls > * {{
-        margin: 0 1 0 0;
-    }}
-
-    #config-status, #applications-status, #diagnostics-status {{
-        height: 1;
-        padding: 0 1;
-        margin-top: 1;
-    }}
-
-    #auth-line, #endpoint-line, #diag-summary {{
-        height: 1;
-        color: {theme.text};
-        margin-bottom: 1;
-    }}
-
-    #applications-root DataTable, #diagnostics-root DataTable {{
-        height: 1fr;
-        margin-bottom: 1;
-    }}
-
-    #export-path {{
-        width: 40;
-    }}
-
-    #provider-select {{
-        width: 24;
-    }}
-    """
 
     def __init__(
         self,

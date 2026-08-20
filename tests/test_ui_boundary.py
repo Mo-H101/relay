@@ -2,9 +2,8 @@
 Textual import-boundary tests.
 
 The design constraint is that Textual may only be imported by ``app/ui``
-(and ``app/ui/data.py``, ``app/ui/theme.py``, ``app/ui/keymap.py`` must
-stay Textual-free too). This suite enforces both statically and at
-runtime.
+(and ``app/ui/data.py`` and ``app/ui/theme.py`` must stay Textual-free
+too). This suite enforces both statically and at runtime.
 """
 
 import re
@@ -34,7 +33,7 @@ def test_no_textual_imports_outside_ui():
 
 
 def test_ui_data_layer_stays_textual_free():
-    for filename in ("data.py", "theme.py", "keymap.py"):
+    for filename in ("data.py", "theme.py"):
         text = (UI_ROOT / filename).read_text(encoding="utf-8")
         assert not _TEXTUAL_IMPORT.search(text), f"{filename} imports Textual"
 

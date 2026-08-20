@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.screen import Screen
@@ -22,6 +24,7 @@ class DashboardScreen(Screen):
     def __init__(self, facade) -> None:
         super().__init__()
         self._facade = facade
+        self._last_updated: float = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -52,11 +55,12 @@ class DashboardScreen(Screen):
 
     async def refresh_summary(self) -> None:
         summary = self._facade.dashboard_summary()
+        self._last_updated = time.monotonic()
         self._render_summary(summary)
 
     def _render_summary(self, summary: DashboardSummary) -> None:
         self.query_one("#dashboard-title", Static).update(
-            f"[bold {theme.accent}]{summary.relay_name} — Dashboard[/]"
+            f"{summary.relay_name} — Dashboard"
         )
 
         server_tile = self.query_one("#tile-server", StatTile)
@@ -104,4 +108,10 @@ class DashboardScreen(Screen):
                f" (no RELAY_API_KEY, RELAY_AUTH_STORE off)[/]"
                if not summary.auth_enabled else "")
         )
+        if self._last_updated:
+            age = max(0, int(time.monotonic() - self._last_updated))
+            if age < 5:
+                status += f"   [{theme.muted}]updated now[/]"
+            else:
+                status += f"   [{theme.muted}]updated {age}s ago[/]"
         self.query_one("#dashboard-status", Static).update(status)

@@ -11,6 +11,7 @@ Authorization headers, and request content can never appear in a file.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +40,7 @@ class DiagnosticsScreen(Screen):
         self._facade = facade
         self._selected_provider: str = ""
         self._providers: list[str] = []
+        self._last_updated: float = 0.0
 
     # ------------------------------------------------------------- layout
 
@@ -97,6 +99,7 @@ class DiagnosticsScreen(Screen):
         self._refresh_provider_select()
         self._refresh_health_table()
         self._refresh_continuity_table()
+        self._last_updated = time.monotonic()
 
     def _refresh_summary(self) -> None:
         stats = self._facade.ops_stats()
@@ -294,3 +297,4 @@ class DiagnosticsScreen(Screen):
 
     def action_refresh_diagnostics(self) -> None:
         self._refresh_all()
+        self._set_status("Diagnostics refreshed.")
