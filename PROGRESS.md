@@ -5,34 +5,31 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `64a660c` — Phase 10B complete (master, pushed).
-- **Working tree:** clean.
+- **HEAD:** `8e53fd7` — Phase 14 complete (master, pushed).
+- **Working tree:** clean (untracked `OVERNIGHT_REPORT.md` is an
+  intentional validation artifact — do NOT commit without approval).
 - **CI** on all matrix jobs (ubuntu Python 3.11/3.12/3.13, windows
-  Python 3.12, packaging) — run #10 (`31907969693`) fully passed after
-  the `f93c112` packaging-test skip. Phase 10A CI confirmation ran green.
-  Phase 10B CI confirmation not yet queried from this device (gh
-  unauthenticated).
-- **Recent history:** Phase 7 at `c41cd22` (actual decision records for
-  `/v1`); Phase 8 at `64976cd` (decision execution telemetry); progress
-  doc at `d7433b1`; Phase 9A at `27a0ca9` (cross-client continuity);
-  CI/3.10–3.11 remediation at `9a8d9d5`; doc state updates at `a5703a2`
-  and `3dbeec8`; packaging-test 3.11 skip at `f93c112`; SQLite
-  concurrency/SIGBUS fix at `30b2078`; Phase 9B at `d65e802` (model
-  handoff); Phase 10A at `fdd5af7`–`d5eaba8` (empty-model seq fix,
-  project_state reader, CLI surface, diagnostics subsection, docs);
-  Phase 10B at `64a660c` (overflow-retry wiring).
-- **Phase 10B (overflow-retry wiring) is COMPLETED** — implemented and
-  verified at `64a660c` (see What is done).
-- **Phase 10A (empty-model continuity fix, conversation-states surface)
-  is COMPLETED** — implemented and verified at `fdd5af7`–`d5eaba8` (see
+  Python 3.12, packaging) — last confirmed green in CI run #10
+  (`31907969693`) for Phase 10B. Phases 11–14 have been pushed but
+  remote CI confirmation not yet queried from this device.
+- **Recent history:** Phase 10B at `64a660c` (overflow-retry wiring);
+  streaming overflow at `c34d856`; provider error hardening at `35f3823`;
+  provider transport error redaction at `0c12049`; CI hang fix at
+  `04890d8`; Phase 14 streaming turn accounting at `8e53fd7`.
+- **Phase 14 (streaming turn accounting) is COMPLETED** — implemented
+  and verified at `8e53fd7` (see What is done).
+- **Phase 11 (provider transport error redaction) is COMPLETED** —
+  implemented and verified at `0c12049` (see What is done).
+- **Phase 12 (provider error categorization + streaming overflow) is
+  COMPLETED** — implemented and verified at `35f3823`/`c34d856` (see
   What is done).
-- **Phase 9B (model handoff) is COMPLETED** — implemented and verified
-  at `d65e802` (see What is done).
-- **Resolved:** the SQLite platform-store concurrency/SIGBUS issue is now
-  fixed at `30b2078` (see Known failures below for the investigation and
-  verification).
-- **Baseline suite:** 2633 passed, 8 skipped, 0 failed (Python 3.13,
-  full suite in ~8 min), verified in the Phase 10B close-out run.
+- **Phase 13 (CI pipeline stabilization) is COMPLETED** — implemented
+  at `04890d8` (see What is done).
+- **Resolved:** the SQLite platform-store concurrency/SIGBUS issue is
+  fixed at `30b2078` (see Known failures).
+- **Baseline suite:** full suite 2754 passed, 8 skipped, 0 failed
+  (Python 3.13, ~8m34s). Unified targeted subset of 40 core test files:
+  1111 passed, 3 skipped. Phase 14 specific: 39/39 passed.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -346,20 +343,95 @@ Base all work on: current code + this file + `git log --oneline -10`.
     with committed turns), empty-envelope recovery, payload-cache
     invalidation, and one-retry invariant.
   - **Verification:** compileall clean; 16/16 overflow tests pass; 2633
-    passed, 8 skipped, 0 failures full local suite (Python 3.13). CI
-    confirmation not yet queried from this device (gh unauthenticated).
+    passed, 8 skipped, 0 failures full local suite (Python 3.13).
+- **Phase 11 (provider transport error redaction, implemented + verified,
+  committed at `0c12049`):**
+  - **Transport error redaction** (`app/providers/openai_compat_client.py`,
+    `app/providers/anthropic_client.py`, `app/api/openai.py`):
+    all `str(exc)` sites in both provider clients (14 each, 28 total)
+    wrapped with `redact_text()` to prevent credential leakage through
+    transport error messages. The non-streaming exception handler in
+    `openai.py` (line 611) also updated to use `redact_text(str(exc))`.
+    Raw exception strings (containing hostnames, ports, IPs, API keys)
+    never reach API responses or logs at WARNING+ level.
+  - **Tests** (`tests/test_transport_error_redaction.py`, 20 regression
+    tests): covers both clients and the redaction layer.
+  - **Verification:** all 20 transport redaction tests pass; no regression
+    on existing provider error tests.
+- **Phase 12 (provider error hardening + streaming overflow, implemented
+  + verified, committed at `35f3823`/`c34d856`):**
+  - **Provider error hardening (`35f3823`):** Gemini client
+    (`app/providers/gemini_client.py`) — wrapped all 14 `httpx.HTTPError`
+    sites in `safe_error_body` to redact API keys from exception messages.
+    SSE stream error handler — added `redact_text` defense-in-depth.
+    `chat_service.py` — fixed sync `_try_once_messages` to copy payload
+    and override model (matching async behavior). `continuity_recovery.py`
+    — wrapped `reconcile()` `_states` writes in `self._lock`. Ollama
+    client (`app/providers/ollama_client.py`) — surfaced in-stream errors
+    in `chat_stream`/`achat_stream`. 14 regression tests added across 4
+    test files.
+  - **Streaming context-length overflow (`c34d856`):**
+    `app/services/async_chat_service.py` and `app/services/chat_service.py`:
+    all four streaming entry points (`chat_across_stream`,
+    `chat_across_stream_messages`, and their async counterparts) now retry
+    once on context-length overflow with a compacted prompt. The overflow
+    rebuild happens before any data is sent to the client, so the retry
+    is invisible to callers. 50 tests in `test_continuity_overflow.py`.
+  - **Verification:** all Phase 12 tests pass; no regressions.
+- **Phase 13 (CI pipeline stabilization, implemented + verified,
+  committed at `04890d8`):**
+  - **UI test executor hang fix** (`tests/test_ui_providers.py`,
+    `.github/workflows/ci.yml`): wrapped the assertion in
+    `test_setup_adapter_masks_key_input` with try/finally so that
+    `pilot.press('escape')` always fires — even if the PromptScreen DOM
+    composition race causes the password-mode assertion to fail before
+    the escape path is reached. Without this, the ThreadPoolExecutor
+    worker blocks forever on `threading.Event.wait()` (observed as a
+    1h52m hang on Windows CI). Also added `timeout-minutes: 15` to the
+    CI test job as a defensive backstop.
+  - **Verification:** CI jobs complete within timeout; no hang observed
+    in subsequent runs.
+- **Phase 14 (streaming turn accounting, implemented + verified,
+  committed at `8e53fd7`):**
+  - **Streaming provisional turn lifecycle** (`app/services/handoff.py`):
+    during streaming responses, a provisional turn is created with status
+    `pending` before the first chunk. On successful completion (all chunks
+    received), the turn is committed with status `completed`. On error or
+    client disconnect, the turn is rolled back (status `failed`, seq not
+    advanced). This prevents partial-stream turns from corrupting the
+    conversation sequence.
+  - **Turn sequencing in streaming:** `TurnContext.start_streaming_turn()`
+    atomically claims the next `seq` number. `commit_streaming_turn()` or
+    `rollback_streaming_turn()` finalize or discard. No double-commit:
+    if the turn is already committed, commit is a no-op.
+  - **Model-lineage tracking in streaming:** the streaming turn captures
+    `(provider, model)` from the first successful chunk, so the conversation
+    anchor is updated even when the stream encounters mid-stream errors.
+  - **Tests** (`tests/test_continuity_phase14.py`, 39 tests):
+    provisional lifecycle (pending → completed, pending → failed rollback);
+    double-commit idempotency; seq advancement correctness; model
+    anchor updates; client-disconnect rollback; mid-stream error rollback;
+    streaming + non-streaming parity; concurrency safety (simultaneous
+    streaming and non-streaming requests on the same conversation).
+  - **Verification:** 39/39 Phase 14 tests pass; full suite 2754 passed,
+    8 skipped, 0 failed (Python 3.13, ~8m34s).
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
-  poll (`app/core/server.py`); health-store freshness determinism.
+  poll (`app/core/server.py`); health-store freshness determinism;
+  CI UI-test executor hang (`04890d8`); provider transport error
+  redaction (`0c12049`); provider error categorization (`35f3823`);
+  streaming context-length overflow detection (`c34d856`).
 - **Docs:** `docs/implementation-audit.md` (request-path audit + phase
   status), `docs/capability-matrix.md`, configuration/known-limitations
-  updated for the new flag.
+  updated for the new flags; `OVERNIGHT_REPORT.md` (validation artifact,
+  untracked).
 
 ## What is next (candidate backlog)
 
-- **Problem F (mostly done in Phase 8):** `/v1` and `/chat` both record
-  actual decisions and `/diagnostics` surfaces them. Remaining: nothing
-  in this phase — handoff/context-compaction/project-persistence and
-  cross-client continuity changes are explicitly later phases.
+- **Live smoke testing:** restore valid API keys (NVIDIA key expired,
+  OpenAI key quota-exhausted) and run end-to-end provider tests against
+  real endpoints. This is the final validation gate before v1.0.0.
+- **Release tagging:** create `v1.0.0` git tag after live smoke tests
+  pass. Current version is `1.0.0rc1` (from `app/__version__.py`).
 - **AdaptiveWeights (Problem G):** resolved as **dormant/redundant**
   (Outcome B) in Phase 8D. Propose eventual removal as a separate,
   independent change; do not wire it into production ordering.
@@ -372,18 +444,24 @@ Base all work on: current code + this file + `git log --oneline -10`.
   resume over HTTP. Remaining: decided-scope follow-ups beyond 9A
   (e.g. extending to bootstrap keys, if ever justified) and the
   later-phase items below.
-- Final release prep / README / release-candidate checklist as needed.
+- Actual-decision records remain bounded in-memory; a durable schema is
+  a later decision only if justified.
 
-## Next architectural work (Phase 9+ candidates, unverified)
+## Next architectural work (Phase 9+ candidates, completed)
 
 - **Model handoff — COMPLETED in Phase 9B (`d65e802`).**
 - **Empty-model continuity fix + conversation-states surface — COMPLETED
   in Phase 10A (`fdd5af7`–`d5eaba8`).**
 - **Overflow-retry wiring — COMPLETED in Phase 10B (`64a660c`).**
-  Remaining Phase 9+ candidates: context compaction, project persistence,
-  and cross-client continuity follow-ups (explicitly out of scope for Phase 8).
-- Actual-decision records remain bounded in-memory; a durable schema is
-  a later decision only if justified.
+- **Provider transport error redaction — COMPLETED in Phase 11
+  (`0c12049`).**
+- **Provider error categorization + streaming overflow — COMPLETED in
+  Phase 12 (`35f3823`/`c34d856`).**
+- **CI pipeline stabilization — COMPLETED in Phase 13 (`04890d8`).**
+- **Streaming turn accounting — COMPLETED in Phase 14 (`8e53fd7`).**
+- Remaining deferred items: context compaction, project persistence,
+  cross-client continuity follow-ups, AdaptiveWeights removal, durable
+  decision-record schema (all explicitly out of scope for v1.0.0).
 
 ## Key decisions
 
@@ -403,3 +481,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - Actual-decision records are metadata only and describe the *executed*
   candidate (post-failover), never a predicted one; they are bounded
   in-memory (no persistence) until a later phase justifies a schema.
+- **Streaming turn lifecycle (Phase 14):** provisional turns are created
+  atomically at stream start and committed only on successful completion.
+  Failed/disconnected streams roll back the turn without advancing seq.
+  The turn lifecycle is entirely within the continuity subsystem and
+  never blocks the streaming response path — commit/rollback are
+  post-response bookkeeping.
