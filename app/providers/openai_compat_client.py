@@ -761,7 +761,7 @@ class OpenAICompatibleClient:
                             content = delta.get("content")
                             if content:
                                 yield content
-                        except (json.JSONDecodeError, KeyError, IndexError):
+                        except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
                             # Malformed chunk, skip
                             continue
 
@@ -866,6 +866,8 @@ class OpenAICompatibleClient:
                     try:
                         chunk = json.loads(data_str)
                     except json.JSONDecodeError:
+                        continue
+                    if not isinstance(chunk, dict):
                         continue
                     if not chunk.get("choices") and "usage" not in chunk:
                         continue
@@ -1129,7 +1131,7 @@ class OpenAICompatibleClient:
                                 content = delta.get("content")
                                 if content:
                                     yield content
-                            except (json.JSONDecodeError, KeyError, IndexError):
+                            except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
                                 continue
 
                     relay_metrics.record_provider(
@@ -1326,6 +1328,8 @@ class OpenAICompatibleClient:
                         try:
                             chunk = json.loads(data_str)
                         except json.JSONDecodeError:
+                            continue
+                        if not isinstance(chunk, dict):
                             continue
                         if not chunk.get("choices") and "usage" not in chunk:
                             continue

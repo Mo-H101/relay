@@ -594,6 +594,78 @@ class ConversationStore:
             "ts": now,
         }
 
+    def update_turn(
+        self,
+        *,
+        conversation_id: str,
+        key_id: str,
+        seq: int,
+        outcome: str,
+        tokens_in: Optional[int] = None,
+        tokens_out: Optional[int] = None,
+        latency_ms: Optional[int] = None,
+    ) -> dict:
+        """
+        Finalize a previously-appended turn by updating its outcome and
+        token counts.  Used by the streaming provisional-turn lifecycle
+        (Phase 14): a turn is first appended with ``outcome="denied"``
+        (provisional) and later updated to the real outcome once the
+        stream completes, fails, or is cancelled.
+
+        Key-scoped: the turn must belong to a conversation owned by
+        ``key_id``.  Returns the updated turn record, or ``{}`` when the
+        row does not exist or the conversation is not owned by the key.
+        """
+        if outcome not in _VALID_OUTCOMES:
+            raise ValueError(f"invalid turn outcome: {outcome!r}")
+        if not isinstance(seq, int) or seq < 1:
+            raise ValueError(f"invalid turn seq: {seq!r}")
+        if tokens_in is not None and (not isinstance(tokens_in, int) or tokens_in < 0):
+            raise ValueError(f"invalid tokens_in: {tokens_in!r}")
+        if tokens_out is not None and (not isinstance(tokens_out, int) or tokens_out < 0):
+            raise ValueError(f"invalid tokens_out: {tokens_out!r}")
+        if latency_ms is not None and (not isinstance(latency_ms, int) or latency_ms < 0):
+            raise ValueError(f"invalid latency_ms: {latency_ms!r}")
+
+        now = time.time()
+        conn = self._require_open()
+
+        with self._lock:
+            with conn:
+                cursor = conn.execute(
+                    "UPDATE conversation_turns"
+                    " SET outcome = ?, tokens_in = ?, tokens_out = ?,"
+                    "  latency_ms = ?"
+                    " WHERE conversation_id = ?"
+                    "   AND seq = ?"
+                    "   AND EXISTS ("
+                    "    SELECT 1 FROM conversations"
+                    "     WHERE id = conversation_turns.conversation_id"
+                    "       AND key_id = ?"
+                    "  )",
+                    (outcome, tokens_in, tokens_out, latency_ms,
+                     conversation_id, seq, key_id),
+                )
+
+                if cursor.rowcount == 0:
+                    return {}
+
+                conn.execute(
+                    "UPDATE conversations SET updated_at = ?"
+                    " WHERE id = ?",
+                    (now, conversation_id),
+                )
+
+        return {
+            "conversation_id": conversation_id,
+            "seq": int(seq),
+            "outcome": outcome,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "latency_ms": latency_ms,
+            "ts": now,
+        }
+
     def turns(
         self,
         conversation_id: str,

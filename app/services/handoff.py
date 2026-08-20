@@ -193,6 +193,34 @@ class TurnContext:
         except Exception:  # noqa: BLE001 - continuity never breaks chat
             return {}
 
+    def update(
+        self,
+        *,
+        outcome: str,
+        tokens_in: Optional[int] = None,
+        tokens_out: Optional[int] = None,
+        latency_ms: Optional[int] = None,
+    ) -> dict:
+        """
+        Finalize a previously-committed provisional turn with its real
+        outcome and token counts (Phase 14).  Updates both in-memory
+        state and enqueues a durable ``turn.update`` to the write-behind
+        flusher.  Never raises; returns {} when there is no coordinator
+        or no prior commit.
+        """
+        if self._handoff is None:
+            return {}
+        try:
+            return self._handoff.update(
+                self,
+                outcome=outcome,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+            )
+        except Exception:  # noqa: BLE001 - continuity never breaks chat
+            return {}
+
     def inject_message(self, message: str) -> str:
         """Prepend the rendered envelope when one is available."""
         if self.envelope is None:
@@ -757,6 +785,70 @@ class HandoffCoordinator:
             )
 
         relay_metrics.continuity_turns_committed.inc()
+        return dict(record)
+
+    def update(
+        self,
+        turn: TurnContext,
+        *,
+        outcome: str,
+        tokens_in: Optional[int] = None,
+        tokens_out: Optional[int] = None,
+        latency_ms: Optional[int] = None,
+    ) -> dict:
+        """
+        Finalize a previously-committed provisional turn with its real
+        outcome and token counts (Phase 14).  Updates both the in-memory
+        committed-turn record and enqueues a durable ``turn.update`` to
+        the write-behind flusher.
+
+        Called by ``TurnContext.update()`` from the API layer after a
+        streaming turn completes, fails, or is cancelled.
+        """
+        with self._lock:
+            state = self._states.get(
+                _state_key(turn.key_id, turn.conversation_id)
+            )
+            if state is None:
+                return {}
+
+            # Find the most recent committed turn matching this
+            # conversation and update it in-place.
+            updated = False
+            for record in reversed(state.committed_turns):
+                if record.get("conversation_id") == state.conversation_id:
+                    record["outcome"] = outcome
+                    if tokens_in is not None:
+                        record["tokens_in"] = tokens_in
+                    if tokens_out is not None:
+                        record["tokens_out"] = tokens_out
+                    if latency_ms is not None:
+                        record["latency_ms"] = latency_ms
+                    updated = True
+                    break
+
+            if not updated:
+                return {}
+
+            seq = record["seq"]
+            self._touch(state)
+
+        self._enqueue(
+            "turn.update",
+            conversation_id=state.conversation_id,
+            key_id=state.key_id,
+            seq=seq,
+            outcome=outcome,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+        )
+
+        if self._recovery is not None:
+            self._recovery.on_turn_committed(
+                state.conversation_id, state.key_id
+            )
+
         return dict(record)
 
     # ------------------------- P9B anchor + transitions -------------------------

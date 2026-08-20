@@ -41,6 +41,7 @@ _MAX_QUEUE = 10000
 _OP_METHODS = {
     "conversation.create": "create",
     "turn.append": "append_turn",
+    "turn.update": "update_turn",
     "summary.record": "record_summary",
     "compaction.record": "record_compaction",
     "project_state.update": "update_project_state",

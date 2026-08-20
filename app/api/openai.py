@@ -534,12 +534,27 @@ async def openai_chat_completion(
         success = False
         failure_type = None
 
+        # Phase 14: track provider usage from stream chunks for
+        # finalization.  Usage arrives on the last chunk from all
+        # production providers (OpenAI-compat, Gemini, Ollama, Anthropic).
+        usage_tokens_in = None
+        usage_tokens_out = None
+
         async def stream_generator():
             nonlocal full_response, success, failure_type
+            nonlocal usage_tokens_in, usage_tokens_out
             if continuity_sse:
                 yield continuity_sse + "\n\n"
             try:
                 async for chunk in stream_gen:
+                    # Phase 14: capture provider usage when present.
+                    chunk_usage = chunk.get("usage") if isinstance(chunk, dict) else None
+                    if isinstance(chunk_usage, dict):
+                        if chunk_usage.get("prompt_tokens") is not None:
+                            usage_tokens_in = chunk_usage["prompt_tokens"]
+                        if chunk_usage.get("completion_tokens") is not None:
+                            usage_tokens_out = chunk_usage["completion_tokens"]
+
                     out = {
                         "id": stream_id,
                         "object": "chat.completion.chunk",
@@ -566,6 +581,17 @@ async def openai_chat_completion(
                 yield f"data: {json.dumps(error_chunk)}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
+                # Phase 14: finalize the provisional turn with the real
+                # outcome and any captured usage.  This upgrades the
+                # outcome from the provisional "denied" to "ok" or
+                # "failed" and persists actual token counts.
+                if turn is not None:
+                    turn.update(
+                        outcome="ok" if success else "failed",
+                        tokens_in=usage_tokens_in,
+                        tokens_out=usage_tokens_out,
+                    )
+
                 # Record telemetry and health
                 latency_ms = int((time.perf_counter() - start_time) * 1000)
                 _record_telemetry_and_health(

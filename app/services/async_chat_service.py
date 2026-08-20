@@ -224,10 +224,13 @@ class AsyncChatService:
                         ],
                     }
                     if turn is not None:
+                        usage = response.get("usage") if isinstance(response, dict) else None
                         turn.finish(
                             provider=provider.name,
                             model=model,
                             latency_ms=attempt.latency_ms,
+                            tokens_in=usage.get("prompt_tokens") if isinstance(usage, dict) else None,
+                            tokens_out=usage.get("completion_tokens") if isinstance(usage, dict) else None,
                         )
                         turn.attach(result)
                     return result
@@ -432,10 +435,14 @@ class AsyncChatService:
                 }
 
                 if turn is not None:
+                    # Phase 14: provisional commit -- the turn is durable
+                    # before the stream is consumed so a crash leaves a
+                    # recoverable (non-ok) row; finalization happens in
+                    # the API layer after the stream completes/fails.
                     turn.finish(
                         provider=provider.name,
                         model=model,
-                        outcome="ok",
+                        outcome="denied",
                     )
                     turn.attach(result)
 
@@ -615,10 +622,13 @@ class AsyncChatService:
                         ],
                     }
                     if turn is not None:
+                        usage = response.get("usage") if isinstance(response, dict) else None
                         turn.finish(
                             provider=provider.name,
                             model=model,
                             latency_ms=attempt.latency_ms,
+                            tokens_in=usage.get("prompt_tokens") if isinstance(usage, dict) else None,
+                            tokens_out=usage.get("completion_tokens") if isinstance(usage, dict) else None,
                         )
                         turn.attach(result)
                     return result
@@ -872,10 +882,14 @@ class AsyncChatService:
                 }
 
                 if turn is not None:
+                    # Phase 14: provisional commit -- the turn is durable
+                    # before the stream is consumed so a crash leaves a
+                    # recoverable (non-ok) row; finalization happens in
+                    # the API layer after the stream completes/fails.
                     turn.finish(
                         provider=provider.name,
                         model=model,
-                        outcome="ok",
+                        outcome="denied",
                     )
                     turn.attach(result)
 

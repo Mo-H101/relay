@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import httpx
@@ -572,3 +574,161 @@ class TestProviderSpecificWording:
             OpenAIClient().list_models(make_provider())
 
         assert str(exc.value) == "OpenAI model discovery timed out."
+
+
+# ---------------------------------------------------------------------------
+# F-2: SSE parser regression tests — non-dict JSON chunks must not crash
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamResponse:
+    """Minimal httpx streaming response for SSE parser tests."""
+
+    def __init__(self, lines, status_code=200):
+        self.status_code = status_code
+        self._lines = list(lines)
+        self.headers = {}
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+    def aiter_lines(self):
+        async def _gen():
+            for line in self._lines:
+                yield line
+        return _gen()
+
+
+class _FakeStreamContext:
+    """Context manager wrapping a _FakeStreamResponse."""
+
+    def __init__(self, resp):
+        self._resp = resp
+
+    def __enter__(self):
+        return self._resp
+
+    def __exit__(self, *a):
+        pass
+
+
+def _patch_stream(monkeypatch, response):
+    def handler(*args, **kwargs):
+        return _FakeStreamContext(response)
+    monkeypatch.setattr(
+        "app.providers.openai_compat_client.httpx.stream",
+        handler,
+    )
+
+
+class TestSSEParserNonDictChunks:
+    """chat_stream must skip non-dict JSON without raising."""
+
+    @pytest.mark.parametrize("bad_json", [
+        "null",
+        "42",
+        '"hello"',
+        "[]",
+        "{}",
+        '{"choices": null}',
+        '{"choices": [null]}',
+    ])
+    def test_chat_stream_skips_non_dict(self, monkeypatch, bad_json):
+        lines = [
+            f"data: {bad_json}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        chunks = list(
+            OpenAICompatibleClient().chat_stream(
+                make_provider(),
+                model="m",
+                message="hi",
+            )
+        )
+        assert chunks == []
+
+    def test_chat_stream_yields_valid_chunks(self, monkeypatch):
+        valid = json.dumps({
+            "choices": [{"delta": {"content": "ok"}}],
+        })
+        lines = [
+            f"data: {valid}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        chunks = list(
+            OpenAICompatibleClient().chat_stream(
+                make_provider(),
+                model="m",
+                message="hi",
+            )
+        )
+        assert chunks == ["ok"]
+
+    def test_chat_stream_mixed_valid_and_invalid(self, monkeypatch):
+        valid = json.dumps({
+            "choices": [{"delta": {"content": "ok"}}],
+        })
+        lines = [
+            "data: null",
+            f"data: {valid}",
+            "data: 42",
+            f"data: {valid}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        chunks = list(
+            OpenAICompatibleClient().chat_stream(
+                make_provider(),
+                model="m",
+                message="hi",
+            )
+        )
+        assert chunks == ["ok", "ok"]
+
+    @pytest.mark.parametrize("bad_json", [
+        "null",
+        "42",
+        '"hello"',
+        "[]",
+        "{}",
+        '{"choices": null}',
+    ])
+    def test_chat_stream_messages_skips_non_dict(self, monkeypatch, bad_json):
+        lines = [
+            f"data: {bad_json}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        chunks = list(
+            OpenAICompatibleClient().chat_stream_messages(
+                make_provider(),
+                payload={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+        )
+        assert chunks == []
+
+    def test_chat_stream_messages_yields_valid_chunks(self, monkeypatch):
+        valid = json.dumps({
+            "choices": [{"delta": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        })
+        lines = [
+            f"data: {valid}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        chunks = list(
+            OpenAICompatibleClient().chat_stream_messages(
+                make_provider(),
+                payload={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+        )
+        assert len(chunks) == 1
+        assert chunks[0]["choices"][0]["delta"]["content"] == "ok"
