@@ -1,5 +1,5 @@
 """
-P2c Providers screen (tab 4).
+P2c Providers screen (tab 4) — Stage C redesign.
 
 Shows every registry provider merged with its runtime state. "Add provider"
 and "Re-run setup" drive the existing setup wizard behind
@@ -7,6 +7,10 @@ and "Re-run setup" drive the existing setup wizard behind
 validated before anything is persisted). API keys are never rendered: the
 table only shows a boolean set/missing/n-a column. Rescan re-runs the
 availability scan for the selected provider.
+
+Stage C changes:
+- Expanded status column: compound state (glyph + text)
+- Health indicator column: per-provider health summary from models
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from app.ui.data import ServiceFacade
 from app.ui.setup_adapter import SetupAdapter
+from app.ui.theme import theme
 
 
 class ProvidersScreen(Screen):
@@ -101,33 +106,66 @@ class ProvidersScreen(Screen):
             return
         self._set_status(text)
 
+    def _provider_health_summary(self, provider_name: str) -> str:
+        """
+        Derive a per-provider health summary from its models.
+        Returns a markup string like "[ok]● good[/]" or "[muted]—[/]".
+        """
+        models = self._facade.models()
+        provider_models = [m for m in models if m.provider == provider_name]
+        if not provider_models:
+            return f"[{theme.text_muted}]—[/]"
+
+        healthy = sum(
+            1 for m in provider_models if m.status in ("healthy", "available")
+        )
+        total = len(provider_models)
+
+        if healthy == total:
+            return f"[{theme.ok}]● good[/]"
+        if healthy > 0:
+            return f"[{theme.warn}]● partial[/]"
+        return f"[{theme.error}]● poor[/]"
+
     def _refresh(self) -> None:
         table = self._table()
         table.clear(columns=True)
-        table.add_columns("", "Provider", "Kind", "Status", "API key", "Models")
+        table.add_columns(
+            "", "Provider", "Kind", "Status", "API key", "Models", "Health"
+        )
 
         keys: list[str] = []
         for entry in self._facade.provider_catalog():
-            status = (
-                "enabled"
-                if entry.enabled
-                else "disabled"
-                if entry.configured
-                else "not configured"
-            )
+            # Compound status: glyph + text
+            if not entry.configured:
+                glyph = "-"
+                status_text = "not configured"
+                status_color = theme.text_muted
+            elif entry.enabled:
+                glyph = "\u2713"
+                status_text = "active"
+                status_color = theme.ok
+            else:
+                glyph = "\u25cb"
+                status_text = "disabled"
+                status_color = theme.warn
+
             key_cell = "set" if entry.has_api_key else "missing"
             if not entry.requires_api_key:
                 key_cell = "n/a"
-            glyph = "\u2713" if entry.enabled else "\u2717"
-            if not entry.configured:
-                glyph = "-"
+
+            health = self._provider_health_summary(entry.display_name)
+
+            status_markup = f"[{status_color}]{glyph} {status_text}[/]"
+
             table.add_row(
-                glyph,
+                "",
                 entry.display_name,
                 entry.kind,
-                status,
+                status_markup,
                 key_cell,
                 str(entry.model_count),
+                health,
                 key=entry.id,
             )
             keys.append(entry.id)

@@ -73,7 +73,7 @@ async def test_providers_table_shows_catalog_without_secrets(monkeypatch, tmp_pa
         text = _table_text(screen)
 
         assert "NVIDIA NIM" in text
-        assert "enabled" in text
+        assert "active" in text  # Stage C: compound status uses "active"
         assert "set" in text
         assert "super-secret-key" not in text
         assert "super-secret" not in _status_text(screen)

@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_ROOT = PROJECT_ROOT / "app"
 UI_ROOT = APP_ROOT / "ui"
@@ -70,3 +72,27 @@ def test_core_and_cli_import_without_textual_in_runtime():
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "size",
+    [(100, 30), (80, 24), (60, 20), (40, 15)],
+    ids=["100x30", "80x24", "60x20", "40x15"],
+)
+async def test_all_screens_mount_at_multiple_sizes(size):
+    """
+    Stage C: every redesigned screen must mount without error at all
+    terminal sizes. Exercises CSS layout / overflow handling.
+    """
+    from app.ui.app import RelayApp
+
+    app = RelayApp(start_server=False)
+    async with app.run_test(
+        headless=True, size=size, notifications=False
+    ) as pilot:
+        await pilot.pause()
+        # Walk all 7 tabs
+        for key in ("2", "3", "4", "5", "6", "7", "1"):
+            await pilot.press(key)
+            await pilot.pause()

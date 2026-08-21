@@ -33,11 +33,44 @@ Screen {
     color: #58a6ff;
 }
 
+/* ── Group Headings (Stage C) ────────────────────────────────────── */
+
+.dashboard-group {
+    margin: 0 1 1 1;
+}
+
+.group-heading {
+    height: 1;
+    padding: 0 0 0 1;
+    margin-bottom: 1;
+    text-style: bold;
+    color: #ffffff;
+}
+
+.summary-line {
+    height: 1;
+    padding: 0 1;
+    margin-bottom: 0;
+    color: #e6edf3;
+}
+
 /* ── Stat Tiles ─────────────────────────────────────────────────── */
 
 .tile-row {
-    height: 5;
-    margin: 0 1 1 1;
+    height: 4;
+    margin: 0 0 1 0;
+}
+
+.tile-row--system {
+    height: 4;
+}
+
+.tile-row--activity {
+    height: 4;
+}
+
+.tile-row--config {
+    height: 4;
 }
 
 StatTile {
@@ -57,6 +90,16 @@ StatTile {
     color: #e6edf3;
     height: 1;
     text-overflow: ellipsis;
+}
+
+/* ── Collapsible (Dashboard config section) ─────────────────────── */
+
+Collapsible {
+    margin: 0 1 1 1;
+}
+
+Collapsible .collapsible--title {
+    color: #8b949e;
 }
 
 /* ── Status Lines ───────────────────────────────────────────────── */
@@ -218,10 +261,18 @@ StatTile {
     color: #8b949e;
 }
 
-#auth-line, #endpoint-line {
+#auth-line {
     height: 1;
+    padding: 0 1;
+    margin-bottom: 0;
     color: #e6edf3;
+}
+
+#endpoint-line {
+    height: 1;
+    padding: 0 1;
     margin-bottom: 1;
+    color: #e6edf3;
 }
 
 /* ── Diagnostics Screen ─────────────────────────────────────────── */

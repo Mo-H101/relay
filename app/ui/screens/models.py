@@ -1,11 +1,16 @@
 """
-P2c Models screen (tab 3).
+P2c Models screen (tab 3) — Stage C redesign.
 
 On-demand union of every provider's models with a ``✓/⚠/✗`` availability
 glyph merged from the health store and the setup availability snapshot.
 Priority reordering is restricted to available models (the P1 rule) and is
 persisted through ``config_store`` + applied with ``reload_config(relay)``.
 Provider enable/disable (where supported) is also reachable here.
+
+Stage C changes:
+- Rank number column (1, 2, 3...) in first column
+- Visual separator between available and unavailable groups
+- Color-coded rows by status (green=healthy, yellow=degraded, red=unavailable)
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from textual.screen import Screen
 from textual.widgets import Button, DataTable, Footer, Header, Select, Static
 
 from app.ui.data import ModelInfo, ServiceFacade, candidate_glyph
+from app.ui.theme import theme
 
 
 class ModelsScreen(Screen):
@@ -143,17 +149,63 @@ class ModelsScreen(Screen):
             rows.extend(rest)
         return rows
 
+    @staticmethod
+    def _status_color(status: str) -> str:
+        """Return Rich color string for a model status."""
+        if status in ("healthy", "available"):
+            return theme.ok
+        if status in ("degraded", "overloaded"):
+            return theme.warn
+        if status in ("unavailable", "error"):
+            return theme.error
+        return theme.text_muted
+
     def _refresh_models(self) -> None:
         table = self._table()
         table.clear(columns=True)
-        table.add_columns("", "Provider", "Model", "Status", "Latency")
-        for info in self._ordered_rows():
+        table.add_columns("#", "Provider", "Model", "Status", "Latency")
+
+        rows = self._ordered_rows()
+        available_count = 0
+
+        for info in rows:
+            if info.status != "unavailable":
+                available_count += 1
+
+        rank = 0
+        separator_inserted = False
+
+        for info in rows:
+            # Insert separator between available and unavailable groups
+            if info.status == "unavailable" and not separator_inserted:
+                separator_inserted = True
+                table.add_row(
+                    "—",
+                    "—",
+                    f"── unavailable ──",
+                    "—",
+                    "—",
+                    key=("__separator__", "__separator__"),
+                )
+
+            if info.status != "unavailable":
+                rank += 1
+                rank_str = str(rank)
+            else:
+                rank_str = ""
+
             latency = f"{info.latency_ms}ms" if info.latency_ms else ""
+            glyph = candidate_glyph(info.status)
+            status_color = self._status_color(info.status)
+
+            # Build colored status text with glyph
+            status_markup = f"[{status_color}]{glyph} {info.status}[/]"
+
             table.add_row(
-                candidate_glyph(info.status),
+                rank_str,
                 info.provider,
                 info.name,
-                info.status,
+                status_markup,
                 latency,
                 key=(info.provider, info.name),
             )
