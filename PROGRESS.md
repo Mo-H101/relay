@@ -5,9 +5,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** (see `git log --oneline -1` — will update after Stage F
+- **HEAD:** (see `git log --oneline -1` — will update after Stage G
   commit).
-- **Working tree:** clean before Stage F changes. Untracked
+- **Working tree:** clean before Stage G changes. Untracked
   `OVERNIGHT_REPORT.md` and `PHASE_15_PROPOSAL.md` are planning
   artifacts — do NOT commit without approval.
 - **CI** on all matrix jobs (ubuntu Python 3.11/3.12/3.13, windows
@@ -19,6 +19,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
   at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
   streaming redesign at `d520a11`; Stage E diagnostics sub-tabs at
   `1d05f9a`.
+- **Phase 15 Stage G (polish & final cleanup) is COMPLETED** —
+  CSS dead-class cleanup, .chat-assistant fix, status transitions, tab
+  description subtitles. 2773 passed, 11 skipped, 0 failed (1
+  pre-existing packaging env issue).
 - **Phase 15 Stage F (config collapsibles + wizard) is COMPLETED** —
   collapsible sections and guided wizard implemented, 36 config tests
   pass (was 20).
@@ -477,6 +481,32 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Verification:** 18/18 diagnostics tests pass; full suite 2767
     passed, 8 skipped, 0 failed (Python 3.13, ~12m03s). Multi-size
     verification: 80×24, 100×30, 120×40 all green.
+- **Phase 15 Stage G (polish & final cleanup, implemented + verified):**
+  - **CSS dead-class cleanup** (`app/ui/styles/base.tcss`): removed
+    four confirmed dead CSS classes: `.chat-assistant-header` (never
+    applied — `chat-assistant` was the actual class used), `.config-group`
+    (class selector never applied; `#config-group-*` ID selectors
+    unchanged), `.placeholder-title`, `.placeholder-note` (leftover from
+    pre-redesign placeholder screens).
+  - **Added `.chat-assistant` class** (`base.tcss`): the missing CSS class
+    referenced by `chat_view.py` lines 112 and 134 for assistant message
+    bubbles. Matching layout pattern with `.chat-user`, `.chat-error`,
+    `.chat-system`.
+  - **CSS transitions** (`base.tcss`): added `transition: color 200ms` to
+    `.status-line` and `.config-note` for smooth status-color updates.
+    Scoped to elements that benefit; no interference with readability.
+  - **Tab description subtitles** (`app/ui/app.py`): added
+    `_TAB_DESCRIPTIONS` dict with concise per-tab descriptions derived
+    from the proposal's NOTES concept and current UI semantics. Subtitle
+    updates on tab switch (`action_tab`), dashboard push (`on_mount`),
+    and escape-to-dashboard (`action_go_dashboard`). Format:
+    `AI gateway terminal · v{version} · {description}`.
+  - **Tests:** full UI suite 137/137 passed; boundary tests including
+    multi-size (100×30, 80×24, 60×20, 40×15) all passed; 120×40
+    verified via headless pilot; compileall clean.
+  - **Verification:** 2773 passed, 11 skipped, 0 failed (1 pre-existing
+    packaging env issue: `test_sdist_build_excludes_tests_and_bench`
+    fails due to missing setuptools backend — not related to Stage G).
 - **Phase 15 Stage F (config collapsibles + wizard, implemented +
   verified):**
   - **Collapsible sections** (`app/ui/screens/configuration.py`):
@@ -527,7 +557,8 @@ Base all work on: current code + this file + `git log --oneline -10`.
   done).
 - **Phase 15 Stage F — Config collapsibles + wizard:** COMPLETED (see
   What is done).
-- **Phase 15 Stage G:** next planned stage.
+- **Phase 15 Stage G — Polish & final cleanup:** COMPLETED (see What is
+  done).
 - **Live smoke testing:** restore valid API keys (NVIDIA key expired,
   OpenAI key quota-exhausted) and run end-to-end provider tests against
   real endpoints. This is the final validation gate before v1.0.0.
@@ -569,6 +600,8 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Phase 15 Stage E (diagnostics sub-tabs) — COMPLETED at
   `1d05f9a`.**
 - **Phase 15 Stage F (config collapsibles + wizard) — COMPLETED**
+  (pending commit).
+- **Phase 15 Stage G (polish & final cleanup) — COMPLETED**
   (pending commit).
 - Remaining deferred items: context compaction, project persistence,
   cross-client continuity follow-ups, AdaptiveWeights removal, durable

@@ -161,10 +161,10 @@ Collapsible .collapsible--title {
     color: #8b949e;
 }
 
-.chat-assistant-header {
+.chat-assistant {
     width: 100%;
     padding: 0 0 0 0;
-    margin: 0 0 0 0;
+    margin: 0 0 1 0;
 }
 
 .chat-user {
@@ -223,12 +223,6 @@ Collapsible .collapsible--title {
 #config-root {
     padding: 0 1;
     height: 1fr;
-}
-
-.config-group {
-    color: #58a6ff;
-    text-style: bold;
-    margin-top: 1;
 }
 
 .config-note {
@@ -377,15 +371,6 @@ Collapsible .collapsible--title {
     display: none;
 }
 
-.placeholder-title {
-    color: #58a6ff;
-    text-style: bold;
-}
-
-.placeholder-note {
-    color: #8b949e;
-}
-
 /* ── Config Wizard (ModalScreen) ──────────────────────────────── */
 
 #wizard-title {
@@ -438,6 +423,16 @@ Collapsible .collapsible--title {
     padding: 0 1;
     margin-top: 1;
     color: #8b949e;
+}
+
+/* ── Transitions ────────────────────────────────────────────────── */
+
+.status-line {
+    transition: color 200ms;
+}
+
+.config-note {
+    transition: color 200ms;
 }
 
 /* ── Responsive Foundations ─────────────────────────────────────── */

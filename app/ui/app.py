@@ -28,6 +28,16 @@ from app.ui.screens.providers import ProvidersScreen
 
 _logger = logging.getLogger("relay.ui")
 
+_TAB_DESCRIPTIONS = {
+    "dashboard": "Overview of system health, activity, and configuration",
+    "chat": "Chat with your configured providers",
+    "models": "Model availability and priority controls",
+    "providers": "Provider keys, scanning, and setup",
+    "configuration": "Routing, failover, and server settings",
+    "applications": "Client activity and endpoint/auth status",
+    "diagnostics": "Operations tail, health, and export",
+}
+
 
 class RelayApp(App[None]):
     """
@@ -106,15 +116,18 @@ class RelayApp(App[None]):
                 self._mark_server_running(True)
 
         await self.push_screen(self._screens["dashboard"])
+        self.sub_title = f"AI gateway terminal  ·  v{__version__}  ·  {_TAB_DESCRIPTIONS['dashboard']}"
 
     async def on_unmount(self) -> None:
         self._mark_server_running(False)
 
     async def action_tab(self, name: str) -> None:
         await self.switch_screen(self._screens[name])
+        self.sub_title = f"AI gateway terminal  ·  v{__version__}  ·  {_TAB_DESCRIPTIONS.get(name, '')}"
 
     async def action_go_dashboard(self) -> None:
         await self.switch_screen(self._screens["dashboard"])
+        self.sub_title = f"AI gateway terminal  ·  v{__version__}  ·  {_TAB_DESCRIPTIONS['dashboard']}"
 
     def _mark_server_running(self, running: bool) -> None:
         self._facade._relay._embedded_server_running = bool(running)
