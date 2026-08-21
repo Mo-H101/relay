@@ -21,6 +21,9 @@ from textual.widgets import DataTable, Static
 from tests.ui_fakes import (
     FakeProvider,
     FakeClient,
+    FakeHealthModel,
+    FakeReport,
+    FakeRelay,
     FakeStore,
     make_relay,
 )
@@ -77,6 +80,66 @@ async def test_providers_table_shows_catalog_without_secrets(monkeypatch, tmp_pa
         assert "set" in text
         assert "super-secret-key" not in text
         assert "super-secret" not in _status_text(screen)
+
+
+@pytest.mark.asyncio
+async def test_health_column_uses_runtime_provider_name(monkeypatch, tmp_path):
+    """
+    Regression test for Stage C DEFECT 1: the health summary must match
+    ModelInfo.provider (the runtime name, e.g. "NVIDIA") — NOT
+    ProviderCatalogEntry.display_name (e.g. "NVIDIA NIM").
+
+    This test verifies health renders correctly for providers whose
+    display_name differs from their runtime provider_name: NVIDIA,
+    LM Studio, and Ollama.
+    """
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+
+    relay = FakeRelay()
+
+    # Register providers whose display_name != runtime name
+    for name, models, statuses in [
+        ("NVIDIA", ["m1", "m2"], ["healthy", "degraded"]),
+        ("LM Studio", ["local-m1"], ["healthy"]),
+        ("Ollama", ["oll-m1", "oll-m2"], ["unavailable", "unavailable"]),
+    ]:
+        provider = FakeProvider(name, api_key="k", models=models)
+        relay.provider_manager.register(provider)
+        relay.health_store.set(
+            FakeReport(
+                name,
+                [FakeHealthModel(m, s) for m, s in zip(models, statuses)],
+            )
+        )
+
+    facade = ServiceFacade(relay_instance=relay)
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_providers(pilot, facade)
+        table = screen.query_one("#providers-table", DataTable)
+
+        # Verify health column shows correct data for each provider
+        health_by_provider: dict[str, str] = {}
+        for index in range(table.row_count):
+            row = table.get_row_at(index)
+            # Columns: "", Provider, Kind, Status, API key, Models, Health
+            provider_display = str(row[1])
+            health_cell = str(row[6])
+            health_by_provider[provider_display] = health_cell
+
+        # NVIDIA NIM: 1 healthy, 1 degraded → "● partial"
+        assert "NVIDIA NIM" in health_by_provider
+        assert "partial" in health_by_provider["NVIDIA NIM"]
+
+        # LM Studio (local): 1 healthy → "● good"
+        assert "LM Studio (local)" in health_by_provider
+        assert "good" in health_by_provider["LM Studio (local)"]
+
+        # Ollama (local): 0 healthy, 2 unavailable → "● poor"
+        assert "Ollama (local)" in health_by_provider
+        assert "poor" in health_by_provider["Ollama (local)"]
 
 
 @pytest.mark.asyncio

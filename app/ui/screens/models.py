@@ -166,11 +166,6 @@ class ModelsScreen(Screen):
         table.add_columns("#", "Provider", "Model", "Status", "Latency")
 
         rows = self._ordered_rows()
-        available_count = 0
-
-        for info in rows:
-            if info.status != "unavailable":
-                available_count += 1
 
         rank = 0
         separator_inserted = False

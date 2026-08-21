@@ -91,6 +91,7 @@ class ProviderCatalogEntry:
     """
 
     id: str
+    provider_name: str  # runtime name, matches ModelInfo.provider
     display_name: str
     kind: str  # "cloud" | "local"
     requires_api_key: bool
@@ -452,6 +453,7 @@ class ServiceFacade:
             entries.append(
                 ProviderCatalogEntry(
                     id=defn.id,
+                    provider_name=defn.provider_name,
                     display_name=defn.display_name,
                     kind=defn.kind,
                     requires_api_key=defn.requires_api_key,

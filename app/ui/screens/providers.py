@@ -154,7 +154,7 @@ class ProvidersScreen(Screen):
             if not entry.requires_api_key:
                 key_cell = "n/a"
 
-            health = self._provider_health_summary(entry.display_name)
+            health = self._provider_health_summary(entry.provider_name)
 
             status_markup = f"[{status_color}]{glyph} {status_text}[/]"
 
