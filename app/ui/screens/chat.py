@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import time
 
 from textual import on
@@ -60,6 +62,25 @@ class StreamFinished(Message):
         self.overhead_ms = overhead_ms
 
 
+def _copy_to_clipboard(text: str) -> bool:
+    """Copy text to the system clipboard. Returns True on success."""
+    for cmd in (
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+        ["wl-copy"],
+        ["pbcopy"],
+    ):
+        if shutil.which(cmd[0]):
+            try:
+                proc = subprocess.run(
+                    cmd, input=text.encode(), timeout=3, check=False
+                )
+                return proc.returncode == 0
+            except Exception:  # noqa: BLE001
+                return False
+    return False
+
+
 class ChatScreen(Screen):
     """
     Tab 2. Two chat modes:
@@ -69,7 +90,7 @@ class ChatScreen(Screen):
     * Model — chat against one specific (provider, model) with streaming
       response rendering.
 
-    Also hosts the inline availability test (✓/⚠/✗) for the selected
+    Also hosts the inline availability test for the selected
     model via the live probe button.
     """
 
@@ -77,6 +98,7 @@ class ChatScreen(Screen):
         Binding("r", "mode_random", "Random"),
         Binding("m", "mode_model", "Model"),
         Binding("ctrl+t", "probe", "Test model"),
+        Binding("C", "copy_last", "Copy", priority=True, show=False),
     ]
 
     def __init__(self, facade: ServiceFacade) -> None:
@@ -93,16 +115,17 @@ class ChatScreen(Screen):
         yield Static("Chat", classes="screen-title")
         with Vertical(id="chat-root"):
             with Horizontal(id="chat-controls"):
-                yield Button("Random", id="mode-random", variant="primary")
-                yield Button("Model", id="mode-model")
-                yield Select([], id="model-picker", prompt="Model\u2026", classes="hidden")
+                yield Button("\u25cf Random", id="mode-random", variant="primary")
+                yield Button("\u25cb Model", id="mode-model")
+                yield Select(
+                    [], id="model-picker", prompt="Model\u2026", classes="hidden"
+                )
                 yield Input(
                     placeholder="Message\u2026",
                     id="chat-input",
                 )
                 yield Button("Send", id="send", variant="success")
-                yield Button("Test model", id="probe")
-                yield Button("Back to Dashboard", id="back-to-dashboard")
+                yield Button("Test", id="probe")
             yield ChatView(id="chat-view")
             yield Static("", id="chat-status")
         yield Footer()
@@ -163,11 +186,15 @@ class ChatScreen(Screen):
 
         if mode == "random":
             random_button.variant = "primary"
+            random_button.label = "\u25cf Random"
             model_button.variant = "default"
+            model_button.label = "\u25cb Model"
             picker.add_class("hidden")
         else:
             random_button.variant = "default"
+            random_button.label = "\u25cb Random"
             model_button.variant = "primary"
+            model_button.label = "\u25cf Model"
             picker.remove_class("hidden")
 
     # ------------------------------------------------------------- actions
@@ -181,9 +208,21 @@ class ChatScreen(Screen):
     async def action_probe(self) -> None:
         await self._probe_selected()
 
+    def action_copy_last(self) -> None:
+        text = self._view().last_assistant_text
+        if not text:
+            self._set_status("Nothing to copy yet.")
+            return
+        if _copy_to_clipboard(text):
+            self._set_status("Copied to clipboard.")
+        else:
+            self._set_status("Clipboard unavailable in this environment.")
+
     async def _probe_selected(self) -> None:
         if self._selected is None:
-            self._set_status("Pick a model first (press m, then choose from the list).")
+            self._set_status(
+                "Pick a model first (press m, then choose from the list)."
+            )
             return
 
         provider, model = self._selected
@@ -230,10 +269,6 @@ class ChatScreen(Screen):
     @on(Button.Pressed, "#probe")
     async def _on_probe(self) -> None:
         await self._probe_selected()
-
-    @on(Button.Pressed, "#back-to-dashboard")
-    async def _on_back_to_dashboard(self) -> None:
-        await self.app.action_tab("dashboard")
 
     @on(Select.Changed, "#model-picker")
     def _on_picker_changed(self, event: Select.Changed) -> None:

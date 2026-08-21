@@ -5,31 +5,31 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `8e53fd7` — Phase 14 complete (master, pushed).
-- **Working tree:** clean (untracked `OVERNIGHT_REPORT.md` is an
-  intentional validation artifact — do NOT commit without approval).
+- **HEAD:** (see `git log --oneline -1` — will update after Stage D
+  commit).
+- **Working tree:** clean after Stage D commit. Untracked
+  `OVERNIGHT_REPORT.md` and `PHASE_15_PROPOSAL.md` are planning
+  artifacts — do NOT commit without approval.
 - **CI** on all matrix jobs (ubuntu Python 3.11/3.12/3.13, windows
   Python 3.12, packaging) — last confirmed green in CI run #10
-  (`31907969693`) for Phase 10B. Phases 11–14 have been pushed but
+  (`31907969693`) for Phase 10B. Phases 11–15 have been pushed but
   remote CI confirmation not yet queried from this device.
-- **Recent history:** Phase 10B at `64a660c` (overflow-retry wiring);
-  streaming overflow at `c34d856`; provider error hardening at `35f3823`;
-  provider transport error redaction at `0c12049`; CI hang fix at
-  `04890d8`; Phase 14 streaming turn accounting at `8e53fd7`.
+- **Recent history:** Phase 14 streaming turn accounting at `8e53fd7`;
+  Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
+  at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
+  streaming redesign (pending commit).
+- **Phase 15 Stage D (chat screen & streaming redesign) is COMPLETED**
+  — implemented and verified (see What is done).
+- **Phase 15 Stage C (core screens redesign) is COMPLETED** —
+  implemented and verified at `6ba1dc3`/`608ee0f` (see What is done).
+- **Phase 15 Stages A+B (design system foundations + dead code cleanup)
+  is COMPLETED** — implemented and verified at `3ab1de9` (see What is
+  done).
 - **Phase 14 (streaming turn accounting) is COMPLETED** — implemented
   and verified at `8e53fd7` (see What is done).
-- **Phase 11 (provider transport error redaction) is COMPLETED** —
-  implemented and verified at `0c12049` (see What is done).
-- **Phase 12 (provider error categorization + streaming overflow) is
-  COMPLETED** — implemented and verified at `35f3823`/`c34d856` (see
-  What is done).
-- **Phase 13 (CI pipeline stabilization) is COMPLETED** — implemented
-  at `04890d8` (see What is done).
-- **Resolved:** the SQLite platform-store concurrency/SIGBUS issue is
-  fixed at `30b2078` (see Known failures).
-- **Baseline suite:** full suite 2754 passed, 8 skipped, 0 failed
-  (Python 3.13, ~8m34s). Unified targeted subset of 40 core test files:
-  1111 passed, 3 skipped. Phase 14 specific: 39/39 passed.
+- **Baseline suite:** full suite 2763 passed, 8 skipped, 0 failed
+  (Python 3.13, ~12m13s). 15/15 chat-specific tests pass. Multi-size
+  verification: 80×24, 100×30, 120×40 all green.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -415,6 +415,40 @@ Base all work on: current code + this file + `git log --oneline -10`.
     streaming and non-streaming requests on the same conversation).
   - **Verification:** 39/39 Phase 14 tests pass; full suite 2754 passed,
     8 skipped, 0 failed (Python 3.13, ~8m34s).
+- **Phase 15 Stage D (chat screen & streaming redesign, implemented +
+  verified, staged for commit):**
+  - **Streaming O(n²) fix** (`app/ui/widgets/chat_view.py`): replaced
+    `self._stream_parts: list[str]` with `self._stream_body: str` and
+    `"".join()` concatenation with `+=` for O(n) chunk appending. Removes
+    quadratic cost on long streaming responses.
+  - **Streaming indicator** (`chat_view.py`): replaced single static
+    `STREAM_MARKER` with cycling three-dot animation
+    `_STREAM_FRAMES = ("●○○", "○●○", "○○●")` that advances on each
+    `_render_stream()` call.
+  - **Empty state** (`chat_view.py`): replaced bare "No messages yet"
+    with rich `Text` showing "Relay Chat" heading + keyboard hints
+    (r/m/Ctrl+T). Removed on first message via `.chat-empty-state` query.
+  - **Copy last response** (`chat.py`): `_copy_to_clipboard()` tries
+    xclip/xsel/wl-copy/pbcopy; `action_copy_last()` + `Binding("C",
+    priority=True)` with status feedback.
+  - **Mode switcher labels** (`chat.py`): buttons show `● Random`/`○ Model`
+    with variant toggling (primary=default).
+  - **Markdown rendering** (`chat_view.py`): finalized assistant responses
+    mount a Textual `Markdown(body)` widget below the badge-only
+    `Static`, replacing the previous monolithic `Text` block.
+  - **Removed "Back to Dashboard" button** from `chat.py` (Escape still
+    works via existing binding).
+  - **CSS** (`base.tcss`): new classes `.chat-empty-state`,
+    `.chat-assistant-header`, `.chat-user`, `.chat-error`, `.chat-system`;
+    `#mode-random`/`#mode-model` min-width for consistent toggle sizing.
+  - **Tests** (`tests/test_ui_chat.py`): 15 tests (was 14). Removed
+    `test_back_to_dashboard_button`. Added tests for copy unavailable,
+    copy nothing, empty state guidance, mode switcher labels, markdown
+    widget in finalized response. Updated `_transcript()` to also query
+    `Markdown` widgets via `.source`.
+  - **Verification:** 15/15 chat tests pass; full suite 2763 passed,
+    8 skipped, 0 failed (Python 3.13, ~12m13s). Multi-size
+    verification: 80×24, 100×30, 120×40 all green.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism;
   CI UI-test executor hang (`04890d8`); provider transport error
@@ -427,6 +461,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## What is next (candidate backlog)
 
+- **Phase 15 Stage E — Diagnostics sub-tabs:** tabbed diagnostics view
+  with system info, provider health, continuity state, and decision
+  records sub-tabs.
 - **Live smoke testing:** restore valid API keys (NVIDIA key expired,
   OpenAI key quota-exhausted) and run end-to-end provider tests against
   real endpoints. This is the final validation gate before v1.0.0.
@@ -459,6 +496,12 @@ Base all work on: current code + this file + `git log --oneline -10`.
   Phase 12 (`35f3823`/`c34d856`).**
 - **CI pipeline stabilization — COMPLETED in Phase 13 (`04890d8`).**
 - **Streaming turn accounting — COMPLETED in Phase 14 (`8e53fd7`).**
+- **Phase 15 Stages A+B (design system + dead code cleanup) — COMPLETED
+  at `3ab1de9`.**
+- **Phase 15 Stage C (core screens redesign) — COMPLETED at
+  `6ba1dc3`/`608ee0f`.**
+- **Phase 15 Stage D (chat screen & streaming redesign) — COMPLETED
+  (pending commit).**
 - Remaining deferred items: context compaction, project persistence,
   cross-client continuity follow-ups, AdaptiveWeights removal, durable
   decision-record schema (all explicitly out of scope for v1.0.0).

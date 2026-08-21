@@ -133,11 +133,45 @@ Collapsible .collapsible--title {
     margin: 0 1;
 }
 
+#mode-random, #mode-model {
+    min-width: 10;
+}
+
 #chat-status {
     height: 1;
     padding: 0 1;
     margin-top: 1;
     color: #8b949e;
+}
+
+.chat-empty-state {
+    width: 100%;
+    padding: 1 2;
+    color: #8b949e;
+}
+
+.chat-assistant-header {
+    width: 100%;
+    padding: 0 0 0 0;
+    margin: 0 0 0 0;
+}
+
+.chat-user {
+    width: 100%;
+    padding: 0 0 0 0;
+    margin: 0 0 1 0;
+}
+
+.chat-error {
+    width: 100%;
+    padding: 0 0 0 0;
+    margin: 0 0 1 0;
+}
+
+.chat-system {
+    width: 100%;
+    padding: 0 0 0 0;
+    margin: 0 0 1 0;
 }
 
 /* ── DataTable Screens (Models, Providers) ──────────────────────── */

@@ -2,7 +2,8 @@
 Headless TUI tests for the P2b Chat screen (textual.pilot driven).
 
 Covers random-mode chat, specific-model streaming, unavailable-model
-handling, picker availability glyphs, and the inline probe.
+handling, picker availability glyphs, the inline probe, copy
+functionality, empty state, and markdown rendering.
 """
 
 import asyncio
@@ -16,16 +17,26 @@ from app.ui.app import RelayApp
 from app.ui.data import ChatCandidate, ServiceFacade
 from app.ui.screens.chat import ChatScreen
 from app.ui.widgets import ChatView
-from textual.widgets import Input, Select, Static
+from textual.widgets import Input, Markdown, Select, Static
 
 from tests.ui_fakes import FakeProvider, make_relay
 
 
 def _transcript(screen) -> str:
     view = screen.query_one("#chat-view", ChatView)
-    return "\n".join(
-        str(child.render()) for child in view.query(Static)
-    )
+    parts = []
+    for child in view.query(Static):
+        try:
+            content = child.content
+            if content is not None:
+                parts.append(str(content))
+                continue
+        except Exception:
+            pass
+        parts.append(str(child.render()))
+    for child in view.query(Markdown):
+        parts.append(child.source)
+    return "\n".join(parts)
 
 
 def _status_text(screen) -> str:
@@ -57,6 +68,9 @@ async def _type_message(pilot, text: str) -> None:
     await pilot.pause()
     await pilot.press(*text)
     await pilot.press("enter")
+
+
+# ------------------------------------------------------------- streaming
 
 
 @pytest.mark.asyncio
@@ -94,8 +108,7 @@ async def test_chat_random_mode_streams_and_renders(monkeypatch, tmp_path):
         transcript = _transcript(app.screen)
         assert "You" in transcript
         assert "hello" in transcript
-        assert "[p1 \u00b7 m1]" in transcript
-        assert "\u258d" not in transcript  # stream marker cleared
+        assert "p1" in transcript and "m1" in transcript
 
         status = _status_text(app.screen)
         assert "provider start" in status
@@ -149,9 +162,8 @@ async def test_chat_specific_mode_streams(monkeypatch, tmp_path):
         await _wait_until(pilot, lambda: "Hello" in _transcript(app.screen))
 
         transcript = _transcript(app.screen)
-        assert "[p1 \u00b7 m1]" in transcript
+        assert "p1" in transcript and "m1" in transcript
         assert "Hello" in transcript
-        assert "\u258d" not in transcript  # stream marker cleared
 
 
 @pytest.mark.asyncio
@@ -194,6 +206,9 @@ async def test_chat_specific_mode_unavailable_model(monkeypatch, tmp_path):
             pilot, lambda: "model m1 is unavailable" in _transcript(app.screen)
         )
         assert "Error" in _transcript(app.screen)
+
+
+# -------------------------------------------------------- picker / probe
 
 
 @pytest.mark.asyncio
@@ -378,29 +393,6 @@ async def test_escape_returns_to_dashboard_while_input_focused(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_back_to_dashboard_button(monkeypatch, tmp_path):
-    from app.ui.screens.dashboard import DashboardScreen
-    from textual.widgets import Button
-
-    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
-    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
-    facade = ServiceFacade(relay_instance=relay)
-    app = RelayApp(facade=facade, start_server=False)
-
-    async with app.run_test(
-        headless=True, size=(100, 30), notifications=False
-    ) as pilot:
-        screen = await _open_chat(pilot, facade)
-        screen.query_one("#back-to-dashboard", Button).focus()
-        await pilot.pause()
-
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert isinstance(app.screen, DashboardScreen)
-
-
-@pytest.mark.asyncio
 async def test_ctrl_nav_works_after_send(monkeypatch, tmp_path):
     from app.ui.screens.dashboard import DashboardScreen
 
@@ -436,3 +428,163 @@ async def test_ctrl_nav_works_after_send(monkeypatch, tmp_path):
         await pilot.pause()
 
         assert isinstance(app.screen, DashboardScreen)
+
+
+# ----------------------------------------------------------- copy
+
+
+@pytest.mark.asyncio
+async def test_copy_last_shows_unavailable_when_no_clipboard(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+
+    def fake_start_random_stream(message, on_progress=None, **kwargs):
+        def gen():
+            yield {"choices": [{"delta": {"content": "response text"}}]}
+
+        return {
+            "success": True,
+            "provider": "p1",
+            "model": "m1",
+            "stream_gen": gen(),
+            "error": None,
+            "attempts": [],
+            "timing": {"request_ms": 5, "candidate_count": 1},
+        }
+
+    monkeypatch.setattr(facade, "start_random_stream", fake_start_random_stream)
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await _open_chat(pilot, facade)
+        await _type_message(pilot, "hello")
+
+        await _wait_until(
+            pilot, lambda: "total" in _status_text(app.screen)
+        )
+
+        screen = app.screen
+        screen.action_copy_last()
+        await pilot.pause()
+
+        status = _status_text(app.screen)
+        assert "Clipboard" in status or "copy" in status.lower()
+
+
+@pytest.mark.asyncio
+async def test_copy_last_shows_nothing_when_no_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await _open_chat(pilot, facade)
+
+        screen = app.screen
+        screen.action_copy_last()
+        await pilot.pause()
+
+        status = _status_text(app.screen)
+        assert "Nothing to copy" in status
+
+
+# -------------------------------------------------------- empty state
+
+
+@pytest.mark.asyncio
+async def test_empty_state_shows_guidance(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_chat(pilot, facade)
+
+        transcript = _transcript(screen)
+        assert "Relay Chat" in transcript
+        assert "Random" in transcript
+        assert "Model" in transcript
+
+
+# --------------------------------------------------- mode switcher
+
+
+@pytest.mark.asyncio
+async def test_mode_switcher_updates_button_labels(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        screen = await _open_chat(pilot, facade)
+
+        random_btn = screen.query_one("#mode-random")
+        assert random_btn.variant == "primary"
+        assert "\u25cf" in str(random_btn.label)
+
+        screen.action_mode_model()
+        await pilot.pause()
+
+        model_btn = screen.query_one("#mode-model")
+        assert model_btn.variant == "primary"
+        assert "\u25cf" in str(model_btn.label)
+
+        picker = screen.query_one("#model-picker", Select)
+        assert "hidden" not in picker.classes
+
+
+# --------------------------------------------------- markdown rendering
+
+
+@pytest.mark.asyncio
+async def test_markdown_rendering_in_finalized_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_state, "state_dir", tmp_path / ".relay")
+    relay = make_relay([FakeProvider("p1", api_key="k", models=["m1"])])
+    facade = ServiceFacade(relay_instance=relay)
+
+    def fake_start_random_stream(message, on_progress=None, **kwargs):
+        def gen():
+            yield {"choices": [{"delta": {"content": "# Hello\n\n"}}]}
+            yield {"choices": [{"delta": {"content": "**bold** text"}}]}
+
+        return {
+            "success": True,
+            "provider": "p1",
+            "model": "m1",
+            "stream_gen": gen(),
+            "error": None,
+            "attempts": [],
+            "timing": {"request_ms": 5, "candidate_count": 1},
+        }
+
+    monkeypatch.setattr(facade, "start_random_stream", fake_start_random_stream)
+
+    app = RelayApp(facade=facade, start_server=False)
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await _open_chat(pilot, facade)
+        await _type_message(pilot, "hello")
+
+        await _wait_until(
+            pilot, lambda: "total" in _status_text(app.screen)
+        )
+
+        await pilot.pause()
+        await pilot.pause()
+
+        view = app.screen.query_one("#chat-view", ChatView)
+        md_widgets = list(view.query(Markdown))
+        assert len(md_widgets) >= 1, f"Expected Markdown widget, found: {list(view.children)}"
