@@ -164,9 +164,14 @@ class ConfigWizardScreen(ModalScreen[None]):
                     yield from self._build_all_pages()
             yield Static("", id="wizard-status")
             with Horizontal(id="wizard-nav"):
-                yield Button("Cancel", id="wizard-cancel")
-                yield Button("Back", id="wizard-back", disabled=True)
-                yield Button("Next", id="wizard-next", variant="primary")
+                cancel = Button("Cancel", id="wizard-cancel")
+                back = Button("Back", id="wizard-back", disabled=True)
+                nxt = Button("Next", id="wizard-next", variant="primary")
+                for nav_button in (cancel, back, nxt):
+                    nav_button.active_effect_duration = 0.0
+                yield cancel
+                yield back
+                yield nxt
 
     def _step_indicator(self) -> str:
         parts: list[str] = []
