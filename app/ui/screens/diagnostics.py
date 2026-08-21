@@ -1,11 +1,13 @@
 """
 P2d Diagnostics screen (tab 7).
 
-Read-only operations tail (metadata only), redacted JSON file-log tail,
-a per-provider health deep view, an explicit per-provider test
-connection, and a redacted snapshot export. Every export passes through
-the redaction layer before its atomic file write, so fake API keys,
-Authorization headers, and request content can never appear in a file.
+Sub-tabbed layout with four views:
+  1. System Info — summary, ops tail, log tail
+  2. Provider Health — per-provider health deep view + test connection
+  3. Continuity — recovery state table
+  4. Decisions — recent routing decision records
+
+Export and refresh controls remain at the bottom, shared across all tabs.
 """
 
 from __future__ import annotations
@@ -20,19 +22,34 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, DataTable, Footer, Header, Input, Select, Static
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Select,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from app.ui.data import ServiceFacade
+from app.ui.theme import theme
 
 
 class DiagnosticsScreen(Screen):
     """
-    Tab 7. Summary line, ops/log tails, health deep view, and the
-    export/test-connection actions.
+    Tab 7. Four sub-tabs: System Info, Provider Health, Continuity,
+    Decisions. Shared export/refresh footer.
     """
 
     BINDINGS = [
         Binding("r", "refresh_diagnostics", "Refresh"),
+        Binding("1", "tab_sub('system')", "System", show=False, priority=True),
+        Binding("2", "tab_sub('providers')", "Providers", show=False, priority=True),
+        Binding("3", "tab_sub('continuity')", "Continuity", show=False, priority=True),
+        Binding("4", "tab_sub('decisions')", "Decisions", show=False, priority=True),
     ]
 
     def __init__(self, facade: ServiceFacade) -> None:
@@ -48,18 +65,15 @@ class DiagnosticsScreen(Screen):
         yield Header(show_clock=True)
         yield Static("Diagnostics", classes="screen-title")
         with Vertical(id="diagnostics-root"):
-            yield Static("", id="diag-summary")
-            yield Static("Operations tail (metadata only)", classes="config-group")
-            yield DataTable(id="ops-table", cursor_type="row")
-            yield Static("File log tail (redacted)", classes="config-group")
-            yield DataTable(id="log-table", cursor_type="row")
-            yield Static("Provider health", classes="config-group")
-            with Horizontal(id="diag-probe-controls"):
-                yield Select([], id="provider-select")
-                yield Button("Test connection", id="test-conn")
-            yield DataTable(id="health-table", cursor_type="row")
-            yield Static("Continuity recovery (read-only)", classes="config-group")
-            yield DataTable(id="continuity-table", cursor_type="row")
+            with TabbedContent(id="diag-tabs"):
+                with TabPane("System Info", id="tab-system", name="system"):
+                    yield from self._system_info_pane()
+                with TabPane("Provider Health", id="tab-providers", name="providers"):
+                    yield from self._provider_health_pane()
+                with TabPane("Continuity", id="tab-continuity", name="continuity"):
+                    yield from self._continuity_pane()
+                with TabPane("Decisions", id="tab-decisions", name="decisions"):
+                    yield from self._decisions_pane()
             with Horizontal(id="diag-controls"):
                 yield Input(
                     placeholder="Export path",
@@ -67,8 +81,25 @@ class DiagnosticsScreen(Screen):
                 )
                 yield Button("Export snapshot", id="export-btn")
                 yield Button("Refresh", id="diag-refresh")
-        yield Static("", id="diagnostics-status")
+            yield Static("", id="diagnostics-status")
         yield Footer()
+
+    def _system_info_pane(self) -> ComposeResult:
+        yield Static("", id="diag-summary")
+        yield DataTable(id="ops-table", cursor_type="row")
+        yield DataTable(id="log-table", cursor_type="row")
+
+    def _provider_health_pane(self) -> ComposeResult:
+        with Horizontal(id="diag-probe-controls"):
+            yield Select([], id="provider-select")
+            yield Button("Test connection", id="test-conn")
+        yield DataTable(id="health-table", cursor_type="row")
+
+    def _continuity_pane(self) -> ComposeResult:
+        yield DataTable(id="continuity-table", cursor_type="row")
+
+    def _decisions_pane(self) -> ComposeResult:
+        yield DataTable(id="decisions-table", cursor_type="row")
 
     def on_mount(self) -> None:
         self.query_one("#export-path", Input).value = self._default_export_path()
@@ -99,6 +130,7 @@ class DiagnosticsScreen(Screen):
         self._refresh_provider_select()
         self._refresh_health_table()
         self._refresh_continuity_table()
+        self._refresh_decisions_table()
         self._last_updated = time.monotonic()
 
     def _refresh_summary(self) -> None:
@@ -199,9 +231,7 @@ class DiagnosticsScreen(Screen):
     def _refresh_continuity_table(self) -> None:
         table = self.query_one("#continuity-table", DataTable)
         table.clear(columns=True)
-        table.add_columns(
-            "Metric", "Value"
-        )
+        table.add_columns("Metric", "Value")
 
         health = self._facade.continuity_health()
         if not health:
@@ -231,7 +261,43 @@ class DiagnosticsScreen(Screen):
                 f"{preview.get('days')} days)",
             )
 
+    def _refresh_decisions_table(self) -> None:
+        table = self.query_one("#decisions-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns(
+            "Correlation ID", "Provider", "Model",
+            "Outcome", "Attempts", "Requested Model",
+        )
+
+        result = self._facade.decision_records(limit=50)
+
+        if not result.get("available"):
+            table.add_row("-", "-", "-", "decision records unavailable", "-", "-")
+            return
+
+        records = result.get("records", [])
+        if not records:
+            table.add_row("-", "-", "-", "no decision records yet", "-", "-")
+            return
+
+        for row_index, record in enumerate(records):
+            attempts = record.get("attempts", [])
+            attempt_count = len(attempts) if isinstance(attempts, list) else 0
+            table.add_row(
+                record.get("correlation_id", "-")[:16],
+                record.get("selected_provider", "-"),
+                record.get("selected_model", "-"),
+                record.get("outcome", "-"),
+                str(attempt_count),
+                record.get("requested_model") or "-",
+                key=f"dec-{row_index}",
+            )
+
     # ------------------------------------------------------------ handlers
+
+    @on(TabbedContent.TabActivated, "#diag-tabs")
+    def _on_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        self._set_status(f"Tab: {event.tab.name}")
 
     @on(Select.Changed, "#provider-select")
     def _on_provider_changed(self, event: Select.Changed) -> None:
@@ -295,6 +361,12 @@ class DiagnosticsScreen(Screen):
         self._refresh_all()
         self._set_status("Diagnostics refreshed.")
 
+    # ----------------------------------------------------------- actions
+
     def action_refresh_diagnostics(self) -> None:
         self._refresh_all()
         self._set_status("Diagnostics refreshed.")
+
+    async def action_tab_sub(self, name: str) -> None:
+        tabs = self.query_one("#diag-tabs", TabbedContent)
+        tabs.active = f"tab-{name}"

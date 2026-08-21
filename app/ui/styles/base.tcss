@@ -316,7 +316,15 @@ Collapsible .collapsible--title {
     height: 1fr;
 }
 
-#diagnostics-root DataTable {
+#diag-tabs {
+    height: 1fr;
+}
+
+#diag-tabs TabPane {
+    height: 1fr;
+}
+
+#diag-tabs DataTable {
     height: 1fr;
     margin-bottom: 1;
 }

@@ -5,9 +5,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** (see `git log --oneline -1` — will update after Stage D
+- **HEAD:** (see `git log --oneline -1` — will update after Stage E
   commit).
-- **Working tree:** clean after Stage D commit. Untracked
+- **Working tree:** clean before Stage E changes. Untracked
   `OVERNIGHT_REPORT.md` and `PHASE_15_PROPOSAL.md` are planning
   artifacts — do NOT commit without approval.
 - **CI** on all matrix jobs (ubuntu Python 3.11/3.12/3.13, windows
@@ -17,9 +17,11 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Recent history:** Phase 14 streaming turn accounting at `8e53fd7`;
   Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
   at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
-  streaming redesign (pending commit).
+  streaming redesign at `d520a11`.
+- **Phase 15 Stage E (diagnostics sub-tabs) is IN PROGRESS** —
+  TabbedContent sub-tabs implemented, all 18 diagnostics tests pass.
 - **Phase 15 Stage D (chat screen & streaming redesign) is COMPLETED**
-  — implemented and verified (see What is done).
+  — implemented and verified at `d520a11` (see What is done).
 - **Phase 15 Stage C (core screens redesign) is COMPLETED** —
   implemented and verified at `6ba1dc3`/`608ee0f` (see What is done).
 - **Phase 15 Stages A+B (design system foundations + dead code cleanup)
@@ -27,7 +29,7 @@ Base all work on: current code + this file + `git log --oneline -10`.
   done).
 - **Phase 14 (streaming turn accounting) is COMPLETED** — implemented
   and verified at `8e53fd7` (see What is done).
-- **Baseline suite:** full suite 2763 passed, 8 skipped, 0 failed
+- **Baseline suite:** full suite 2767 passed, 8 skipped, 0 failed
   (Python 3.13, ~12m13s). 15/15 chat-specific tests pass. Multi-size
   verification: 80×24, 100×30, 120×40 all green.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
@@ -416,7 +418,7 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Verification:** 39/39 Phase 14 tests pass; full suite 2754 passed,
     8 skipped, 0 failed (Python 3.13, ~8m34s).
 - **Phase 15 Stage D (chat screen & streaming redesign, implemented +
-  verified, staged for commit):**
+  verified at `d520a11`):**
   - **Streaming O(n²) fix** (`app/ui/widgets/chat_view.py`): replaced
     `self._stream_parts: list[str]` with `self._stream_body: str` and
     `"".join()` concatenation with `+=` for O(n) chunk appending. Removes
@@ -449,6 +451,28 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Verification:** 15/15 chat tests pass; full suite 2763 passed,
     8 skipped, 0 failed (Python 3.13, ~12m13s). Multi-size
     verification: 80×24, 100×30, 120×40 all green.
+- **Phase 15 Stage E (diagnostics sub-tabs, implemented + verified):**
+  - **TabbedContent sub-tabs** (`app/ui/screens/diagnostics.py`):
+    replaced monolithic diagnostics scroll with four `TabPane` children
+    (System Info, Provider Health, Continuity, Decisions) inside a
+    shared `TabbedContent(id="diag-tabs")`. Each pane is a dedicated
+    `_system_info_pane()`, `_provider_health_pane()`,
+    `_continuity_pane()`, `_decisions_pane()` generator method.
+  - **`action_tab_sub(name)`** for keyboard navigation via number keys
+    `1`–`4` (priority bindings, show=False).
+  - **`decision_records()`** added to `ServiceFacade`
+    (`app/ui/data.py`): wraps `DecisionRecordStore.snapshot(limit=...)`
+    for the decisions sub-tab.
+  - **CSS** (`app/ui/styles/base.tcss`): new `#diag-tabs`,
+    `TabPane`, and `TabbedContent DataTable` height rules for consistent
+    sub-tab content sizing.
+  - **Tests** (`tests/test_ui_diagnostics.py`): 18 tests (was 14).
+    Added `test_diagnostics_has_four_sub_tabs`,
+    `test_diagnostics_tab_switching`, `test_diagnostics_decisions_table_renders`,
+    `test_diagnostics_provider_health_tab_visible`.
+  - **Verification:** 18/18 diagnostics tests pass; full suite 2767
+    passed, 8 skipped, 0 failed (Python 3.13, ~12m03s). Multi-size
+    verification: 80×24, 100×30, 120×40 all green.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism;
   CI UI-test executor hang (`04890d8`); provider transport error
@@ -461,9 +485,8 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## What is next (candidate backlog)
 
-- **Phase 15 Stage E — Diagnostics sub-tabs:** tabbed diagnostics view
-  with system info, provider health, continuity state, and decision
-  records sub-tabs.
+- **Phase 15 Stage E — Diagnostics sub-tabs:** COMPLETED (see What is
+  done).
 - **Live smoke testing:** restore valid API keys (NVIDIA key expired,
   OpenAI key quota-exhausted) and run end-to-end provider tests against
   real endpoints. This is the final validation gate before v1.0.0.
@@ -501,7 +524,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Phase 15 Stage C (core screens redesign) — COMPLETED at
   `6ba1dc3`/`608ee0f`.**
 - **Phase 15 Stage D (chat screen & streaming redesign) — COMPLETED
-  (pending commit).**
+  at `d520a11`.**
+- **Phase 15 Stage E (diagnostics sub-tabs) — COMPLETED** (pending
+  commit).**
 - Remaining deferred items: context compaction, project persistence,
   cross-client continuity follow-ups, AdaptiveWeights removal, durable
   decision-record schema (all explicitly out of scope for v1.0.0).

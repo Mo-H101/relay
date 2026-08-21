@@ -1159,6 +1159,24 @@ class ServiceFacade:
             "error": result.error,
         }
 
+    def decision_records(self, limit: int = 50) -> dict:
+        """
+        Recent actual routing decision records from the in-memory store.
+        Read-only, bounded, metadata only — no prompts, responses, or
+        credentials. Returns ``{"available": False, "records": []}`` when
+        the store is unavailable.
+        """
+        store = getattr(self._relay, "decision_record_store", None)
+
+        if store is None:
+            return {"available": False, "records": []}
+
+        return {
+            "available": True,
+            "max_records": store.max_records,
+            "records": store.snapshot(limit=limit),
+        }
+
     def export_diagnostics(self, path: str) -> dict:
         """
         Export the redacted diagnostics snapshot to ``path``.

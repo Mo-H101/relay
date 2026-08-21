@@ -229,3 +229,120 @@ async def test_diagnostics_screen_smoke():
         assert app.screen.query_one("#export-path") is not None
         await pilot.press("q")
         await pilot.pause()
+
+
+# ------------------------------------------------------ sub-tab structure
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_has_four_sub_tabs():
+    from textual.widgets import TabbedContent, TabPane
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("7")
+        await pilot.pause()
+
+        tabs = app.screen.query_one("#diag-tabs", TabbedContent)
+        panes = list(tabs.query(TabPane))
+        pane_names = [p.name for p in panes]
+
+        assert "system" in pane_names
+        assert "providers" in pane_names
+        assert "continuity" in pane_names
+        assert "decisions" in pane_names
+        assert len(pane_names) == 4
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_tab_switching():
+    from textual.widgets import TabbedContent
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("7")
+        await pilot.pause()
+
+        tabs = app.screen.query_one("#diag-tabs", TabbedContent)
+        assert tabs.active == "tab-system"
+
+        await pilot.press("2")
+        await pilot.pause()
+        assert tabs.active == "tab-providers"
+
+        await pilot.press("3")
+        await pilot.pause()
+        assert tabs.active == "tab-continuity"
+
+        await pilot.press("4")
+        await pilot.pause()
+        assert tabs.active == "tab-decisions"
+
+        await pilot.press("1")
+        await pilot.pause()
+        assert tabs.active == "tab-system"
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_decisions_table_renders():
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("7")
+        await pilot.pause()
+
+        await pilot.press("4")
+        await pilot.pause()
+
+        table = app.screen.query_one("#decisions-table")
+        assert table is not None
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_provider_health_tab_visible():
+    from textual.widgets import TabbedContent
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("7")
+        await pilot.pause()
+
+        await pilot.press("2")
+        await pilot.pause()
+
+        tabs = app.screen.query_one("#diag-tabs", TabbedContent)
+        assert tabs.active == "tab-providers"
+        assert app.screen.query_one("#health-table") is not None
+        assert app.screen.query_one("#provider-select") is not None
+        assert app.screen.query_one("#test-conn") is not None
+
+        await pilot.press("q")
+        await pilot.pause()
