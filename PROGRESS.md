@@ -5,9 +5,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** (see `git log --oneline -1` — will update after Stage E
+- **HEAD:** (see `git log --oneline -1` — will update after Stage F
   commit).
-- **Working tree:** clean before Stage E changes. Untracked
+- **Working tree:** clean before Stage F changes. Untracked
   `OVERNIGHT_REPORT.md` and `PHASE_15_PROPOSAL.md` are planning
   artifacts — do NOT commit without approval.
 - **CI** on all matrix jobs (ubuntu Python 3.11/3.12/3.13, windows
@@ -17,9 +17,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Recent history:** Phase 14 streaming turn accounting at `8e53fd7`;
   Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
   at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
-  streaming redesign at `d520a11`.
-- **Phase 15 Stage E (diagnostics sub-tabs) is IN PROGRESS** —
-  TabbedContent sub-tabs implemented, all 18 diagnostics tests pass.
+  streaming redesign at `d520a11`; Stage E diagnostics sub-tabs at
+  `1d05f9a`.
+- **Phase 15 Stage F (config collapsibles + wizard) is COMPLETED** —
+  collapsible sections and guided wizard implemented, 36 config tests
+  pass (was 20).
+- **Phase 15 Stage E (diagnostics sub-tabs) is COMPLETED**
+  — implemented and verified at `1d05f9a` (see What is done).
 - **Phase 15 Stage D (chat screen & streaming redesign) is COMPLETED**
   — implemented and verified at `d520a11` (see What is done).
 - **Phase 15 Stage C (core screens redesign) is COMPLETED** —
@@ -29,9 +33,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
   done).
 - **Phase 14 (streaming turn accounting) is COMPLETED** — implemented
   and verified at `8e53fd7` (see What is done).
-- **Baseline suite:** full suite 2767 passed, 8 skipped, 0 failed
-  (Python 3.13, ~12m13s). 15/15 chat-specific tests pass. Multi-size
-  verification: 80×24, 100×30, 120×40 all green.
+- **Baseline suite:** full suite 2777 passed, 8 skipped, 0 failed
+  (Python 3.13, ~12m49s). Multi-size verification: 80×24, 100×30,
+  120×40 all green.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -473,6 +477,40 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Verification:** 18/18 diagnostics tests pass; full suite 2767
     passed, 8 skipped, 0 failed (Python 3.13, ~12m03s). Multi-size
     verification: 80×24, 100×30, 120×40 all green.
+- **Phase 15 Stage F (config collapsibles + wizard, implemented +
+  verified):**
+  - **Collapsible sections** (`app/ui/screens/configuration.py`):
+    replaced flat scrolling list of 7 display-group headers with
+    `Collapsible` widgets. All 7 groups collapsed by default for
+    scannability; user expands via click on title or keyboard Tab+Enter.
+  - **Expand/collapse all** (`configuration.py`): `action_expand_all()`
+    (`e` key) and `action_collapse_all()` (`E` key) toggle all 7
+    collapsible sections at once.
+  - **Configuration wizard** (`app/ui/screens/config_wizard.py`, new):
+    `ConfigWizardScreen(ModalScreen)` with 5 guided steps: Welcome,
+    Server Basics, Provider Setup, Task Routing, Review & Save. Uses
+    `ContentSwitcher` for step navigation. Each step shows a focused
+    subset of fields. Changes accumulated across steps and saved
+    atomically via `ServiceFacade.save_config()`. Escape to cancel,
+    Back/Next/Finish buttons. No domain logic duplicated — reads from
+    the same `ConfigField` model.
+  - **`config_wizard_fields(step_id)`** added to `ServiceFacade`
+    (`app/ui/data.py`): returns `ConfigField` rows for a given wizard
+    step, keeping the wizard screen free of `app.core` imports
+    (boundary rule).
+  - **Wizard button** on config screen controls bar (`#config-wizard`).
+    Keyboard: `w` launches the wizard.
+  - **CSS** (`app/ui/styles/base.tcss`): enhanced Collapsible title
+    styling for config groups; new wizard modal styles (`#wizard-container`,
+    `#wizard-body`, `#wizard-nav`, `.wizard-field`, `.wizard-label`, etc.).
+  - **Tests** (`tests/test_ui_configuration.py`): 30 tests (was 20).
+    Added: 7 collapsible groups present, all collapsed by default,
+    expand-all, collapse-all, wizard button, fields present when
+    collapsed, wizard smoke, wizard navigation, wizard finish with no
+    changes, wizard step indicator.
+  - **Verification:** 36/36 config+accessibility tests pass; full suite
+    2777 passed, 8 skipped, 0 failed (Python 3.13, ~12m49s). Multi-size
+    verification: 80×24, 100×30, 120×40 all green.
 - **Fixes:** CI workflow trigger `main`→`master`; EmbeddedServer readiness
   poll (`app/core/server.py`); health-store freshness determinism;
   CI UI-test executor hang (`04890d8`); provider transport error
@@ -487,6 +525,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 - **Phase 15 Stage E — Diagnostics sub-tabs:** COMPLETED (see What is
   done).
+- **Phase 15 Stage F — Config collapsibles + wizard:** COMPLETED (see
+  What is done).
+- **Phase 15 Stage G:** next planned stage.
 - **Live smoke testing:** restore valid API keys (NVIDIA key expired,
   OpenAI key quota-exhausted) and run end-to-end provider tests against
   real endpoints. This is the final validation gate before v1.0.0.
@@ -525,8 +566,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
   `6ba1dc3`/`608ee0f`.**
 - **Phase 15 Stage D (chat screen & streaming redesign) — COMPLETED
   at `d520a11`.**
-- **Phase 15 Stage E (diagnostics sub-tabs) — COMPLETED** (pending
-  commit).**
+- **Phase 15 Stage E (diagnostics sub-tabs) — COMPLETED at
+  `1d05f9a`.**
+- **Phase 15 Stage F (config collapsibles + wizard) — COMPLETED**
+  (pending commit).
 - Remaining deferred items: context compaction, project persistence,
   cross-client continuity follow-ups, AdaptiveWeights removal, durable
   decision-record schema (all explicitly out of scope for v1.0.0).

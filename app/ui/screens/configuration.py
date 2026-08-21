@@ -2,14 +2,18 @@
 P2d Configuration screen (tab 5).
 
 The form is derived entirely from ``app.core.config_spec`` through the
-facade (P7.3): every setting renders under its stable display group, live
-fields edit in place, restart-required fields are editable but never
-live-applied (a restart notice is shown), and secret fields render as
-masked read-only rows — raw key material never enters a widget. The save
-flow goes through ``ServiceFacade.save_config``, which validates each
-change with a dry run through the P7.2 mutation layer (zero writes on
-refusal), persists through the single writer, applies live fields with the
-full reload engine, and restores the previous values on failure.
+facade (P7.3): every setting renders under its stable display group inside
+a collapsible section, live fields edit in place, restart-required fields
+are editable but never live-applied (a restart notice is shown), and secret
+fields render as masked read-only rows — raw key material never enters a
+widget. The save flow goes through ``ServiceFacade.save_config``, which
+validates each change with a dry run through the P7.2 mutation layer (zero
+writes on refusal), persists through the single writer, applies live fields
+with the full reload engine, and restores the previous values on failure.
+
+Stage F: groups are collapsible sections (all collapsed by default for
+scannability) with expand-all/collapse-all keyboard shortcuts. A wizard
+button launches the guided setup flow.
 """
 
 from __future__ import annotations
@@ -21,7 +25,15 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Checkbox, Footer, Header, Input, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Collapsible,
+    Footer,
+    Header,
+    Input,
+    Static,
+)
 
 from app.ui.data import ConfigField, ServiceFacade
 
@@ -29,14 +41,17 @@ from app.ui.data import ConfigField, ServiceFacade
 class ConfigurationScreen(Screen):
     """
     Tab 5. A scrolling form grouped by display group (Runtime, Network,
-    Providers, Security, Storage, Logging, UI) in stable order. Save runs
-    the validate -> write -> apply -> confirm flow and surfaces the
-    (redacted) reload report in the status line.
+    Providers, Security, Storage, Logging, UI) in stable order. Each group
+    is a collapsible section. Save runs the validate -> write -> apply ->
+    confirm flow and surfaces the (redacted) reload report in the status line.
     """
 
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("r", "refresh_config", "Refresh"),
+        Binding("e", "expand_all", "Expand all"),
+        Binding("E", "collapse_all", "Collapse all"),
+        Binding("w", "launch_wizard", "Wizard"),
     ]
 
     def __init__(self, facade: ServiceFacade) -> None:
@@ -52,16 +67,22 @@ class ConfigurationScreen(Screen):
         yield Static("Configuration", classes="screen-title")
         with VerticalScroll(id="config-root"):
             for group in self._groups:
-                yield Static(group, classes="config-group")
-
-                for field in self._fields:
-                    if field.group == group:
-                        yield from self._field_widget(field)
+                with Collapsible(
+                    title=group,
+                    id=f"config-group-{group.lower()}",
+                    collapsed=True,
+                    collapsed_symbol="▸",
+                    expanded_symbol="▾",
+                ):
+                    for field in self._fields:
+                        if field.group == group:
+                            yield from self._field_widget(field)
 
             yield Static(
                 "", id="config-restart-note", classes="config-note"
             )
             with Horizontal(id="config-controls"):
+                yield Button("Wizard", id="config-wizard")
                 yield Button("Save", id="config-save")
                 yield Button("Revert", id="config-revert")
                 yield Button("Refresh", id="config-refresh")
@@ -127,7 +148,9 @@ class ConfigurationScreen(Screen):
         self._status().update(text)
 
     def _set_busy(self, busy: bool) -> None:
-        for widget_id in ("config-save", "config-revert", "config-refresh"):
+        for widget_id in (
+            "config-save", "config-revert", "config-refresh", "config-wizard",
+        ):
             self.query_one(f"#{widget_id}", Button).disabled = busy
 
     def _refresh_values(self) -> None:
@@ -230,8 +253,27 @@ class ConfigurationScreen(Screen):
         self._refresh_values()
         self._set_status("Configuration refreshed.")
 
+    @on(Button.Pressed, "#config-wizard")
+    def _on_wizard(self) -> None:
+        self.action_launch_wizard()
+
     async def action_save(self) -> None:
         await self._on_save()
 
     def action_refresh_config(self) -> None:
         self._refresh_values()
+
+    def action_expand_all(self) -> None:
+        for collapsible in self.query(Collapsible):
+            collapsible.collapsed = False
+        self._set_status("All sections expanded.")
+
+    def action_collapse_all(self) -> None:
+        for collapsible in self.query(Collapsible):
+            collapsible.collapsed = True
+        self._set_status("All sections collapsed.")
+
+    def action_launch_wizard(self) -> None:
+        from app.ui.screens.config_wizard import ConfigWizardScreen
+
+        self.app.push_screen(ConfigWizardScreen(self._facade))

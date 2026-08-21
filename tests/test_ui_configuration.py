@@ -313,3 +313,289 @@ async def test_configuration_screen_smoke():
         assert "sk-" not in str(secret.render())
         await pilot.press("q")
         await pilot.pause()
+
+
+# ---------------------------------------------------- collapsible sections (Stage F)
+
+@pytest.mark.asyncio
+async def test_configuration_has_seven_collapsible_groups():
+    from textual.widgets import Collapsible
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        collapsibles = app.screen.query(Collapsible)
+        assert len(collapsibles) == 7
+
+        expected_ids = [
+            "config-group-runtime", "config-group-network",
+            "config-group-providers", "config-group-security",
+            "config-group-storage", "config-group-logging",
+            "config-group-ui",
+        ]
+        actual_ids = [c.id for c in collapsibles]
+        for eid in expected_ids:
+            assert eid in actual_ids, eid
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_configuration_groups_all_collapsed_by_default():
+    from textual.widgets import Collapsible
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        for collapsible in app.screen.query(Collapsible):
+            assert collapsible.collapsed is True, collapsible.id
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_configuration_expand_all():
+    from textual.widgets import Collapsible
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        await pilot.press("e")
+        await pilot.pause()
+
+        for collapsible in app.screen.query(Collapsible):
+            assert collapsible.collapsed is False, collapsible.id
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_configuration_collapse_all():
+    from textual.widgets import Collapsible
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        await pilot.press("e")
+        await pilot.pause()
+        await pilot.press("E")
+        await pilot.pause()
+
+        for collapsible in app.screen.query(Collapsible):
+            assert collapsible.collapsed is True, collapsible.id
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_configuration_wizard_button_exists():
+    from textual.widgets import Button
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        wizard_btn = app.screen.query_one("#config-wizard", Button)
+        assert wizard_btn is not None
+        assert "Wizard" in str(wizard_btn.label)
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_configuration_fields_present_when_collapsed():
+    from textual.widgets import Checkbox, Input
+
+    from app.ui.app import RelayApp
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        assert isinstance(app.screen.query_one("#cfg-TASK_ROUTING_ENABLED"), Checkbox)
+        assert isinstance(app.screen.query_one("#cfg-RELAY_HOST"), Input)
+        assert isinstance(app.screen.query_one("#cfg-MAX_RETRIES"), Input)
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+# ----------------------------------------------------------- wizard (Stage F)
+
+@pytest.mark.asyncio
+async def test_wizard_smoke():
+    from app.ui.app import RelayApp
+    from app.ui.screens.config_wizard import ConfigWizardScreen
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        await pilot.press("w")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ConfigWizardScreen)
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_wizard_navigation():
+    from app.ui.app import RelayApp
+    from app.ui.screens.config_wizard import ConfigWizardScreen
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        await pilot.press("w")
+        await pilot.pause()
+        wizard = app.screen
+        assert isinstance(wizard, ConfigWizardScreen)
+        assert wizard._step_index == 0
+
+        await pilot.click("#wizard-next")
+        await pilot.pause()
+        assert wizard._step_index == 1
+
+        await pilot.click("#wizard-next")
+        await pilot.pause()
+        assert wizard._step_index == 2
+
+        await pilot.click("#wizard-back")
+        await pilot.pause()
+        assert wizard._step_index == 1
+
+        await pilot.click("#wizard-cancel")
+        await pilot.pause()
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_wizard_finish_with_no_changes():
+    from app.ui.app import RelayApp
+    from app.ui.screens.config_wizard import ConfigWizardScreen, WIZARD_STEP_IDS
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        await pilot.press("w")
+        await pilot.pause()
+        wizard = app.screen
+        assert isinstance(wizard, ConfigWizardScreen)
+
+        for _ in range(len(WIZARD_STEP_IDS)):
+            try:
+                await pilot.click("#wizard-next")
+                await pilot.pause()
+            except Exception:
+                break
+
+        for _ in range(3):
+            try:
+                await pilot.click("#wizard-finish")
+                await pilot.pause()
+            except Exception:
+                break
+
+        assert not isinstance(app.screen, ConfigWizardScreen)
+
+        await pilot.press("q")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_wizard_step_indicator():
+    from app.ui.app import RelayApp
+    from app.ui.screens.config_wizard import ConfigWizardScreen
+
+    app = RelayApp(facade=_facade(), start_server=False)
+
+    async with app.run_test(
+        headless=True, size=(100, 30), notifications=False
+    ) as pilot:
+        await pilot.press("5")
+        await pilot.pause()
+
+        await pilot.press("w")
+        await pilot.pause()
+        wizard = app.screen
+        assert isinstance(wizard, ConfigWizardScreen)
+
+        indicator = wizard.query_one("#wizard-steps")
+        text = str(indicator.render())
+        assert "▸ Welcome to Relay" in text
+
+        await pilot.click("#wizard-next")
+        await pilot.pause()
+        text = str(indicator.render())
+        assert "✓ Welcome to Relay" in text
+        assert "▸ Server Basics" in text
+
+        await pilot.click("#wizard-cancel")
+        await pilot.pause()
+
+        await pilot.press("q")
+        await pilot.pause()

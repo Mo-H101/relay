@@ -766,6 +766,65 @@ class ServiceFacade:
             if spec.restart_required and spec.env is not None
         )
 
+    def config_wizard_fields(self, step_id: str) -> list[ConfigField]:
+        """
+        Configuration fields for a wizard step. ``step_id`` is one of
+        ``"welcome"``, ``"server"``, ``"providers"``, ``"routing"``,
+        ``"summary"``.
+
+        Returns ``ConfigField`` rows using the same derivation as
+        ``config_form()``. The wizard screen consumes this instead of
+        importing ``app.core`` directly.
+        """
+        envs: frozenset[str] = frozenset()
+        provider_only = False
+
+        if step_id == "server":
+            envs = frozenset({
+                "RELAY_HOST", "RELAY_PORT", "REQUEST_TIMEOUT", "MAX_RETRIES",
+            })
+        elif step_id == "providers":
+            provider_only = True
+        elif step_id == "routing":
+            envs = frozenset({
+                "TASK_ROUTING_ENABLED", "CROSS_PROVIDER_MODEL_SELECTION",
+                "TASK_CLASSIFICATION_ENABLED", "TASK_CLASSIFICATION_THRESHOLD",
+                "TASK_CODING", "TASK_VISION", "TASK_REASONING",
+                "TASK_GENERAL", "TASK_CREATIVE", "TASK_TRANSLATION",
+            })
+
+        fields: list[ConfigField] = []
+        for spec in config_spec.SPECS:
+            if provider_only:
+                if not spec.provider or spec.secret:
+                    continue
+            elif envs:
+                if spec.env not in envs:
+                    continue
+
+            kind = config_spec.tui_kind_for(spec)
+            if spec.secret:
+                value = self._secret_display(spec)
+            else:
+                value = self._field_value(spec.attr, kind)
+            fields.append(
+                ConfigField(
+                    env=spec.env or "",
+                    attr=spec.attr,
+                    label=config_spec.label_for(spec),
+                    value=value,
+                    kind=kind,
+                    group=config_spec.tui_group_for(spec),
+                    editable=config_spec.tui_editable_for(spec),
+                    reloadable=spec.reloadable,
+                    restart_required=spec.restart_required,
+                    informational=spec.informational,
+                    hint=config_spec.hint_for(spec),
+                    secret=spec.secret,
+                )
+            )
+        return fields
+
     def save_config(self, changes: dict[str, str]) -> dict:
         """
         Save Configuration changes through the P7.2 mutation layer.
