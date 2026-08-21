@@ -5,27 +5,27 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** (see `git log --oneline -1` — will update after Stage G
-  commit).
-- **Working tree:** clean before Stage G changes. Untracked
-  `OVERNIGHT_REPORT.md` and `PHASE_15_PROPOSAL.md` are planning
-  artifacts — do NOT commit without approval.
-- **CI** on all matrix jobs (ubuntu Python 3.11/3.12/3.13, windows
-  Python 3.12, packaging) — last confirmed green in CI run #10
-  (`31907969693`) for Phase 10B. Phases 11–15 have been pushed but
-  remote CI confirmation not yet queried from this device.
+- **HEAD:** `66cb775` (`fix: register every click on wizard nav buttons`).
+- **Working tree:** clean; no untracked files. The former planning
+  artifacts (`OVERNIGHT_REPORT.md`, `PHASE_15_PROPOSAL.md`) no longer
+  exist on this device.
+- **CI:** fully green — run `32524662538` for `66cb775`: all 5 jobs pass
+  (ubuntu Python 3.11/3.12/3.13, windows Python 3.12, packaging). This
+  confirms Phases 11–15 remote CI from this device.
 - **Recent history:** Phase 14 streaming turn accounting at `8e53fd7`;
   Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
   at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
   streaming redesign at `d520a11`; Stage E diagnostics sub-tabs at
-  `1d05f9a`.
+  `1d05f9a`; Stage F config collapsibles + wizard at `726f09c`; Stage G
+  polish & final cleanup at `e1661ec`; post-Stage-G wizard CI-regression
+  hotfix at `66cb775`.
 - **Phase 15 Stage G (polish & final cleanup) is COMPLETED** —
   CSS dead-class cleanup, .chat-assistant fix, status transitions, tab
-  description subtitles. 2773 passed, 11 skipped, 0 failed (1
-  pre-existing packaging env issue).
+  description subtitles. Follow-up hotfix `66cb775` resolved a Stage G
+  CI regression (see What is done).
 - **Phase 15 Stage F (config collapsibles + wizard) is COMPLETED** —
-  collapsible sections and guided wizard implemented, 36 config tests
-  pass (was 20).
+  collapsible sections and guided wizard implemented, committed at
+  `726f09c`, 36 config tests pass (was 20).
 - **Phase 15 Stage E (diagnostics sub-tabs) is COMPLETED**
   — implemented and verified at `1d05f9a` (see What is done).
 - **Phase 15 Stage D (chat screen & streaming redesign) is COMPLETED**
@@ -38,8 +38,8 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Phase 14 (streaming turn accounting) is COMPLETED** — implemented
   and verified at `8e53fd7` (see What is done).
 - **Baseline suite:** full suite 2777 passed, 8 skipped, 0 failed
-  (Python 3.13, ~12m49s). Multi-size verification: 80×24, 100×30,
-  120×40 all green.
+  (Python 3.14 local; CI collection identical at 2785). Multi-size
+  UI verification: 80×24, 100×30, 120×40 all green.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -504,9 +504,29 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Tests:** full UI suite 137/137 passed; boundary tests including
     multi-size (100×30, 80×24, 60×20, 40×15) all passed; 120×40
     verified via headless pilot; compileall clean.
-  - **Verification:** 2773 passed, 11 skipped, 0 failed (1 pre-existing
-    packaging env issue: `test_sdist_build_excludes_tests_and_bench`
-    fails due to missing setuptools backend — not related to Stage G).
+  - **Verification (at `e1661ec`, superseded):** 2773 passed, 11
+    skipped, 0 failed locally, but CI runs failed on 2 wizard tests —
+    see the post-Stage-G regression below.
+- **Post-Stage-G CI regression fix (`66cb775`):** Stage G's first CI
+  appearance (`726f09c` Stage F introduced the wizard; `e1661ec` Stage G)
+  failed `test_wizard_navigation` and `test_wizard_finish_with_no_changes`
+  on ubuntu (both) and windows (finish only), while passing locally.
+  - **Root cause:** Textual's `Button._on_click` deliberately ignores
+    clicks while the `-active` press effect is active
+    (`active_effect_duration = 0.2s`). CI machines execute the tests'
+    click+pause cycles in ~5–33ms, so every click after the first landed
+    inside the debounce window and was silently dropped: navigation froze
+    at step 1 and the wizard never reached its summary/Finish step.
+    Reproduced deterministically by simulating CI-speed click gaps.
+  - **Fix (production code only):**
+    `app/ui/screens/config_wizard.py` sets
+    `active_effect_duration = 0.0` on the wizard's Cancel/Back/Next
+    buttons. Navigation controls must register every click — losing a
+    rapid repeat press is a real UX defect, not just a test artifact.
+  - **No test files were modified**, weakened, skipped, or given sleeps.
+  - **Verification:** both tests pass individually; module 30 passed;
+    full suite 2777 passed, 8 skipped, 0 failed; CI run `32524662538`
+    fully green (5/5 jobs).
 - **Phase 15 Stage F (config collapsibles + wizard, implemented +
   verified):**
   - **Collapsible sections** (`app/ui/screens/configuration.py`):
@@ -599,13 +619,18 @@ Base all work on: current code + this file + `git log --oneline -10`.
   at `d520a11`.**
 - **Phase 15 Stage E (diagnostics sub-tabs) — COMPLETED at
   `1d05f9a`.**
-- **Phase 15 Stage F (config collapsibles + wizard) — COMPLETED**
-  (pending commit).
-- **Phase 15 Stage G (polish & final cleanup) — COMPLETED**
-  (pending commit).
+- **Phase 15 Stage F (config collapsibles + wizard) — COMPLETED at
+  `726f09c`.**
+- **Phase 15 Stage G (polish & final cleanup) — COMPLETED at
+  `e1661ec`; CI regression hotfixed at `66cb775`.**
 - Remaining deferred items: context compaction, project persistence,
   cross-client continuity follow-ups, AdaptiveWeights removal, durable
   decision-record schema (all explicitly out of scope for v1.0.0).
+- **Remaining release gate (v1.0.0):** live smoke testing — restore
+  valid API keys and run end-to-end provider tests against real
+  endpoints; then, if validation succeeds, version bump + release
+  tagging to `v1.0.0` (current version `1.0.0rc1`; `v1.0.0` NOT yet
+  tagged).
 
 ## Key decisions
 
