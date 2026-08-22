@@ -5,14 +5,16 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `66cb775` (`fix: register every click on wizard nav buttons`).
-- **Working tree:** clean; no untracked files. The former planning
-  artifacts (`OVERNIGHT_REPORT.md`, `PHASE_15_PROPOSAL.md`) no longer
-  exist on this device.
-- **CI:** fully green — run `32524662538` for `66cb775`: all 5 jobs pass
-  (ubuntu Python 3.11/3.12/3.13, windows Python 3.12, packaging). This
-  confirms Phases 11–15 remote CI from this device.
-- **Recent history:** Phase 14 streaming turn accounting at `8e53fd7`;
+- **HEAD:** `68921c1` (`fix: remediate phase 16 release blockers`).
+- **Working tree:** tracked files clean. The intentionally preserved,
+  untracked context documents `OVERNIGHT_REPORT.md` and
+  `PHASE_15_PROPOSAL.md` remain present.
+- **CI:** the current workflow tests Ubuntu Python 3.10/3.11/3.12/3.13,
+  Windows Python 3.12, and packaging on Ubuntu Python 3.12. Stage 1 local
+  verification covered the same runtime support contract; remote CI for
+  `68921c1` remains a separate merge-gate check.
+- **Recent history:** Phase 16 Stage 1 remediation at `68921c1`; Phase 14
+  streaming turn accounting at `8e53fd7`;
   Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
   at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
   streaming redesign at `d520a11`; Stage E diagnostics sub-tabs at
@@ -37,9 +39,13 @@ Base all work on: current code + this file + `git log --oneline -10`.
   done).
 - **Phase 14 (streaming turn accounting) is COMPLETED** — implemented
   and verified at `8e53fd7` (see What is done).
-- **Baseline suite:** full suite 2777 passed, 8 skipped, 0 failed
-  (Python 3.14 local; CI collection identical at 2785). Multi-size
-  UI verification: 80×24, 100×30, 120×40 all green.
+- **Baseline suite:** pre-remediation baseline was 2777 passed, 8 skipped,
+  0 failed. Stage 1 added seven authentication regression tests; local
+  full-suite verification passed on Python 3.10 (2771 passed, 21 skipped)
+  and Python 3.12 (2772 passed, 20 skipped), with no failures.
+- **Release state:** version `1.0.0rc1`; Phase 15 Stages A–G complete;
+  Phase 16 Stage 1 R-C1/R-C2 remediation complete; `v1.0.0` is not
+  released.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -200,6 +206,16 @@ Base all work on: current code + this file + `git log --oneline -10`.
   - **Verified:** `compileall -q app tests` green on Python 3.11.15 and
     3.14.6; full suite 2558 passed, 8 skipped, 0 failed (Python 3.14);
     packaging suite green incl. the wheel-upgrade regression test.
+- **Phase 16 Stage 1 remediation (`68921c1`):** R-C1 Host-header path
+  confusion was fixed by using the raw ASGI scope path for all
+  authentication/public-path and scoped-key decisions. Regression coverage
+  confirms malformed Host and forwarded-header variants cannot bypass
+  protected routes while public routes and valid credentials continue to
+  work. R-C2 Python 3.10 compatibility was restored by replacing the six
+  `datetime.UTC` uses with `timezone.utc`; the application starts and the
+  targeted/full verification passes on supported Python versions.
+  Remaining Phase 16 findings R-C3–R-C11 are intentionally deferred to a
+  later remediation stage.
 - **Packaging-test 3.11 skip (`f93c112`):** `test_wheel_upgrade_from_previous_release`
   builds the old 0.1.0 wheel from `_PREVIOUS_RELEASE_TREE` (`dbc2902`),
   whose `metrics.py` uses pre-PEP-701 f-string syntax — un-importable on
@@ -579,6 +595,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
   What is done).
 - **Phase 15 Stage G — Polish & final cleanup:** COMPLETED (see What is
   done).
+- **Phase 16 Stage 1 — R-C1/R-C2 remediation:** COMPLETED at `68921c1`.
+  R-C3–R-C11 remain open and must be reviewed in a later remediation stage
+  before the release gate can pass.
 - **Live smoke testing:** restore valid API keys (NVIDIA key expired,
   OpenAI key quota-exhausted) and run end-to-end provider tests against
   real endpoints. This is the final validation gate before v1.0.0.
