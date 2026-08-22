@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import sqlite3
 import threading
@@ -134,6 +135,37 @@ def _constant_time_eq(left: bytes, right: bytes) -> bool:
     return hmac.compare_digest(left, right)
 
 
+def validate_expires_at(expires_at: Optional[float]) -> Optional[float]:
+    """Validate and normalize an optional finite Unix expiry timestamp.
+
+    Booleans are rejected explicitly because ``bool`` is an ``int``
+    subclass.  The same rule is used by the API and the persistence layer
+    so a direct store caller cannot create a key that bypasses expiration
+    semantics with NaN or infinity.
+    """
+    if expires_at is None:
+        return None
+    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+        raise ValueError("expires_at must be a finite unix timestamp")
+
+    try:
+        normalized = float(expires_at)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("expires_at must be a finite unix timestamp") from exc
+
+    if not math.isfinite(normalized):
+        raise ValueError("expires_at must be a finite unix timestamp")
+    return normalized
+
+
+def _safe_persisted_expiry(expires_at) -> Optional[float]:
+    """Treat legacy/corrupt non-finite expiry values as already expired."""
+    try:
+        return validate_expires_at(expires_at)
+    except ValueError:
+        return 0.0
+
+
 class KeyStore:
     """
     SQLite-backed store for scrypt-hashed Relay API keys.
@@ -177,6 +209,8 @@ class KeyStore:
 
         if not label:
             raise ValueError("label is required")
+
+        expires_at = validate_expires_at(expires_at)
 
         raw_key = _generate_raw_key()
         key_id = uuid.uuid4().hex
@@ -390,7 +424,8 @@ class KeyStore:
             if row[9] is not None:
                 return {"status": "revoked", "meta": meta}
 
-            if row[6] is not None and row[6] <= now:
+            expires_at = _safe_persisted_expiry(row[6])
+            if expires_at is not None and expires_at <= now:
                 return {"status": "expired", "meta": meta}
 
             return {"status": "ok", "meta": meta}
@@ -433,10 +468,12 @@ class KeyStore:
 
             if row[9] is not None:
                 matched_status = "revoked"
-            elif row[6] is not None and row[6] <= now:
-                matched_status = "expired"
             else:
-                matched_status = "ok"
+                expires_at = _safe_persisted_expiry(row[6])
+                if expires_at is not None and expires_at <= now:
+                    matched_status = "expired"
+                else:
+                    matched_status = "ok"
 
             matched_meta = meta
 
@@ -468,7 +505,7 @@ class KeyStore:
         matched = None
 
         for row in rows:
-            expires_at = row[6]
+            expires_at = _safe_persisted_expiry(row[6])
 
             if expires_at is not None and expires_at <= now:
                 continue
@@ -511,7 +548,7 @@ class KeyStore:
 
     @staticmethod
     def _row_to_meta(row) -> dict:
-        expires_at = row[6]
+        expires_at = _safe_persisted_expiry(row[6])
         return {
             "id": row[0],
             "label": row[4],
@@ -529,6 +566,7 @@ class KeyStore:
         True when ``expires_at`` lands within the expiring-soon window.
         False for no-expiry keys and for keys already past expiry.
         """
+        expires_at = _safe_persisted_expiry(expires_at)
         if expires_at is None:
             return False
 

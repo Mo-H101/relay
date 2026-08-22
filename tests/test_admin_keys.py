@@ -114,6 +114,25 @@ def test_create_rejects_past_expiry(admin, store, client):
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "expires_at_json", ["NaN", "Infinity", "-Infinity", "true", "false"]
+)
+def test_create_rejects_nonfinite_or_boolean_expiry(
+    admin, store, client, expires_at_json
+):
+    response = client.post(
+        "/admin/keys",
+        headers=_AUTH,
+        content=(
+            '{"label":"x","expires_at":' + expires_at_json + "}"
+        ).encode(),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "expires_at must be a finite unix timestamp."
+    )
+
+
 def test_create_rejects_bad_json(admin, store, client):
     response = client.post(
         "/admin/keys",

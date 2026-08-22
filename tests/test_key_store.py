@@ -117,6 +117,27 @@ def test_expired_key_is_rejected(store):
     assert store.verify(future_raw) is not None
 
 
+@pytest.mark.parametrize("expires_at", [float("nan"), float("inf"), float("-inf"), True, False])
+def test_create_rejects_nonfinite_or_boolean_expiry(store, expires_at):
+    with pytest.raises(ValueError, match="finite unix timestamp"):
+        store.create("invalid-expiry", expires_at=expires_at)
+
+
+def test_invalid_persisted_expiry_fails_closed(store):
+    key_id, raw = store.create("corrupt-expiry")
+    with store._lock:
+        with store._conn:
+            store._conn.execute(
+                "UPDATE api_keys SET expires_at = ? WHERE id = ?",
+                (float("inf"), key_id),
+            )
+
+    assert store.verify(raw) is None
+    assert store.classify(raw)["status"] == "expired"
+    assert store.authenticate(raw)["status"] == "expired"
+    assert store.get_by_id(key_id)["expires_at"] == 0.0
+
+
 def test_expiry_controls_verification(store, tmp_path):
     import time
 

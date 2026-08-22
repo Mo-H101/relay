@@ -19,7 +19,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.security import auth as auth_module
-from app.services.key_store import KeyStoreError
+from app.services.key_store import KeyStoreError, validate_expires_at
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
 
@@ -143,10 +143,14 @@ async def create_key(request: Request):
     expires_at = payload.get("expires_at")
 
     if expires_at is not None:
-        if not isinstance(expires_at, (int, float)):
+        try:
+            expires_at = validate_expires_at(expires_at)
+        except ValueError:
             return JSONResponse(
                 status_code=400,
-                content={"detail": "expires_at must be a unix timestamp."},
+                content={
+                    "detail": "expires_at must be a finite unix timestamp."
+                },
             )
         if expires_at <= time.time():
             return JSONResponse(
