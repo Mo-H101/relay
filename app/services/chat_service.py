@@ -5,6 +5,7 @@ from app.providers.base import Provider
 from app.providers.exceptions import ProviderError
 from app.services.chat_policy import (
     Attempt,
+    attempt_budget_exhausted,
     budget_exhausted,
     empty_content,
     fallback_reason,
@@ -156,6 +157,9 @@ class ChatService:
             while retry_no <= max_retries:
 
                 if budget_exhausted(time.perf_counter() - start_wall):
+                    break
+                if attempt_budget_exhausted(attempts):
+                    stop_failover = True
                     break
 
                 if (
@@ -374,6 +378,9 @@ class ChatService:
 
                 if budget_exhausted(time.perf_counter() - start_wall):
                     break
+                if attempt_budget_exhausted(attempts):
+                    stop_failover = True
+                    break
 
                 if (
                     turn is not None
@@ -542,6 +549,8 @@ class ChatService:
 
         for provider, model in candidates:
 
+            if attempt_budget_exhausted(attempts):
+                break
             if provider.name in skip_providers:
                 continue
 
@@ -563,6 +572,8 @@ class ChatService:
                     break
 
             while True:
+                if attempt_budget_exhausted(attempts):
+                    break
                 start = time.perf_counter()
 
                 try:
@@ -729,6 +740,8 @@ class ChatService:
 
         for index, (provider, model) in enumerate(candidates, start=1):
 
+            if attempt_budget_exhausted(attempts):
+                break
             if provider.name in skip_providers:
                 continue
 
@@ -759,6 +772,8 @@ class ChatService:
                     break
 
             while True:
+                if attempt_budget_exhausted(attempts):
+                    break
                 start = time.perf_counter()
 
                 try:

@@ -13,6 +13,11 @@ from typing import Any, List, Tuple
 from app.core.config import settings
 
 
+# Bound total upstream work for a request even when the candidate catalog or
+# configured retry count is unexpectedly large.
+MAX_ATTEMPTS_PER_REQUEST = 32
+
+
 @dataclass
 class Attempt:
     """
@@ -107,6 +112,11 @@ def budget_exhausted(elapsed_seconds: float) -> bool:
         return False
 
     return elapsed_seconds >= budget
+
+
+def attempt_budget_exhausted(attempts) -> bool:
+    """Return whether another upstream attempt may start."""
+    return len(attempts) >= MAX_ATTEMPTS_PER_REQUEST
 
 
 def fallback_reason(

@@ -7,6 +7,7 @@ from app.providers.exceptions import (
     ProviderTimeout,
 )
 from app.services.chat_service import ChatService
+from app.services.chat_policy import MAX_ATTEMPTS_PER_REQUEST
 
 
 def make_provider(name, models, priority=1):
@@ -440,6 +441,25 @@ class TestRetryBehavior:
             ("A", "a-1"),
             ("A", "a-1"),
         ]
+
+    def test_total_attempt_budget_bounds_large_retry_and_catalog(self, fake_registry):
+        models = [f"a-{index}" for index in range(MAX_ATTEMPTS_PER_REQUEST + 8)]
+        provider = make_provider("A", models)
+        client = make_client(
+            fake_registry,
+            "A",
+            {model: [ProviderTimeout("slow")] for model in models},
+        )
+
+        result = ChatService().chat_across(
+            [(provider, model) for model in models],
+            "hello",
+            max_retries=1000,
+        )
+
+        assert result["success"] is False
+        assert len(client.calls) == MAX_ATTEMPTS_PER_REQUEST
+        assert len(result["attempts"]) == MAX_ATTEMPTS_PER_REQUEST
 
     def test_non_retryable_failure_does_not_retry(self, fake_registry):
         provider_a = make_provider("A", ["a-1"])
