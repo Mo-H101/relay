@@ -99,6 +99,12 @@ class _ConversationState:
     # anchor survives restarts and cross-process resumes.
     anchor_provider: Optional[str] = None
     anchor_model: Optional[str] = None
+    # Durable operations that could not be admitted remain represented in
+    # memory so a later turn can retry them instead of silently losing state.
+    pending_create: Optional[dict] = None
+    pending_summary: Optional[dict] = None
+    pending_project_state: Optional[dict] = None
+    durability_degraded: bool = False
 
 
 @dataclass
@@ -134,6 +140,7 @@ class TurnContext:
     _committed: bool = field(default=False, repr=False)
     _provisional: bool = field(default=False, repr=False)
     _aborted: bool = field(default=False, repr=False)
+    _durability_degraded: bool = field(default=False, repr=False)
     # P9B: the last committed logical (provider, model) of the
     # conversation (the continuation anchor) at the time this turn began.
     anchor_provider: Optional[str] = None
@@ -362,6 +369,8 @@ class TurnContext:
         if self.resumed:
             meta["resumed"] = True
             meta["exclude_up_to_seq"] = self.exclude_up_to_seq
+        if self._durability_degraded:
+            meta["durability"] = "degraded"
         return meta
 
 
@@ -556,15 +565,20 @@ class HandoffCoordinator:
                 self._remember_state(state)
 
                 if state.project_key:
-                    self._enqueue(
+                    create_kwargs = {
+                        "key_id": state.key_id,
+                        "client_bucket": state.client_bucket,
+                        "project_key": state.project_key,
+                        "model_chain": list(state.model_chain),
+                        "token_budget": state.token_budget,
+                        "conversation_id": cid,
+                    }
+                    if not self._enqueue(
                         "conversation.create",
-                        key_id=state.key_id,
-                        client_bucket=state.client_bucket,
-                        project_key=state.project_key,
-                        model_chain=list(state.model_chain),
-                        token_budget=state.token_budget,
-                        conversation_id=cid,
-                    )
+                        **create_kwargs,
+                    ):
+                        state.pending_create = create_kwargs
+                        state.durability_degraded = True
             else:
                 self._touch(state)
                 # P9B: refresh the anchor from the last committed turn so
@@ -624,6 +638,9 @@ class HandoffCoordinator:
         if state.committed_turns:
             with self._lock:
                 self._ensure_envelope(turn, state)
+
+        if state.durability_degraded:
+            turn._durability_degraded = True
 
         return turn
 
@@ -764,8 +781,11 @@ class HandoffCoordinator:
         """
         Commit one turn's metadata: assign the next seq, record it
         in-memory for future envelopes, and enqueue the durable turn +
-        project-state rows to the write-behind flusher.
+        project-state rows to the write-behind flusher. A rejected durable
+        operation is never reported as a successful continuity commit; the
+        pending state remains represented for a later retry.
         """
+        failed = False
         with self._lock:
             state = self._states.get(
                 _state_key(turn.key_id, turn.conversation_id)
@@ -773,54 +793,112 @@ class HandoffCoordinator:
             if state is None:
                 return {}
 
-            seq = state.next_seq
-            state.next_seq += 1
-            record = {
-                "conversation_id": state.conversation_id,
-                "seq": seq,
-                "provider": provider,
-                "model": model,
-                "outcome": outcome,
-                "task": task,
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-                "latency_ms": latency_ms,
-                "ts": time.time(),
-            }
-            state.committed_turns.append(record)
-            self._compact_state(state)
-            self._remember_model(state, turn, model)
-            self._touch(state)
+            if state.pending_create is not None:
+                if self._enqueue(
+                    "conversation.create", **state.pending_create
+                ):
+                    state.pending_create = None
+                else:
+                    failed = True
 
-            resume_token_hash = state.pending_resume_hash
-            state.pending_resume_hash = None
+            if not failed and state.pending_project_state is not None:
+                if self._enqueue(
+                    "project_state.update", **state.pending_project_state
+                ):
+                    state.pending_project_state = None
+                else:
+                    failed = True
 
-            self._enqueue(
-                "turn.append",
-                conversation_id=state.conversation_id,
-                key_id=state.key_id,
-                seq=seq,
-                outcome=outcome,
-                provider=provider,
-                model=model,
-                task=task,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                latency_ms=latency_ms,
-                resume_token_hash=resume_token_hash,
-            )
-            if state.project_key:
-                self._enqueue(
-                    "project_state.update",
-                    key_id=state.key_id,
-                    project_key=state.project_key,
-                    last_models=list(state.model_chain),
-                    counters={
-                        "turns": state.next_seq - 1,
-                        "switches": turn.switch_count,
-                    },
+            if not failed and state.pending_summary is not None:
+                if self._enqueue("summary.record", **state.pending_summary):
+                    state.pending_summary = None
+                else:
+                    failed = True
+
+            # A previous summary rejection leaves the full in-memory tail
+            # intact. Retry that compaction before accepting another turn so
+            # the tail cannot grow past one bounded retry point.
+            if not failed and not self._compact_state(state):
+                failed = True
+
+            if failed:
+                self._mark_durability_degraded(turn, state)
+            else:
+                seq = state.next_seq
+                record = {
+                    "conversation_id": state.conversation_id,
+                    "seq": seq,
+                    "provider": provider,
+                    "model": model,
+                    "outcome": outcome,
+                    "task": task,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "latency_ms": latency_ms,
+                    "ts": time.time(),
+                }
+                resume_token_hash = state.pending_resume_hash
+                append_kwargs = {
+                    "conversation_id": state.conversation_id,
+                    "key_id": state.key_id,
+                    "seq": seq,
+                    "outcome": outcome,
+                    "provider": provider,
+                    "model": model,
+                    "task": task,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "latency_ms": latency_ms,
+                    "resume_token_hash": resume_token_hash,
+                }
+                if not self._enqueue("turn.append", **append_kwargs):
+                    failed = True
+                    self._mark_durability_degraded(turn, state)
+                else:
+                    state.next_seq += 1
+                    state.committed_turns.append(record)
+                    self._remember_model(state, turn, model)
+                    self._touch(state)
+                    state.pending_resume_hash = None
+
+                    if not self._compact_state(state):
+                        state.durability_degraded = True
+                        turn._durability_degraded = True
+
+                    if state.project_key:
+                        project_kwargs = {
+                            "key_id": state.key_id,
+                            "project_key": state.project_key,
+                            "last_models": list(state.model_chain),
+                            "counters": {
+                                "turns": state.next_seq - 1,
+                                "switches": turn.switch_count,
+                            },
+                        }
+                        if self._enqueue(
+                            "project_state.update", **project_kwargs
+                        ):
+                            state.pending_project_state = None
+                        else:
+                            state.pending_project_state = project_kwargs
+                            state.durability_degraded = True
+                            turn._durability_degraded = True
+
+                    if (
+                        not state.pending_create
+                        and not state.pending_summary
+                        and not state.pending_project_state
+                        and len(state.committed_turns) <= self._max_turns
+                    ):
+                        state.durability_degraded = False
+                        turn._durability_degraded = False
+
+        if failed:
+            if self._recovery is not None:
+                self._recovery.on_turn_aborted(
+                    turn.conversation_id, turn.key_id
                 )
-
+            return {}
         if self._recovery is not None:
             self._recovery.on_turn_committed(
                 state.conversation_id, state.key_id
@@ -1162,18 +1240,27 @@ class HandoffCoordinator:
         )
         return envelope
 
-    def _enqueue_summary(self, state: _ConversationState, summary: SummaryBlock) -> None:
-        self._enqueue(
+    def _enqueue_summary(self, state: _ConversationState, summary: SummaryBlock) -> bool:
+        kwargs = {
+            "conversation_id": state.conversation_id,
+            "key_id": state.key_id,
+            "up_to_seq": summary.up_to_seq,
+            "version": summary.version,
+            "method": summary.method,
+            "content": summary.content,
+            "tokens_in": summary.tokens_in,
+            "tokens_out": summary.tokens_out,
+        }
+        accepted = self._enqueue(
             "summary.record",
-            conversation_id=state.conversation_id,
-            key_id=state.key_id,
-            up_to_seq=summary.up_to_seq,
-            version=summary.version,
-            method=summary.method,
-            content=summary.content,
-            tokens_in=summary.tokens_in,
-            tokens_out=summary.tokens_out,
+            **kwargs,
         )
+        if accepted:
+            state.pending_summary = None
+        else:
+            state.pending_summary = kwargs
+            state.durability_degraded = True
+        return accepted
 
     def _enqueue_compaction(self, state: _ConversationState, result) -> None:
         self._enqueue(
@@ -1212,7 +1299,7 @@ class HandoffCoordinator:
         state.model_chain = state.model_chain[-self._model_chain_cap:]
         turn.model_chain = list(state.model_chain)
 
-    def _compact_state(self, state: _ConversationState) -> None:
+    def _compact_state(self, state: _ConversationState) -> bool:
         """Bound the in-memory turn history without dropping context.
 
         The older region is converted to the same bounded metadata summary
@@ -1221,8 +1308,13 @@ class HandoffCoordinator:
         configured summary budget, so the operation is deterministic and
         cannot grow with conversation length.
         """
+        if state.pending_summary is not None:
+            if not self._enqueue("summary.record", **state.pending_summary):
+                return False
+            state.pending_summary = None
+
         if len(state.committed_turns) <= self._max_turns:
-            return
+            return True
 
         result = self._manager.compact(
             list(state.committed_turns),
@@ -1230,11 +1322,8 @@ class HandoffCoordinator:
             params={"tail_max_items": self._max_turns},
             now=time.time(),
         )
-        state.committed_turns = list(result.tail)
-        if len(state.committed_turns) > self._max_turns:
-            state.committed_turns = state.committed_turns[-self._max_turns :]
         if result.summary is None:
-            return
+            return False
 
         summary = result.summary.to_dict()
         previous = state.rolling_summary
@@ -1256,18 +1345,29 @@ class HandoffCoordinator:
             )
             summary["tokens_out"] = self._manager.estimate_tokens(combined)
 
-        state.rolling_summary = summary
-        self._enqueue(
+        summary_kwargs = {
+            "conversation_id": state.conversation_id,
+            "key_id": state.key_id,
+            "up_to_seq": summary.get("up_to_seq"),
+            "version": summary.get("version", SUMMARY_VERSION),
+            "method": summary.get("method", "extractive"),
+            "content": summary.get("summary_text") or "",
+            "tokens_in": summary.get("tokens_in"),
+            "tokens_out": summary.get("tokens_out"),
+        }
+        if not self._enqueue(
             "summary.record",
-            conversation_id=state.conversation_id,
-            key_id=state.key_id,
-            up_to_seq=summary.get("up_to_seq"),
-            version=summary.get("version", SUMMARY_VERSION),
-            method=summary.get("method", "extractive"),
-            content=summary.get("summary_text") or "",
-            tokens_in=summary.get("tokens_in"),
-            tokens_out=summary.get("tokens_out"),
-        )
+            **summary_kwargs,
+        ):
+            state.pending_summary = summary_kwargs
+            state.durability_degraded = True
+            return False
+
+        state.committed_turns = list(result.tail)
+        if len(state.committed_turns) > self._max_turns:
+            state.committed_turns = state.committed_turns[-self._max_turns :]
+        state.rolling_summary = summary
+        return True
 
     def _prune_window(self, state: _ConversationState, now: float) -> None:
         cutoff = now - self._window_seconds
@@ -1288,13 +1388,26 @@ class HandoffCoordinator:
             _state_key(state.key_id, state.conversation_id)
         )
 
-    def _enqueue(self, operation: str, **kwargs) -> None:
+    def _mark_durability_degraded(
+        self, turn: TurnContext, state: _ConversationState
+    ) -> None:
+        """Mark an unadmitted turn without retaining its raw token."""
+        state.durability_degraded = True
+        turn._durability_degraded = True
+        turn.resume_token = None
+        state.pending_resume_hash = None
+
+    def _enqueue(self, operation: str, **kwargs) -> bool:
         if self._flusher is None:
-            return
+            return True
         try:
-            self._flusher.enqueue(operation, **kwargs)
+            result = self._flusher.enqueue(operation, **kwargs)
+            # Older injectable test/dry-run flushers return None to mean
+            # accepted. Only an explicit False is a durable rejection.
+            return result is not False
         except Exception:  # noqa: BLE001 - continuity never breaks chat
             _logger.debug("continuity enqueue failed: %s", operation)
+            return False
 
     def _audit(self, action: str, *, actor, target, outcome="ok", detail=None) -> None:
         from app.services import event_log as event_log_module

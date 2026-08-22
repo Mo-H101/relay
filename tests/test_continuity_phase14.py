@@ -35,6 +35,18 @@ class FakeFlusher:
         self.enqueue_calls.append((operation, dict(kwargs)))
 
 
+class RejectingFlusher(FakeFlusher):
+    def __init__(self, rejected=()):
+        super().__init__()
+        self.rejected = set(rejected)
+
+    def enqueue(self, operation, **kwargs):
+        self.enqueue_calls.append((operation, dict(kwargs)))
+        if operation in self.rejected:
+            return False
+        return True
+
+
 def _coordinator(flusher=None, recovery=None, **kwargs):
     return HandoffCoordinator(
         flusher=flusher if flusher is not None else FakeFlusher(),
@@ -74,6 +86,54 @@ def _make_provider(name="openai", model="gpt-4o"):
         priority=1,
         models=[model],
     )
+
+
+class TestHandoffDurabilityBackpressure:
+    def test_rejected_turn_append_is_not_reported_as_committed(self):
+        flusher = RejectingFlusher({"turn.append"})
+        recovery = ContinuityRecovery()
+        coordinator = _coordinator(flusher=flusher, recovery=recovery)
+
+        turn = coordinator.start(
+            key_id="k", client_bucket="cli", project_key=""
+        )
+
+        assert turn.finish(provider="p", model="m") == {}
+        assert turn.metadata()["durability"] == "degraded"
+        assert turn.resume_token is None
+        assert recovery.pending_token_hash(turn.conversation_id, "k") is None
+        assert coordinator.last_committed("k", turn.conversation_id) is None
+
+    def test_rejected_summary_is_retried_before_another_turn(self):
+        flusher = RejectingFlusher()
+        coordinator = _coordinator(
+            flusher=flusher,
+            max_in_memory_turns=1,
+        )
+
+        first = coordinator.start(
+            key_id="k", client_bucket="cli", project_key=""
+        )
+        assert first.finish(provider="p", model="m1")
+
+        flusher.rejected.add("summary.record")
+        second = coordinator.start(
+            key_id="k", client_bucket="cli", project_key="",
+            conversation_id=first.conversation_id,
+        )
+        assert second.finish(provider="p", model="m2")
+        assert second.metadata()["durability"] == "degraded"
+
+        flusher.rejected.remove("summary.record")
+        third = coordinator.start(
+            key_id="k", client_bucket="cli", project_key="",
+            conversation_id=first.conversation_id,
+        )
+        assert third.finish(provider="p", model="m3")
+        assert "durability" not in third.metadata()
+        assert sum(
+            op == "summary.record" for op, _ in flusher.enqueue_calls
+        ) >= 2
 
 
 class _FakeStreamingClient:
