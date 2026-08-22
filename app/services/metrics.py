@@ -450,6 +450,11 @@ class RelayMetrics:
             "Chat generation parameters used per endpoint.",
             ("endpoint", "parameter"),
         )
+        self.chat_admission_rejections = r.counter(
+            "relay_chat_admission_rejections_total",
+            "Chat requests rejected because execution capacity was full.",
+            ("endpoint",),
+        )
 
         # Providers
         self.provider_requests = r.counter(
@@ -813,6 +818,10 @@ class RelayMetrics:
                     provider=provider or "unknown",
                     failure_type=failure_type,
                 )
+
+    def record_chat_admission_rejection(self, endpoint: str) -> None:
+        """Record a bounded-capacity rejection without inspecting payloads."""
+        self.chat_admission_rejections.inc(endpoint=endpoint)
 
 
 relay_metrics = RelayMetrics()

@@ -13,6 +13,7 @@ from app.services.routing import TASK_CATEGORIES
 from app.services.task_classifier import classify_task
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
+from app.services import admission_control
 
 router = APIRouter()
 
@@ -165,12 +166,24 @@ async def chat(request: ChatRequest, http_request: Request, response: Response):
 
     continuity_scope = _resolve_continuity_scope(http_request)
 
-    result = await relay.achat(
-        request.message,
-        task=task,
-        continuity_scope=continuity_scope,
-        **generation_kwargs,
-    )
+    lease = admission_control.chat_admission.try_acquire()
+    if lease is None:
+        relay_metrics.record_chat_admission_rejection("/chat")
+        raise HTTPException(
+            status_code=503,
+            detail="Chat capacity unavailable.",
+            headers={"Retry-After": "1"},
+        )
+
+    try:
+        result = await relay.achat(
+            request.message,
+            task=task,
+            continuity_scope=continuity_scope,
+            **generation_kwargs,
+        )
+    finally:
+        lease.release()
 
     latency_ms = (time.perf_counter() - start) * 1000
 

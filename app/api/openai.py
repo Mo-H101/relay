@@ -16,6 +16,7 @@ from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
 from app.services.redaction import redact_text
+from app.services import admission_control
 from app.services.routing import TASK_CATEGORIES
 from app.services.task_classifier import classify_task
 from app.schemas.openai import (
@@ -453,6 +454,20 @@ async def openai_chat_completion(
     payload = req.to_provider_payload()
     gen_kwargs = _generation_kwargs(req)
 
+    lease = admission_control.chat_admission.try_acquire()
+    if lease is None:
+        relay_metrics.record_chat_admission_rejection(
+            "/v1/chat/completions"
+        )
+        return _openai_error_response(
+            503,
+            "Chat capacity unavailable.",
+            error_type="server_error",
+            code="capacity_exhausted",
+            correlation_id=correlation_id,
+            extra_headers={"Retry-After": "1"},
+        )
+
     turn = relay.begin_continuity_turn(continuity_scope)
     # P9B: the cross-turn transition event is computed here, after
     # candidate resolution and before execution, and reuses the existing
@@ -467,17 +482,22 @@ async def openai_chat_completion(
         payload["stream"] = True
 
         # Streaming response
-        result = await async_chat_svc.achat_across_stream_messages(
-            candidates,
-            payload,
-            max_retries=settings.max_retries,
-            turn=turn,
-        )
+        try:
+            result = await async_chat_svc.achat_across_stream_messages(
+                candidates,
+                payload,
+                max_retries=settings.max_retries,
+                turn=turn,
+            )
+        except BaseException:
+            lease.release()
+            raise
 
         # Record telemetry/health for candidates that failed to start.
         _record_attempts_telemetry_and_health(result)
 
         if not result["success"]:
+            lease.release()
             _record_stream_chat(
                 result,
                 sum(
@@ -543,9 +563,9 @@ async def openai_chat_completion(
         async def stream_generator():
             nonlocal full_response, success, failure_type
             nonlocal usage_tokens_in, usage_tokens_out
-            if continuity_sse:
-                yield continuity_sse + "\n\n"
             try:
+                if continuity_sse:
+                    yield continuity_sse + "\n\n"
                 async for chunk in stream_gen:
                     # Phase 14: capture provider usage when present.
                     chunk_usage = chunk.get("usage") if isinstance(chunk, dict) else None
@@ -585,32 +605,35 @@ async def openai_chat_completion(
                 # outcome and any captured usage.  This upgrades the
                 # outcome from the provisional "denied" to "ok" or
                 # "failed" and persists actual token counts.
-                if turn is not None:
-                    turn.update(
-                        outcome="ok" if success else "failed",
-                        tokens_in=usage_tokens_in,
-                        tokens_out=usage_tokens_out,
-                    )
+                try:
+                    if turn is not None:
+                        turn.update(
+                            outcome="ok" if success else "failed",
+                            tokens_in=usage_tokens_in,
+                            tokens_out=usage_tokens_out,
+                        )
 
-                # Record telemetry and health
-                latency_ms = int((time.perf_counter() - start_time) * 1000)
-                _record_telemetry_and_health(
-                    provider_name,
-                    stream_model,
-                    success,
-                    latency_ms,
-                    failure_type,
-                )
-                _record_stream_chat(
-                    result,
-                    latency_ms,
-                    _used_kwargs(gen_kwargs),
-                    success=success,
-                )
-                relay.decision_record_store.update(
-                    correlation_id,
-                    outcome="succeeded" if success else "failed",
-                )
+                    # Record telemetry and health
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    _record_telemetry_and_health(
+                        provider_name,
+                        stream_model,
+                        success,
+                        latency_ms,
+                        failure_type,
+                    )
+                    _record_stream_chat(
+                        result,
+                        latency_ms,
+                        _used_kwargs(gen_kwargs),
+                        success=success,
+                    )
+                    relay.decision_record_store.update(
+                        correlation_id,
+                        outcome="succeeded" if success else "failed",
+                    )
+                finally:
+                    lease.release()
 
         headers = {_CORRELATION_HEADER: correlation_id}
         headers.update(_continuity_headers(result))
@@ -639,6 +662,8 @@ async def openai_chat_completion(
             code="relay_error",
             correlation_id=correlation_id,
         )
+    finally:
+        lease.release()
 
     latency_ms = (time.perf_counter() - start_time) * 1000
 
