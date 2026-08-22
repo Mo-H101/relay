@@ -488,7 +488,7 @@ All items must be complete before the `v1.0.0` tag. Supersedes/extends
       tag actual is re-recorded at RC1/R4).
 - [ ] RC offline suite green: **28 passed** (CI, where `openai` is installed).
 - [ ] Adversarial (80) + simulation (6) suites green.
-- [ ] CI green on the tag (ubuntu 3.11/3.12, windows 3.12, packaging job).
+- [ ] CI green on the tag (ubuntu 3.10/3.11/3.12/3.13, windows 3.12, packaging job).
 - [ ] `python -m compileall -q app tests` clean.
 - [ ] Known timing flake dispositioned.
 

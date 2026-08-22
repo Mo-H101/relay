@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import List
 import time
 
@@ -99,7 +99,7 @@ class HealthChecker:
 
         if healthy:
             self._last_success[provider.name] = (
-                datetime.now(UTC).isoformat()
+                datetime.now(timezone.utc).isoformat()
             )
 
         chat_models = [
@@ -133,7 +133,7 @@ class HealthChecker:
             name=provider.name,
             status=provider_status,
             latency_ms=latency,
-            last_checked=datetime.now(UTC).isoformat(),
+            last_checked=datetime.now(timezone.utc).isoformat(),
             details=details,
             connectivity=connectivity,
             rate_limit_status=rate_limit_status,

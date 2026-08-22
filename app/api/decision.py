@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
@@ -55,7 +55,7 @@ def explain_decision(task: str | None = None):
         return {
             "selected": None,
             "candidates": [],
-            "generated_at": datetime.now(UTC).isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
     task_normalized = task.strip().lower() if task else None

@@ -276,3 +276,86 @@ def test_auth_scheme_other_authorization_is_none():
         )
         == "none"
     )
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "relay.invalid/?",
+        "relay.invalid/#fragment",
+        "relay.invalid/?path=/",
+        "relay.invalid/%2f?path=/",
+    ],
+)
+def test_malformed_host_cannot_bypass_protected_route(
+    client, monkeypatch, host
+):
+    """Host parsing must not turn a protected route into a public one."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "stage1-auth-secret")
+
+    response = client.get(
+        "/admin/events",
+        headers={"Host": host},
+    )
+
+    assert response.status_code == 401
+
+
+def test_valid_host_and_credentials_preserve_protected_routing(
+    client, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "stage1-auth-secret")
+
+    unauthenticated = client.get(
+        "/admin/events",
+        headers={"Host": "relay.invalid"},
+    )
+    authenticated = client.get(
+        "/admin/events",
+        headers={
+            "Host": "relay.invalid",
+            "Authorization": "Bearer stage1-auth-secret",
+        },
+    )
+
+    assert unauthenticated.status_code == 401
+    assert authenticated.status_code == 200
+
+
+def test_malformed_host_with_valid_credentials_still_routes_normally(
+    client, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "stage1-auth-secret")
+
+    response = client.get(
+        "/admin/events",
+        headers={
+            "Host": "relay.invalid/?",
+            "Authorization": "Bearer stage1-auth-secret",
+            "X-Forwarded-Host": "relay.invalid/?",
+            "X-Forwarded-Proto": "https",
+        },
+    )
+
+    assert response.status_code == 200
+
+
+def test_malformed_host_does_not_change_public_route_behavior(
+    client, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "stage1-auth-secret")
+
+    response = client.get(
+        "/health",
+        headers={"Host": "relay.invalid/?"},
+    )
+
+    assert response.status_code == 200

@@ -13,7 +13,7 @@ includes prompts, responses, user data, or API keys (only booleans like
 "has_api_key").
 """
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.core.config import settings
@@ -40,7 +40,7 @@ class DiagnosticsService:
         Compose the full diagnostics snapshot from an active Relay.
         """
         return {
-            "generated_at": datetime.now(UTC).isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "providers": self._providers(relay),
             "learned_health": self._learned_health(relay),
             "telemetry": self._telemetry(relay),

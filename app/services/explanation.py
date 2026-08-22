@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from app.services.candidate_builder import RankedCandidate
@@ -83,7 +83,7 @@ class ExplanationService:
             ),
             "candidates": candidates,
             "task": task,
-            "generated_at": datetime.now(UTC).isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
     def _reasons(

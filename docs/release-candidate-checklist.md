@@ -12,7 +12,7 @@ providers remain disabled (deferred until the cloud gateway is stable).
 | `tests/test_rc_validation.py` | Full production-profile gateway behavior against scripted loopback upstreams standing in for NVIDIA/OpenAI (deterministic, repeatable) | **28 passed** |
 | `tests/run_live_smoke.py` | Real cloud connectivity through the real server using live `.env` keys | **6/6 vs NVIDIA** |
 | Full regression `pytest tests -q` | No behavior change outside the gateway surface | **2399 passed, 20 skipped** |
-| CI (`.github/workflows/ci.yml`) | Full suite + compile check on Linux (Python 3.11/3.12) and Windows (Python 3.12); sdist/wheel build + fresh-venv install smoke on Linux | Pass on merge gate |
+| CI (`.github/workflows/ci.yml`) | Full suite + compile check on Linux (Python 3.10/3.11/3.12/3.13) and Windows (Python 3.12); sdist/wheel build + fresh-venv install smoke on Linux | Pass on merge gate |
 
 The 2399/20 count is the RC1 tag baseline (post-R2 was 2360/22; post-P9
 was 2338/22; P6.4 was 1916/18, originally 821/5). The suite is
@@ -137,7 +137,7 @@ documented release caveat, not a gate.
 | Migration upgrade drill | PASS | `relay migrate --state-dir <scratch> --dry-run` (plan correct) → `--yes` (backup + platform.db v8 + integrity ok + verified row counts; expired key pruned by the 30-day grace window) → re-run reports "Already migrated" |
 | Migration rollback drill | PASS | `relay migrate --rollback last` restored all legacy sources and removed `platform.db`; re-migrate succeeds after rollback (full round trip) |
 | Windows smoke | PASS | Live `/v1` non-stream through the deployed profile (NVIDIA `meta/llama-3.1-8b-instruct`) |
-| Linux smoke + CI matrix on the tag | CI-pending | Local equivalents green (Windows 3.12 full suite, build, wheel install). Linux 3.11/3.12 + packaging job run on the tag when pushed (CI workflow unchanged; `on: push` is `main` only) |
+| Linux smoke + CI matrix on the tag | CI-pending | Local equivalents green (Windows 3.12 full suite, build, wheel install). Linux 3.10/3.11/3.12/3.13 + packaging job run on the tag when pushed (CI runs on `master` pushes and pull requests) |
 
 ## Sign-off state
 

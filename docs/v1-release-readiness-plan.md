@@ -32,7 +32,7 @@ Sources audited: `docs/platform-implementation-roadmap.md`,
   the platform milestone has landed.
 - **Tests:** 2055 passed, 20 skipped (verified twice, e.g. 193.71s). RC
   offline suite (`tests/test_rc_validation.py`) 28 passed. CI green
-  (`.github/workflows/ci.yml`): compileall + full suite on ubuntu 3.11/3.12
+  (`.github/workflows/ci.yml`): compileall + full suite on ubuntu 3.10/3.11/3.12/3.13
   and windows 3.12; packaging job builds sdist/wheel and smokes
   `relay --help` / `relay --version` on ubuntu 3.12.
 - **Version:** `app/__version__.py` = `"0.1.0"`; `pyproject.toml` derives the
@@ -325,7 +325,7 @@ Executed on the release candidate:
 - [ ] **Known flake** named and dispositioned: one pre-existing timing flake
       (baseline-reproduced at `d344116`); confirm it is not a P0–P8
       regression and record whether to fix or accept before release.
-- [ ] **CI** green on the tag: ubuntu 3.11/3.12 + windows 3.12
+- [ ] **CI** green on the tag: ubuntu 3.10/3.11/3.12/3.13 + windows 3.12
       compileall + suite; packaging job builds and smokes the wheel
       (now printing `relay 1.0.0`).
 - [ ] **Gap analysis (recorded, not blocking unless so decided):**

@@ -220,8 +220,7 @@ dependency notes.
 
 ## Installation
 
-Requires **Python 3.10 or newer** (the test suite additionally needs 3.11+
-language features, e.g. `tomllib`). Install Relay in a virtual environment,
+Requires **Python 3.10 or newer**. Install Relay in a virtual environment,
 then start it by typing `relay`:
 
 ```bash

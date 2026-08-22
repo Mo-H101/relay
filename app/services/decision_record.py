@@ -28,7 +28,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 
@@ -96,7 +96,7 @@ class DecisionRecord:
         return {
             "correlation_id": self.correlation_id,
             "timestamp": datetime.fromtimestamp(
-                self.timestamp, tz=UTC
+                self.timestamp, tz=timezone.utc
             ).isoformat(),
             "requested_model": self.requested_model,
             "classified_task": self.classified_task,

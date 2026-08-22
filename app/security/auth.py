@@ -156,6 +156,19 @@ def _has_scopes(meta: dict, path: str) -> bool:
     return required.issubset(allowed)
 
 
+def _scope_path(request: Request) -> str:
+    """
+    Return the raw ASGI request path used by Starlette routing.
+
+    ``request.url.path`` is reconstructed from the request URL and can be
+    influenced by a malformed Host header on affected Starlette versions.
+    Authentication must use the routing scope instead, so Host parsing can
+    never turn a protected route into a public-path decision.
+    """
+    path = request.scope.get("path", "")
+    return path if isinstance(path, str) else ""
+
+
 def _deny(request: Request, reason: str, status_code: int = 401):
     """
     Record an auth failure and raise the matching response. The body and
@@ -231,7 +244,9 @@ def _reset_key_store() -> None:
         _STORE_SINGLETON = None
 
 
-def _grant_store(request: Request, meta: dict, scheme: str) -> None:
+def _grant_store(
+    request: Request, meta: dict, scheme: str, path: str
+) -> None:
     """
     Accept a store-backed key: record the decision, publish the opaque
     key id to the shared scope (consumed by the metrics middleware), and
@@ -239,7 +254,7 @@ def _grant_store(request: Request, meta: dict, scheme: str) -> None:
     """
     request.scope["relay_key_id"] = meta["id"]
 
-    if not _has_scopes(meta, request.url.path):
+    if not _has_scopes(meta, path):
         _deny(request, "forbidden", status_code=403)
 
     relay_metrics.record_auth(True, True, scheme, key_id=meta["id"])
@@ -264,7 +279,9 @@ def require_api_key(request: Request) -> None:
 
     relay_metrics.auth_enabled.set(1)
 
-    if request.url.path in PUBLIC_PATHS:
+    path = _scope_path(request)
+
+    if path in PUBLIC_PATHS:
         relay_metrics.record_auth(True, True, "public")
         _audit("auth.success", detail={"method": "public"})
         return
@@ -280,7 +297,7 @@ def require_api_key(request: Request) -> None:
     if expected and _constant_time_eq(token, expected):
         authorization = request.headers.get("authorization", "")
         scheme = auth_scheme(
-            path=request.url.path,
+            path=path,
             authorization=authorization,
             x_api_key=request.headers.get(_HEADER_API_KEY, ""),
             auth_enabled=True,
@@ -315,12 +332,12 @@ def require_api_key(request: Request) -> None:
         if meta is not None:
             authorization = request.headers.get("authorization", "")
             scheme = auth_scheme(
-                path=request.url.path,
+                path=path,
                 authorization=authorization,
                 x_api_key=request.headers.get(_HEADER_API_KEY, ""),
                 auth_enabled=True,
             )
-            _grant_store(request, meta, scheme)
+            _grant_store(request, meta, scheme, path)
             return
 
         reason = store.classify(token)["status"]
