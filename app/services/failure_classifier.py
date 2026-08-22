@@ -61,6 +61,12 @@ def classify(exc) -> FailureKind:
         if code == 429:
             return FailureKind.RATE_LIMIT
 
+        # Request Timeout is a transport-level timeout even though it
+        # arrives as an HTTP status; classifying it as "unknown" would
+        # mislabel retry behavior and metrics.
+        if code == 408:
+            return FailureKind.TIMEOUT
+
         if code == 402 or any(marker in message for marker in _QUOTA_MARKERS):
             return FailureKind.QUOTA_EXHAUSTED
 

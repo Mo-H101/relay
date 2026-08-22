@@ -481,6 +481,19 @@ class TestErrors:
             client.chat(provider, DEFAULT_MODEL, "hi")
         assert classify(exc.value) == FailureKind.AUTH_ERROR
 
+    def test_failure_classifier_request_timeout_408(self, provider_id, provider, client, monkeypatch):
+        handlers = build_handlers(
+            provider_id,
+            chat_factory=lambda m, u, **k: error_response(
+                provider_id, status=408, message="request timeout", retry_after=None
+            ),
+        )
+        install_http_mocks(monkeypatch, handlers)
+        with pytest.raises(ProviderHTTPError) as exc:
+            client.chat(provider, DEFAULT_MODEL, "hi")
+        assert exc.value.status_code == 408
+        assert classify(exc.value) == FailureKind.TIMEOUT
+
 
 class TestErrorRedaction:
     def test_error_body_redacts_api_key(self, provider_id, provider, client, monkeypatch):
