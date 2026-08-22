@@ -100,6 +100,8 @@ class ProviderCatalogEntry:
     configured: bool  # a runtime provider object is loaded
     base_url: str
     model_count: int
+    registration_status: str = "unknown"
+    registration_error_kind: str | None = None
 
 
 # Health-status -> availability glyph mapping shared by the picker and the
@@ -432,6 +434,12 @@ class ServiceFacade:
 
         for defn in PROVIDER_REGISTRY.values():
             provider = self._relay.provider_manager.get(defn.provider_name)
+            status_for = getattr(
+                self._relay.provider_manager,
+                "registration_status_for",
+                lambda provider_id: {},
+            )
+            registration = status_for(defn.id)
 
             if provider is not None:
                 enabled = provider.enabled
@@ -462,6 +470,10 @@ class ServiceFacade:
                     configured=configured,
                     base_url=base_url,
                     model_count=count,
+                    registration_status=registration.get(
+                        "status", "unknown"
+                    ),
+                    registration_error_kind=registration.get("error_kind"),
                 )
             )
 

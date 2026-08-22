@@ -32,8 +32,13 @@ from app.core.config_spec import (
     simple_reloadable_fields as _spec_simple_fields,
 )
 from app.providers.base import apply_model_priority
-from app.providers.factory import build_runtime_provider, resolve_provider_key
+from app.providers.factory import (
+    build_runtime_provider,
+    build_runtime_provider_detailed,
+    resolve_provider_key,
+)
 from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
+from app.services.failure_classifier import classify
 from app.services.redaction import safe_provider_error
 
 # Settings read dynamically at request time and safe to reload in place.
@@ -54,6 +59,7 @@ _PROVIDER_SPECS = tuple(
         "prefix": defn.id,
         "defn": defn,
         "factory": build_runtime_provider,
+        "factory_detailed": build_runtime_provider_detailed,
         "client": defn.client,
     }
     for defn in PROVIDER_REGISTRY.values()
@@ -138,6 +144,13 @@ def _restore(snapshot: list) -> None:
             pass
 
 
+def _record_registration(relay, provider_id: str, **status) -> None:
+    """Record registration visibility when the runtime manager supports it."""
+    recorder = getattr(relay.provider_manager, "record_registration", None)
+    if recorder is not None:
+        recorder(provider_id, **status)
+
+
 def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -> list:
     """
     Enable/disable providers, refresh API keys (with model discovery), and
@@ -183,19 +196,72 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
         if provider is None:
             if new_enabled:
                 try:
-                    relay.provider_manager.register(
-                        spec["factory"](spec["defn"])
-                    )
+                    detailed_factory = spec.get("factory_detailed")
+                    if detailed_factory is None:
+                        new_provider = spec["factory"](spec["defn"])
+                        discovery_error = None
+                    else:
+                        new_provider, discovery_error = detailed_factory(
+                            spec["defn"]
+                        )
+                    relay.provider_manager.register(new_provider)
+                    if discovery_error is None:
+                        _record_registration(
+                            relay,
+                            spec["id"],
+                            provider_name=spec["defn"].provider_name,
+                            status="registered",
+                            stage="runtime",
+                            enabled=True,
+                        )
+                    else:
+                        _record_registration(
+                            relay,
+                            spec["id"],
+                            provider_name=spec["defn"].provider_name,
+                            status="discovery_failed",
+                            stage="model_discovery",
+                            enabled=True,
+                            error_kind=classify(discovery_error).value,
+                        )
                 except Exception as exc:
+                    _record_registration(
+                        relay,
+                        spec["id"],
+                        provider_name=spec["defn"].provider_name,
+                        status="initialization_failed",
+                        stage="runtime",
+                        enabled=True,
+                        error_kind=classify(exc).value,
+                    )
                     failures.append(
                         {
                             "field": f"{prefix}_enabled",
                             "error": safe_provider_error(exc),
                         }
                     )
+            else:
+                _record_registration(
+                    relay,
+                    spec["id"],
+                    provider_name=spec["defn"].provider_name,
+                    status="disabled",
+                    stage="configuration",
+                    enabled=False,
+                )
             continue
 
         provider.enabled = new_enabled
+
+        if not new_enabled:
+            _record_registration(
+                relay,
+                spec["id"],
+                provider_name=spec["defn"].provider_name,
+                status="disabled",
+                stage="configuration",
+                enabled=False,
+            )
 
         if key_changed:
             provider.api_key = new_key
@@ -210,7 +276,24 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
                     provider.priority_models = [
                         model for model in priority if model in provider.models
                     ]
+                    _record_registration(
+                        relay,
+                        spec["id"],
+                        provider_name=spec["defn"].provider_name,
+                        status="registered",
+                        stage="model_discovery",
+                        enabled=True,
+                    )
                 except Exception as exc:
+                    _record_registration(
+                        relay,
+                        spec["id"],
+                        provider_name=spec["defn"].provider_name,
+                        status="discovery_failed",
+                        stage="model_discovery",
+                        enabled=True,
+                        error_kind=classify(exc).value,
+                    )
                     failures.append(
                         {
                             "field": f"{prefix}_api_key",
@@ -223,6 +306,16 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
             provider.priority_models = [
                 model for model in priority if model in provider.models
             ]
+
+        elif new_enabled:
+            _record_registration(
+                relay,
+                spec["id"],
+                provider_name=spec["defn"].provider_name,
+                status="registered",
+                stage="runtime",
+                enabled=True,
+            )
 
     return additionally_applied
 

@@ -7,6 +7,11 @@ router = APIRouter()
 
 @router.get("/providers")
 def list_providers():
+    registration = getattr(
+        relay.provider_manager,
+        "registration_status",
+        lambda: [],
+    )()
     return {
         "providers": [
             {
@@ -16,5 +21,6 @@ def list_providers():
                 "models": provider.models,
             }
             for provider in relay.provider_manager.all()
-        ]
+        ],
+        "registration": registration,
     }

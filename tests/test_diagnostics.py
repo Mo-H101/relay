@@ -105,6 +105,7 @@ class TestDiagnosticsEndpoint:
         assert set(payload.keys()) == {
             "generated_at",
             "providers",
+            "provider_registration",
             "learned_health",
             "telemetry",
             "operations",

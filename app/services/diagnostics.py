@@ -42,6 +42,7 @@ class DiagnosticsService:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "providers": self._providers(relay),
+            "provider_registration": self._provider_registration(relay),
             "learned_health": self._learned_health(relay),
             "telemetry": self._telemetry(relay),
             "operations": self._operations(),
@@ -52,6 +53,14 @@ class DiagnosticsService:
             "persistence": self._persistence(relay),
             "continuity": self._continuity(relay),
         }
+
+    def _provider_registration(self, relay) -> list[dict]:
+        """Return safe startup/reload status without exception text."""
+        manager = getattr(relay, "provider_manager", None)
+        getter = getattr(manager, "registration_status", None)
+        if getter is None:
+            return []
+        return getter()
 
     def _operations(self) -> dict:
         """

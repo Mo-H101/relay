@@ -25,8 +25,9 @@ from app.services.context_manager import ContextManager
 from app.services.handoff import HandoffCoordinator
 from app.services.metrics import relay_metrics
 from app.services import platform_store
-from app.providers.factory import build_runtime_provider
+from app.providers.factory import build_runtime_provider_detailed
 from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
+from app.services.failure_classifier import classify
 
 _logger = logging.getLogger("relay")
 
@@ -358,11 +359,46 @@ class Relay:
                 continue
 
             if not getattr(settings, defn.enabled_attr, False):
+                self.provider_manager.record_registration(
+                    defn.id,
+                    provider_name=defn.provider_name,
+                    status="disabled",
+                    stage="configuration",
+                    enabled=False,
+                )
                 continue
 
             try:
-                self.provider_manager.register(build_runtime_provider(defn))
-            except Exception:
+                provider, discovery_error = build_runtime_provider_detailed(
+                    defn
+                )
+                self.provider_manager.register(provider)
+                if discovery_error is None:
+                    self.provider_manager.record_registration(
+                        defn.id,
+                        provider_name=defn.provider_name,
+                        status="registered",
+                        stage="runtime",
+                        enabled=True,
+                    )
+                else:
+                    self.provider_manager.record_registration(
+                        defn.id,
+                        provider_name=defn.provider_name,
+                        status="discovery_failed",
+                        stage="model_discovery",
+                        enabled=True,
+                        error_kind=classify(discovery_error).value,
+                    )
+            except Exception as exc:
+                self.provider_manager.record_registration(
+                    defn.id,
+                    provider_name=defn.provider_name,
+                    status="initialization_failed",
+                    stage="runtime",
+                    enabled=True,
+                    error_kind=classify(exc).value,
+                )
                 continue
 
     def choose_provider(self):
@@ -680,7 +716,16 @@ class Relay:
                 }
             )
 
-        return {"deep": deep, "providers": results}
+        registrations = getattr(
+            self.provider_manager,
+            "registration_status",
+            lambda: [],
+        )()
+        return {
+            "deep": deep,
+            "providers": results,
+            "registrations": registrations,
+        }
 
 
 relay = Relay()

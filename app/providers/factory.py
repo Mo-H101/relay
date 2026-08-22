@@ -58,11 +58,14 @@ def resolve_provider_key(defn: ProviderDefinition, source=None) -> str:
     return getattr(src, defn.key_attr, "") or ""
 
 
-def build_runtime_provider(defn: ProviderDefinition) -> Provider:
+def build_runtime_provider_detailed(
+    defn: ProviderDefinition,
+) -> tuple[Provider, Exception | None]:
     """
-    Create and return the provider described by ``defn`` using the active
-    settings (API key, base URL override, priority override) and live
-    model discovery.
+    Create a provider and retain a model-discovery failure for the caller.
+
+    The exception is returned only for in-process classification. Callers
+    must expose a safe status rather than the exception text.
     """
     base_url = _settings_value(defn.base_url_attr, None) or defn.base_url_default
 
@@ -76,10 +79,13 @@ def build_runtime_provider(defn: ProviderDefinition) -> Provider:
         defn.runtime_priority,
     )
 
+    discovery_error = None
+
     if provider.has_api_key() or not provider.requires_api_key:
         try:
             models = defn.client().list_models(provider)
-        except Exception:
+        except Exception as exc:
+            discovery_error = exc
             models = []
 
         priority = _settings_value(defn.priority_env.lower(), [])
@@ -88,4 +94,10 @@ def build_runtime_provider(defn: ProviderDefinition) -> Provider:
             model for model in priority if model in provider.models
         ]
 
+    return provider, discovery_error
+
+
+def build_runtime_provider(defn: ProviderDefinition) -> Provider:
+    """Create a runtime provider, preserving the legacy return contract."""
+    provider, _ = build_runtime_provider_detailed(defn)
     return provider

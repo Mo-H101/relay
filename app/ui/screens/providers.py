@@ -137,7 +137,15 @@ class ProvidersScreen(Screen):
         keys: list[str] = []
         for entry in self._facade.provider_catalog():
             # Compound status: glyph + text
-            if not entry.configured:
+            if entry.registration_status in {
+                "initialization_failed",
+                "discovery_failed",
+            }:
+                glyph = "!"
+                error_kind = entry.registration_error_kind or "unknown"
+                status_text = f"failed ({error_kind})"
+                status_color = theme.error
+            elif not entry.configured:
                 glyph = "-"
                 status_text = "not configured"
                 status_color = theme.text_muted
