@@ -49,6 +49,9 @@ and "incomplete/failed setup"; it is independent of whether a `.env` exists.
 | Variable | Default | Reloadable | Meaning |
 | --- | --- | --- | --- |
 | `REQUEST_TIMEOUT` | `120` | yes | Seconds before a provider request times out (min 1). |
+| `PROVIDER_MAX_RESPONSE_BYTES` | `16777216` | no | Maximum total bytes accepted from one upstream response, including streams (min 1024). |
+| `PROVIDER_MAX_CHUNK_BYTES` | `1048576` | no | Maximum bytes accepted in one upstream response chunk (min 1024). |
+| `PROVIDER_MAX_RESPONSE_SECONDS` | `600` | no | Maximum wall-clock duration for one upstream response or stream (min 1). |
 | `MAX_RETRIES` | `1` | yes | Retries per (provider, model) before failing over. |
 | `RETRY_HONOR_RETRY_AFTER` | `false` | yes | Sleep for the provider's `Retry-After` before the next retry of the same candidate (capped at `RETRY_AFTER_MAX_SECONDS`). Off = immediate retry. |
 | `RETRY_AFTER_MAX_SECONDS` | `60` | yes | Cap for an honored `Retry-After`, in seconds (min 0). |

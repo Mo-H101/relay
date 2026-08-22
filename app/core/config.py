@@ -233,6 +233,24 @@ class Settings:
             os.getenv("REQUEST_TIMEOUT", "120"),
             minimum=1,
         )
+        # Hard limits for untrusted upstream response bodies and streams.
+        # These are restart-required safety budgets; the normal request
+        # timeout still controls connection/read inactivity.
+        self.provider_max_response_bytes = _valid_int(
+            "PROVIDER_MAX_RESPONSE_BYTES",
+            os.getenv("PROVIDER_MAX_RESPONSE_BYTES", str(16 * 1024 * 1024)),
+            minimum=1024,
+        )
+        self.provider_max_chunk_bytes = _valid_int(
+            "PROVIDER_MAX_CHUNK_BYTES",
+            os.getenv("PROVIDER_MAX_CHUNK_BYTES", str(1024 * 1024)),
+            minimum=1024,
+        )
+        self.provider_max_response_seconds = _valid_int(
+            "PROVIDER_MAX_RESPONSE_SECONDS",
+            os.getenv("PROVIDER_MAX_RESPONSE_SECONDS", "600"),
+            minimum=1,
+        )
         self.max_retries = _valid_int(
             "MAX_RETRIES",
             os.getenv("MAX_RETRIES", "1"),

@@ -2,6 +2,7 @@ from enum import Enum
 
 from app.providers.exceptions import (
     ProviderHTTPError,
+    ProviderResponseLimit,
     ProviderTimeout,
 )
 
@@ -19,6 +20,7 @@ class FailureKind(str, Enum):
     SERVER_ERROR = "server_error"
     AUTH_ERROR = "auth_error"
     UNKNOWN = "unknown"
+    RESOURCE_LIMIT = "resource_limit"
 
 
 RETRYABLE = {
@@ -48,6 +50,9 @@ def classify(exc) -> FailureKind:
 
     if isinstance(exc, ProviderTimeout):
         return FailureKind.TIMEOUT
+
+    if isinstance(exc, ProviderResponseLimit):
+        return FailureKind.RESOURCE_LIMIT
 
     if isinstance(exc, ProviderHTTPError):
         code = exc.status_code

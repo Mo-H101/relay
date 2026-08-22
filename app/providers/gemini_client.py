@@ -31,6 +31,8 @@ from app.providers.openai_compat_client import (
     _stream_error_text,
     _stream_error_text_async,
     _text_content,
+    bounded_aiter_lines,
+    bounded_iter_lines,
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
@@ -939,7 +941,7 @@ class GeminiClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
-                for line in response.iter_lines():
+                for line in bounded_iter_lines(response):
                     if not line.startswith("data: "):
                         continue
                     try:
@@ -1033,7 +1035,7 @@ class GeminiClient:
                     )
 
                 state = _GeminiStreamState()
-                for line in response.iter_lines():
+                for line in bounded_iter_lines(response):
                     for out in _translate_gemini_line(line, provider, state):
                         yield out
 
@@ -1227,7 +1229,7 @@ class GeminiClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
-                    async for line in response.aiter_lines():
+                    async for line in bounded_aiter_lines(response):
                         if not line.startswith("data: "):
                             continue
                         try:
@@ -1403,7 +1405,7 @@ class GeminiClient:
                         )
 
                     state = _GeminiStreamState()
-                    async for line in response.aiter_lines():
+                    async for line in bounded_aiter_lines(response):
                         for out in _translate_gemini_line(line, provider, state):
                             yield out
 

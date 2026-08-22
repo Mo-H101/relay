@@ -65,6 +65,7 @@ _SAFE_PROVIDER_MESSAGES = {
     "server_error": "Provider returned a server error.",
     "auth_error": "Provider authentication failed.",
     "unknown": "Provider request failed.",
+    "resource_limit": "Provider response exceeded Relay limits.",
 }
 _SAFE_RESULT_MESSAGES = {"No candidates to try."}
 

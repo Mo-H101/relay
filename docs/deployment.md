@@ -68,6 +68,9 @@ HEALTH_AWARE_ROUTING=true
 # RETRY_AFTER_MAX_SECONDS=60         # cap for an honored Retry-After
 # RETRY_BACKOFF_BASE_SECONDS=0       # exponential backoff base (0 = none)
 # REQUEST_TIMEOUT_BUDGET_SECONDS=0   # total wall-clock budget (0 = none)
+# PROVIDER_MAX_RESPONSE_BYTES=16777216  # total upstream body/stream cap
+# PROVIDER_MAX_CHUNK_BYTES=1048576       # single upstream chunk cap
+# PROVIDER_MAX_RESPONSE_SECONDS=600      # upstream body/stream lifetime cap
 ```
 
 ### Continuity (opt-in) profile

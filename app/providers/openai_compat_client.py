@@ -10,10 +10,16 @@ from app.core.config import settings
 from app.providers.base import ModelProbe, Provider
 from app.providers.exceptions import (
     ProviderHTTPError,
+    ProviderResponseLimit,
     ProviderTimeout,
 )
 from app.services.metrics import relay_metrics
 from app.services.redaction import redact_provider_error, redact_text
+from app.providers.transport_limits import (
+    BoundedResponseHook,
+    bounded_aiter_lines,
+    bounded_iter_lines,
+)
 
 
 def _safe_provider_body(provider: Provider, status_code: int, body: str) -> str:
@@ -68,6 +74,8 @@ def _stream_error_text(response: httpx.Response) -> str:
     """
     try:
         response.read()
+    except ProviderResponseLimit:
+        raise
     except Exception:
         pass
     return response.text
@@ -82,6 +90,8 @@ async def _stream_error_text_async(response: httpx.Response) -> str:
     """
     try:
         await response.aread()
+    except ProviderResponseLimit:
+        raise
     except Exception:
         pass
     return response.text
@@ -169,36 +179,57 @@ def proxy_request_kwargs(provider: Provider, url: str) -> dict:
     Proxy URLs and credentials are configuration only and are never
     logged or included in metrics/errors.
     """
+    trust_env = False
+    proxy = None
+
     if provider.proxy is not None:
         if provider.proxy == "":
-            return {"trust_env": False, "proxy": None}
-        return {"trust_env": False, "proxy": provider.proxy}
+            trust_env = False
+        else:
+            trust_env = False
+            proxy = provider.proxy
+    elif not getattr(settings, "proxy_enabled", True):
+        trust_env = False
+    else:
+        scheme = url.split(":", 1)[0].lower() if ":" in url else ""
 
-    if not getattr(settings, "proxy_enabled", True):
-        return {"trust_env": False, "proxy": None}
+        http_proxy = (getattr(settings, "http_proxy", "") or "").strip()
+        https_proxy = (getattr(settings, "https_proxy", "") or "").strip()
+        no_proxy = (getattr(settings, "no_proxy", "") or "").strip()
 
-    scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+        if not http_proxy:
+            http_proxy = (os.getenv("HTTP_PROXY", "") or "").strip()
+        if not https_proxy:
+            https_proxy = (os.getenv("HTTPS_PROXY", "") or "").strip()
+        if not no_proxy:
+            no_proxy = (os.getenv("NO_PROXY", "") or "").strip()
 
-    http_proxy = (getattr(settings, "http_proxy", "") or "").strip()
-    https_proxy = (getattr(settings, "https_proxy", "") or "").strip()
-    no_proxy = (getattr(settings, "no_proxy", "") or "").strip()
+        if not http_proxy and not https_proxy:
+            trust_env = True
+        else:
+            selected = https_proxy if scheme == "https" else http_proxy
+            if selected and not _matches_no_proxy(url, no_proxy):
+                proxy = selected
 
-    if not http_proxy:
-        http_proxy = (os.getenv("HTTP_PROXY", "") or "").strip()
-    if not https_proxy:
-        https_proxy = (os.getenv("HTTPS_PROXY", "") or "").strip()
-    if not no_proxy:
-        no_proxy = (os.getenv("NO_PROXY", "") or "").strip()
-
-    if not http_proxy and not https_proxy:
-        return {"trust_env": True, "proxy": None}
-
-    selected = https_proxy if scheme == "https" else http_proxy
-
-    if selected and not _matches_no_proxy(url, no_proxy):
-        return {"trust_env": False, "proxy": selected}
-
-    return {"trust_env": False, "proxy": None}
+    return {
+        "trust_env": trust_env,
+        "proxy": proxy,
+        "event_hooks": {
+            "response": [
+                BoundedResponseHook(
+                    max_bytes=getattr(
+                        settings, "provider_max_response_bytes", 16 * 1024 * 1024
+                    ),
+                    max_chunk_bytes=getattr(
+                        settings, "provider_max_chunk_bytes", 1024 * 1024
+                    ),
+                    max_seconds=getattr(
+                        settings, "provider_max_response_seconds", 600
+                    ),
+                )
+            ]
+        },
+    }
 
 
 class OpenAICompatibleClient:
@@ -747,7 +778,7 @@ class OpenAICompatibleClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
-                for line in response.iter_lines():
+                for line in bounded_iter_lines(response):
                     if not line:
                         continue
                     # Each line should start with "data: "
@@ -855,7 +886,7 @@ class OpenAICompatibleClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
-                for line in response.iter_lines():
+                for line in bounded_iter_lines(response):
                     if not line:
                         continue
                     if not line.startswith("data: "):
@@ -1118,7 +1149,7 @@ class OpenAICompatibleClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
-                    async for line in response.aiter_lines():
+                    async for line in bounded_aiter_lines(response):
                         if not line:
                             continue
                         if line.startswith("data: "):
@@ -1317,7 +1348,7 @@ class OpenAICompatibleClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
-                    async for line in response.aiter_lines():
+                    async for line in bounded_aiter_lines(response):
                         if not line:
                             continue
                         if not line.startswith("data: "):

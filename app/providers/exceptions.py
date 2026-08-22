@@ -10,6 +10,10 @@ class ProviderTimeout(ProviderError):
     """
 
 
+class ProviderResponseLimit(ProviderError):
+    """Provider response exceeded Relay's byte, chunk, or time budget."""
+
+
 class ProviderHTTPError(ProviderError):
     """
     Provider returned an HTTP error.

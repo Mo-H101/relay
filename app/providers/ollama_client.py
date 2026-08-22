@@ -24,6 +24,8 @@ from app.providers.openai_compat_client import (
     _retry_after_seconds,
     _stream_error_text,
     _stream_error_text_async,
+    bounded_aiter_lines,
+    bounded_iter_lines,
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
@@ -611,7 +613,7 @@ class OllamaClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
-                for line in response.iter_lines():
+                for line in bounded_iter_lines(response):
                     if not line:
                         continue
                     try:
@@ -711,7 +713,7 @@ class OllamaClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
-                for line in response.iter_lines():
+                for line in bounded_iter_lines(response):
                     for out in _translate_ollama_line(line, provider):
                         yield out
 
@@ -905,7 +907,7 @@ class OllamaClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
-                    async for line in response.aiter_lines():
+                    async for line in bounded_aiter_lines(response):
                         if not line:
                             continue
                         try:
@@ -1087,7 +1089,7 @@ class OllamaClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
-                    async for line in response.aiter_lines():
+                    async for line in bounded_aiter_lines(response):
                         for out in _translate_ollama_line(line, provider):
                             yield out
 
