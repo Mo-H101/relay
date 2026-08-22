@@ -6,18 +6,25 @@ Base all work on: current code + this file + `git log --oneline -10`.
 ## Current state
 
 - **Branch:** `master`.
-- **HEAD:** `57af339a523022ff2fc5652989c0e1d48ef5e867`
-  (`fix: reconcile provider error expectations`).
-- **origin/master:** matches HEAD.
+- **HEAD:** `c1f8840125087ec87d00976bf4b6f8d9db8a9557`
+  (`fix: bump python-dotenv to patched 1.2.2 release`).
+- **origin/master:** `619dbac952ef1aa9d95819dcf7024c777366d258` —
+  master is **20 commits ahead, 0 behind**.
+- **Push status:** **NOT PUSHED.** The repository is at a verified
+  **pre-push remediation checkpoint** (see next section).
 - **Working tree:** tracked files clean. The intentionally preserved,
   untracked context documents `OVERNIGHT_REPORT.md` and
   `PHASE_15_PROPOSAL.md` remain present.
 - **CI:** the current workflow tests Ubuntu Python 3.10/3.11/3.12/3.13,
   Windows Python 3.12, and packaging on Ubuntu Python 3.12. CI run
-  `32571822641` is green across all six jobs for `57af339`.
-- **Recent history:** Phase 16 Stage 2A remediation through `57af339`;
-  Phase 16 Stage 1 remediation at `68921c1`; Phase 14
-  streaming turn accounting at `8e53fd7`;
+  `32571822641` is green across all six jobs for `57af339`
+  (historical). The remediation history ending at `c1f8840` has **not
+  run CI yet** — verify CI after the controlled push.
+- **Recent history:** Codex/OpenCode adversarial security/reliability
+  remediation gate (20 commits, `619dbac..c1f8840`) completed,
+  independently verified PASS WITH NOTES; earlier Phase 16 Stage 2A
+  remediation through `57af339`; Phase 16 Stage 1 remediation at
+  `68921c1`; Phase 14 streaming turn accounting at `8e53fd7`;
   Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
   at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
   streaming redesign at `d520a11`; Stage E diagnostics sub-tabs at
@@ -53,6 +60,54 @@ Base all work on: current code + this file + `git log --oneline -10`.
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
 
+### Adversarial remediation gate — completed, pre-push checkpoint
+
+- **Baseline:** `619dbac952ef1aa9d95819dcf7024c777366d258`
+  (`docs: reconcile Stage 2A bridge state`).
+- **Verified remediation HEAD:** `c1f8840125087ec87d00976bf4b6f8d9db8a9557`
+  via a linear 20-commit history (`619dbac..c1f8840`, no merges).
+  The gate is COMPLETE; the branch has NOT been pushed.
+- **What was fixed (Codex/OpenCode remediation, independently
+  re-verified):** continuity history/state growth; flusher overflow/
+  bookkeeping loss; cross-project coalescing collision; recovery
+  pending-token growth/cleanup; bounded upstream response/stream
+  lifetime (byte/chunk/seconds budgets on sync and async wire paths);
+  provider error-body leakage; Ollama exception leakage; TUI
+  provider-error leakage; authentication CPU amplification (throttle
+  before store scan); non-finite key expiration; model-catalog
+  amplification; retry/attempt amplification; request structure bounds;
+  diagnostics/persistence information leakage; Gemini API-key URL
+  exposure (header auth); provider `base_url` validation incl. lazy
+  port parse; HTTP 408 classification as timeout; `httpcore>=1.0.9`
+  CVE floor (CVE-2025-43859); `python-dotenv` 1.2.2 bump. A late wiring
+  regression from `fddf9eb` (event hooks breaking sync provider calls)
+  was caught and fixed via dedicated `bounded_get/post/stream`
+  transport shims with real-socket regression tests. Redirect/SSRF was
+  verified a non-issue (httpx redirect following is never enabled).
+- **Final independent verification:** full relevant suite
+  **2826 passed / 15 skipped / 0 failed**; targeted security suite
+  **526 passed / 6 skipped**; adversarial attack passes (auth-throttle
+  7/7, continuity combinations 5/5, transport budgets 4/4); no tracked
+  changes; no suspicious artifacts/secrets. Verdict:
+  **PASS WITH NOTES — safe to push.**
+- **Non-blocking follow-ups (do NOT address during this checkpoint):**
+  1. `ConversationStore.close()` auto-reopens — minor operational/
+     reliability defect, not security relevant, not release blocking.
+  2. Starlette 0.47.3 advisory family — Relay's Host/routing-path
+     vector is mitigated by reading routing-scope path instead of
+     `request.url.path`; no reachable exploitable path identified;
+     FastAPI/Starlette upgrade remains a prioritized follow-up.
+  3. `test_setup_adapter_masks_key_input` timing-sensitive UI flake
+     under load (passes standalone/file-level and on rerun).
+  4. Remaining pip-audit findings are environment/tooling-only,
+     unreachable from Relay's API surface, or already mitigated in app
+     code; no dependency upgrades now.
+- **Next transition (in order, not started yet):** preserve this
+  checkpoint → push the verified remediation history → run/verify CI
+  on pushed HEAD → if green, proceed to the next pre-release phase →
+  continue planned benchmark/security/reliability and installer/
+  distribution work.
+
 ## Known failures / flakes
 
 - ~~`test_platform_store.py::TestConcurrency::test_concurrent_opens_of_same_file`
@@ -78,11 +133,18 @@ Base all work on: current code + this file + `git log --oneline -10`.
   (`app/services/platform_store.py` `open_connection()`), so the
   one-time sidecar/shm init is atomic across concurrent opens. No new
   lock; non-reentrant lock acquired sequentially (no deadlock).
-  **Verification:** targeted suite 16 passed; 60 rounds of the 8-thread
-  fresh-open stress pass (26 failed pre-fix); 80 rounds of 16-thread +
-  reopen pass; consumer suites (state/key/event/request stores,
-  continuity) pass; full suite 2558 passed, 8 skipped, 0 failed.
-  CI confirmation pending for the commit.
+   **Verification:** targeted suite 16 passed; 60 rounds of the 8-thread
+   fresh-open stress pass (26 failed pre-fix); 80 rounds of 16-thread +
+   reopen pass; consumer suites (state/key/event/request stores,
+   continuity) pass; full suite 2558 passed, 8 skipped, 0 failed.
+   CI confirmation pending for the commit.
+- **`test_ui_providers.py::test_setup_adapter_masks_key_input`
+  timing-sensitive flake under full-suite load** (observed once in
+  three full-suite runs on the remediation tree; textual headless
+  driver error). Passes standalone, passes file-level (12/12), and
+  passed on the immediate full-suite rerun. Not a deterministic
+  regression; left unmodified. Revisit pilot timeouts only if it
+  recurs.
 
 ## What is done
 
