@@ -493,6 +493,27 @@ class Settings:
             os.getenv("RELAY_AUTH_STORE", "false").lower() == "true"
         )
 
+        # Store-authentication abuse guards: failed store authentications
+        # per client address inside a rolling window are throttled before
+        # the KeyStore is consulted, and concurrent store authentications
+        # are globally bounded. Both bound the O(keys x scrypt) CPU cost
+        # of token-guessing floods. Read per call so live reload applies.
+        self.relay_auth_failure_limit = _valid_int(
+            "RELAY_AUTH_FAILURE_LIMIT",
+            os.getenv("RELAY_AUTH_FAILURE_LIMIT", "30"),
+            minimum=1,
+        )
+        self.relay_auth_failure_window_seconds = _valid_float(
+            "RELAY_AUTH_FAILURE_WINDOW_SECONDS",
+            os.getenv("RELAY_AUTH_FAILURE_WINDOW_SECONDS", "60"),
+            minimum=1.0,
+        )
+        self.relay_auth_max_concurrent = _valid_int(
+            "RELAY_AUTH_MAX_CONCURRENT",
+            os.getenv("RELAY_AUTH_MAX_CONCURRENT", "8"),
+            minimum=1,
+        )
+
         # =========================
         # Terminal UI
         # =========================

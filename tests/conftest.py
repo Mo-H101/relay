@@ -40,6 +40,21 @@ _request_log = _request_log_module.RequestLogStore(
 _request_log_module.request_log = lambda: _request_log
 
 
+@pytest.fixture(autouse=True)
+def _reset_auth_throttle():
+    """
+    Session-wide auth-throttle isolation. The auth dependency counts failed
+    store-key authentications in a process-wide throttle; without a reset,
+    failure budgets would leak across tests sharing the TestClient address
+    and unrelated suites would start receiving throttled 401s.
+    """
+    from app.security import auth_throttle as auth_throttle_module
+
+    auth_throttle_module.reset_auth_throttle()
+    yield
+    auth_throttle_module.reset_auth_throttle()
+
+
 @pytest.fixture
 def isolated_event_log(monkeypatch, tmp_path):
     """

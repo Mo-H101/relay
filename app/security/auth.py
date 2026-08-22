@@ -24,6 +24,7 @@ import hmac
 from fastapi import HTTPException, Request
 
 from app.core.config import settings, state_dir
+from app.security.auth_throttle import auth_gate, auth_throttle
 from app.services.key_store import KeyStore, KeyStoreError
 from app.services.metrics import relay_metrics
 
@@ -194,6 +195,18 @@ def _deny(request: Request, reason: str, status_code: int = 401):
     )
 
 
+def _client_bucket(request: Request) -> str:
+    """
+    Bucket key for abuse throttling: a digest of the direct peer address.
+    The raw address is never retained. A missing peer (odd transports)
+    collapses into one shared bucket, which only makes throttling more
+    conservative.
+    """
+    client = request.client
+    host = getattr(client, "host", None) if client is not None else None
+    return auth_throttle().bucket_for(host)
+
+
 def _event_log():
     """
     Resolve the process-wide event log for best-effort auth audit rows.
@@ -307,45 +320,70 @@ def require_api_key(request: Request) -> None:
         return
 
     if settings.relay_auth_store:
+        throttle = auth_throttle()
+        bucket = _client_bucket(request)
+        limit = settings.relay_auth_failure_limit
+        window = settings.relay_auth_failure_window_seconds
+
+        # A bucket that exhausted its failure budget is rejected before
+        # the KeyStore scan, capping the O(keys x scrypt) cost a single
+        # client can force. Throttled denials do not extend the window.
+        if throttle.check(bucket, limit, window):
+            _deny(request, "throttled")
+
+        gate = auth_gate()
+        slot = None
         try:
-            store = _key_store()
-        except KeyStoreError as exc:
-            relay_metrics.record_auth(
-                True, False, "", failure_reason="store_unavailable"
-            )
-            _audit(
-                "auth.failure",
-                outcome="failed",
-                detail={"reason": "store_unavailable"},
-            )
-            raise HTTPException(
-                status_code=401,
-                detail="Unauthorized",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from exc
+            try:
+                store = _key_store()
+            except KeyStoreError as exc:
+                relay_metrics.record_auth(
+                    True, False, "", failure_reason="store_unavailable"
+                )
+                _audit(
+                    "auth.failure",
+                    outcome="failed",
+                    detail={"reason": "store_unavailable"},
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
 
-        try:
-            result = store.authenticate(token)
-        except KeyStoreError:
-            _deny(request, "store_unavailable")
+            # Bound concurrent expensive scans globally; excess requests
+            # fail closed rather than queueing unbounded scrypt work.
+            slot = gate.enter(settings.relay_auth_max_concurrent)
+            if slot is None:
+                _deny(request, "overloaded")
 
-        meta = result.get("meta")
+            try:
+                result = store.authenticate(token)
+            except KeyStoreError:
+                _deny(request, "store_unavailable")
 
-        if result.get("status") == "ok" and meta is not None:
-            authorization = request.headers.get("authorization", "")
-            scheme = auth_scheme(
-                path=path,
-                authorization=authorization,
-                x_api_key=request.headers.get(_HEADER_API_KEY, ""),
-                auth_enabled=True,
-            )
-            _grant_store(request, meta, scheme, path)
-            return
+            meta = result.get("meta")
 
-        reason = result.get("status", "invalid")
-        if reason == "ok":
-            reason = "invalid"
+            if result.get("status") == "ok" and meta is not None:
+                authorization = request.headers.get("authorization", "")
+                scheme = auth_scheme(
+                    path=path,
+                    authorization=authorization,
+                    x_api_key=request.headers.get(_HEADER_API_KEY, ""),
+                    auth_enabled=True,
+                )
+                throttle.record_success(bucket)
+                _grant_store(request, meta, scheme, path)
+                return
 
-        _deny(request, reason)
+            reason = result.get("status", "invalid")
+            if reason == "ok":
+                reason = "invalid"
+
+            throttle.record_failure(bucket, window)
+            _deny(request, reason)
+        finally:
+            if slot is not None:
+                gate.exit(slot)
 
     _deny(request, "invalid")

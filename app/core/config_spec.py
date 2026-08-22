@@ -382,6 +382,20 @@ _RAW_SPECS = (
     _simple("RELAY_AUTH_STORE", "relay_auth_store", "bool", False,
             "Accept store-backed API keys (platform.db) in addition to the "
             "bootstrap key.", "auth"),
+    _simple("RELAY_AUTH_FAILURE_LIMIT", "relay_auth_failure_limit", "int", 30,
+            "Failed store-key authentications per client address allowed "
+            "inside the failure window before further attempts are "
+            "rejected without consulting the key store.",
+            "auth", minimum=1),
+    _simple("RELAY_AUTH_FAILURE_WINDOW_SECONDS",
+            "relay_auth_failure_window_seconds", "float", 60.0,
+            "Length of the rolling window that counts failed store-key "
+            "authentications per client address.", "auth", minimum=1.0),
+    _simple("RELAY_AUTH_MAX_CONCURRENT", "relay_auth_max_concurrent", "int",
+            8,
+            "Maximum number of store-key authentications verified at the "
+            "same time; excess requests fail closed instead of queueing.",
+            "auth", minimum=1),
 
     # ==================================================================
     # Provider fields (reloadable triplets: enabled / api_key / priority,

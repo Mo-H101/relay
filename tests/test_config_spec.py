@@ -42,7 +42,7 @@ from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 def test_spec_covers_every_settings_attribute():
     expected = set(vars(Settings()))
     assert set(SPEC_BY_ATTR) == expected
-    assert len(SPECS) == len(expected) == 118
+    assert len(SPECS) == len(expected) == 121
 
 
 def test_every_spec_env_is_unique():
@@ -122,6 +122,9 @@ _GOLDEN_SIMPLE = (
     "no_proxy",
     "proxy_enabled",
     "relay_auth_store",
+    "relay_auth_failure_limit",
+    "relay_auth_failure_window_seconds",
+    "relay_auth_max_concurrent",
 )
 
 
