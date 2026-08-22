@@ -153,6 +153,14 @@ not from configuration.
 | Variable | Default | Reloadable | Meaning |
 | --- | --- | --- | --- |
 | `RELAY_API_KEY` | *(empty)* | yes | When set, every route except `/` and `/health` requires this key via `Authorization: Bearer <key>` or `X-Relay-API-Key: <key>`. |
+| `RELAY_AUTH_FAILURE_LIMIT` | `30` | yes | Failed store-key authentications allowed per client address inside the failure window before further attempts are rejected without consulting the key store (CPU-amplification guard). |
+| `RELAY_AUTH_FAILURE_WINDOW_SECONDS` | `60` | yes | Length of the rolling window that counts failed store-key authentications per client address. A throttled address recovers automatically when the window elapses; a successful credential clears it immediately. |
+| `RELAY_AUTH_MAX_CONCURRENT` | `8` | yes | Maximum number of store-key authentications verified at the same time. Excess requests fail closed (`401`) instead of queueing unbounded hashing work. |
+
+Throttled and overloaded denials return the same generic `401` body as
+every other authentication failure; the reason is recorded only in the
+metrics (`relay_auth_failures_total{reason="throttled"|"overloaded"}`) and
+the security event log.
 
 With `RELAY_AUTH_STORE=true`, per-client keys can be managed from the CLI
 or admin API: `relay keys add|list|remove|rotate|prune` and

@@ -53,6 +53,17 @@ A store outage **fails closed** (HTTP 401) so a broken store can never
 silently disable authentication. All auth failures return an identical
 `401` body; the reason is recorded only in metrics.
 
+Store-key verification hashes each stored key per attempt, so token
+guessing is CPU-expensive by design. Two guards bound that cost: failed
+attempts from one client address are throttled before the key store is
+consulted (`RELAY_AUTH_FAILURE_LIMIT` inside
+`RELAY_AUTH_FAILURE_WINDOW_SECONDS`, recovering automatically when the
+window elapses), and concurrent verifications are globally capped
+(`RELAY_AUTH_MAX_CONCURRENT`; excess requests fail closed). Throttled and
+overloaded denials use the same generic `401` body as every other failure;
+only metrics (`reason="throttled"|"overloaded"`) and the audit log reveal
+the cause.
+
 ## Permissions
 
 - `platform.db` and its SQLite `-wal`/`-shm` sidecars are created
