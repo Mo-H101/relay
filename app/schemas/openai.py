@@ -11,7 +11,7 @@ assistant tool-call messages.
 """
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import uuid
 import time
 
@@ -21,6 +21,67 @@ import time
 # conversation histories are unaffected.
 MAX_MESSAGES = 10_000
 MAX_OUTPUT_TOKENS = 1_000_000
+MAX_REQUEST_STRING_CHARS = 4 * 1024 * 1024
+MAX_REQUEST_NESTING_DEPTH = 64
+MAX_REQUEST_CONTAINER_ITEMS = 4_096
+MAX_TOOLS = 1_024
+MAX_STOP_SEQUENCES = 256
+MAX_TOOL_CALLS = 1_024
+
+
+def _validate_request_shape(value: Any, path: tuple[str, ...] = (), depth: int = 0) -> Any:
+    """Reject hostile JSON shapes before nested Pydantic models are built.
+
+    The ASGI body middleware bounds total bytes, while this validator bounds
+    the number of objects that can be materialized and the size/depth of
+    arbitrary JSON fields such as tool parameters and image metadata. The
+    message limit remains the established long-context compatibility limit.
+    """
+    if depth > MAX_REQUEST_NESTING_DEPTH:
+        raise ValueError(
+            f"request nesting exceeds the {MAX_REQUEST_NESTING_DEPTH}-level limit"
+        )
+
+    if isinstance(value, str):
+        if len(value) > MAX_REQUEST_STRING_CHARS:
+            raise ValueError(
+                f"request string exceeds the {MAX_REQUEST_STRING_CHARS}-character limit"
+            )
+        return value
+
+    if isinstance(value, dict):
+        if len(value) > MAX_REQUEST_CONTAINER_ITEMS:
+            raise ValueError(
+                f"request object exceeds the {MAX_REQUEST_CONTAINER_ITEMS}-item limit"
+            )
+        for key, item in value.items():
+            if isinstance(key, str) and len(key) > MAX_REQUEST_STRING_CHARS:
+                raise ValueError(
+                    f"request key exceeds the {MAX_REQUEST_STRING_CHARS}-character limit"
+                )
+            _validate_request_shape(item, path + (str(key),), depth + 1)
+        return value
+
+    if isinstance(value, list):
+        if path == ("messages",):
+            limit = MAX_MESSAGES
+        elif path == ("tools",):
+            limit = MAX_TOOLS
+        elif path == ("stop",):
+            limit = MAX_STOP_SEQUENCES
+        elif path and path[-1] == "tool_calls":
+            limit = MAX_TOOL_CALLS
+        else:
+            limit = MAX_REQUEST_CONTAINER_ITEMS
+        if len(value) > limit:
+            raise ValueError(
+                f"request array exceeds the {limit}-item limit"
+            )
+        for index, item in enumerate(value):
+            _validate_request_shape(item, path + (str(index),), depth + 1)
+        return value
+
+    return value
 
 
 class ContentPart(BaseModel):
@@ -97,7 +158,7 @@ class OpenAIChatCompletionRequest(BaseModel):
     # upstream model id is still forwarded verbatim; virtual names
     # ("auto", "default", "relay", task names) and omitted models route
     # through Relay's task/candidate machinery.
-    model: Optional[str] = None
+    model: Optional[str] = Field(default=None, max_length=1024)
     messages: List[ChatMessageObject]
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -109,10 +170,15 @@ class OpenAIChatCompletionRequest(BaseModel):
     frequency_penalty: Optional[float] = None
     presence_penalty: Optional[float] = None
     seed: Optional[int] = None
-    user: Optional[str] = None
+    user: Optional[str] = Field(default=None, max_length=1024)
     tools: Optional[List[ToolDefinition]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
     stream_options: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bounded_request_shape(cls, value: Any) -> Any:
+        return _validate_request_shape(value)
 
     @field_validator("messages")
     @classmethod
