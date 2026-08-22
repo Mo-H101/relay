@@ -667,6 +667,54 @@ class TestOverflowInteraction:
 
 
 class TestCancellation:
+    def test_long_conversation_keeps_bounded_tail_and_summary(self):
+        flusher = FakeFlusher()
+        coord = _coordinator(flusher=flusher, max_in_memory_turns=3)
+        cid = "t" * 32
+
+        for seq in range(1, 11):
+            turn = coord.start(
+                key_id="k", client_bucket="cline", project_key="p" * 32,
+                conversation_id=cid,
+            )
+            turn.finish(
+                provider="openai", model="gpt-4o", task=f"task-{seq}"
+            )
+
+        state = coord._states[("k", cid)]
+        assert len(state.committed_turns) <= 3
+        assert state.committed_turns[-1]["seq"] == 10
+        assert state.rolling_summary is not None
+        assert len(state.rolling_summary["summary_text"]) <= 4096
+        assert any(
+            operation == "summary.record"
+            for operation, _kwargs in flusher.enqueue_calls
+        )
+
+    def test_aborting_uncommitted_turn_clears_pending_resume_hash(self):
+        recovery = ContinuityRecovery(
+            None, max_pending_tokens=2
+        )
+        coord = _coordinator(recovery=recovery)
+        turns = [
+            coord.start(
+                key_id="k", client_bucket="cline", project_key="p" * 32,
+                conversation_id=("a" * 31) + str(index),
+            )
+            for index in range(3)
+        ]
+
+        assert recovery.pending_token_hash(
+            turns[0].conversation_id, "k"
+        ) is None
+        assert recovery.pending_token_hash(
+            turns[1].conversation_id, "k"
+        ) is not None
+        turns[1].abort()
+        assert recovery.pending_token_hash(
+            turns[1].conversation_id, "k"
+        ) is None
+
     @pytest.mark.asyncio
     async def test_client_disconnect_finalizes_as_failed(self, fake_registry):
         """Client disconnect → exception → turn finalized as 'failed'."""

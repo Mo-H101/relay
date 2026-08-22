@@ -287,6 +287,7 @@ class AsyncChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result
@@ -469,6 +470,7 @@ class AsyncChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result
@@ -687,6 +689,7 @@ class AsyncChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result
@@ -919,6 +922,7 @@ class AsyncChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result

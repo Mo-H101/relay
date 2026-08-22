@@ -493,6 +493,8 @@ async def openai_chat_completion(
                 turn=turn,
             )
         except BaseException:
+            if turn is not None:
+                turn.abort()
             lease.release()
             raise
 
@@ -616,6 +618,7 @@ async def openai_chat_completion(
                             tokens_in=usage_tokens_in,
                             tokens_out=usage_tokens_out,
                         )
+                        turn.abort()
 
                     # Record telemetry and health
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
@@ -666,7 +669,13 @@ async def openai_chat_completion(
             code="relay_error",
             correlation_id=correlation_id,
         )
+    except BaseException:
+        if turn is not None:
+            turn.abort()
+        raise
     finally:
+        if turn is not None:
+            turn.abort()
         lease.release()
 
     latency_ms = (time.perf_counter() - start_time) * 1000

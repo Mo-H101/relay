@@ -32,8 +32,9 @@ from app.services.metrics import relay_metrics
 
 _logger = logging.getLogger("relay")
 
-# Bounded in-memory buffer; a full buffer drops the oldest queued row so
-# a flood of writes can never grow the heap without limit.
+# Bounded in-memory buffer. A full buffer never evicts an older durable row:
+# coalescible metadata is folded into its latest queued operation, while an
+# operation that cannot be admitted is rejected and counted explicitly.
 _MAX_QUEUE = 10000
 
 # Continuity operations enqueued by the coordinator, mapped to the
@@ -76,6 +77,8 @@ class ContinuityFlusher:
         self._queued_count = 0
         self._drained_count = 0
         self._dropped_count = 0
+        self._rejected_count = 0
+        self._last_rejection_log_at = 0.0
         self._pruned_total = 0
         # Pending (queued-but-unflushed) rows per conversation, so the
         # store's in-flight registry stays accurate and background prunes
@@ -85,8 +88,10 @@ class ContinuityFlusher:
     def enqueue(self, operation: str, **kwargs) -> bool:
         """
         Buffer one durable continuity operation for the write-behind
-        thread. Never touches SQLite and never raises; a full buffer drops
-        the oldest queued row (counted as dropped).
+        thread. Never touches SQLite and never raises. A full buffer may
+        coalesce a safe metadata update; otherwise it rejects the new row
+        without evicting an older operation or registering a false pending
+        count.
         """
         if operation not in _OP_METHODS:
             return False
@@ -94,9 +99,21 @@ class ContinuityFlusher:
         conversation_id = kwargs.get("conversation_id")
 
         with self._lock:
+            if self._coalesce_locked(operation, kwargs):
+                self._queued_count += 1
+                relay_metrics.continuity_rows_queued.set(len(self._queue))
+                return True
             if len(self._queue) >= _MAX_QUEUE:
-                self._queue.popleft()
-                self._dropped_count += 1
+                self._rejected_count += 1
+                relay_metrics.continuity_rows_queued.set(len(self._queue))
+                now = time.time()
+                if now - self._last_rejection_log_at >= 1.0:
+                    _logger.warning(
+                        "continuity queue full; rejecting operation %s",
+                        operation,
+                    )
+                    self._last_rejection_log_at = now
+                return False
             self._queue.append((operation, dict(kwargs)))
             self._queued_count += 1
             relay_metrics.continuity_rows_queued.set(len(self._queue))
@@ -109,6 +126,51 @@ class ContinuityFlusher:
                 )
 
         return True
+
+    def _coalesce_locked(self, operation: str, kwargs: dict) -> bool:
+        """Fold a superseded non-turn operation into the queue.
+
+        Turn appends are essential. A queued finalization can safely merge
+        into its matching append, and repeated project/summary/compaction
+        metadata keeps only the newest state. No turn append is discarded.
+        The caller holds ``self._lock``.
+        """
+        cid = kwargs.get("conversation_id")
+        key_id = kwargs.get("key_id")
+
+        if operation == "turn.update":
+            seq = kwargs.get("seq")
+            for index in range(len(self._queue) - 1, -1, -1):
+                existing_op, existing = self._queue[index]
+                if (
+                    existing.get("conversation_id") == cid
+                    and existing.get("key_id") == key_id
+                    and existing.get("seq") == seq
+                    and existing_op in {"turn.append", "turn.update"}
+                ):
+                    merged = dict(existing)
+                    for name, value in kwargs.items():
+                        if value is not None:
+                            merged[name] = value
+                    self._queue[index] = (existing_op, merged)
+                    return True
+
+        if operation in {
+            "project_state.update",
+            "summary.record",
+            "compaction.record",
+        }:
+            identity = (operation, cid, key_id)
+            for index in range(len(self._queue) - 1, -1, -1):
+                existing_op, existing = self._queue[index]
+                if (
+                    (existing_op, existing.get("conversation_id"), existing.get("key_id"))
+                    == identity
+                ):
+                    self._queue[index] = (operation, dict(kwargs))
+                    return True
+
+        return False
 
     @property
     def queue_size(self) -> int:
@@ -179,8 +241,12 @@ class ContinuityFlusher:
 
             method_name = _OP_METHODS.get(operation)
 
-            if method_name is None or self._store is None:
+            if method_name is None:
                 continue
+            if self._store is None:
+                self._retain_row(operation, kwargs)
+                clean = False
+                break
 
             try:
                 getattr(self._store, method_name)(**kwargs)
@@ -292,6 +358,7 @@ class ContinuityFlusher:
                 "queued_total": self._queued_count,
                 "drained_total": self._drained_count,
                 "dropped_total": self._dropped_count,
+                "rejected_total": self._rejected_count,
                 "pruned_total": self._pruned_total,
                 "in_flight": list(self._store.in_flight)
                 if self._store is not None

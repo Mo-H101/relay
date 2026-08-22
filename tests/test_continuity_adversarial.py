@@ -886,8 +886,44 @@ class TestFlusherAdversarial:
                 outcome="ok",
             )
         assert flusher.queue_size == 10000
-        assert flusher.flush_stats()["dropped_total"] == 50
-        assert flusher.flush_stats()["queued_total"] == 10050
+        stats = flusher.flush_stats()
+        assert stats["dropped_total"] == 0
+        assert stats["rejected_total"] == 50
+        assert stats["queued_total"] == 10000
+
+    def test_queue_rejection_does_not_leak_in_flight_accounting(
+        self, tmp_path, monkeypatch
+    ):
+        import app.services.continuity_flusher as flusher_module
+
+        store = _store(tmp_path)
+        cid = "q" * 32
+        store.create(
+            key_id="k", client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+        monkeypatch.setattr(flusher_module, "_MAX_QUEUE", 2)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+
+        assert flusher.enqueue(
+            "turn.append", conversation_id=cid, key_id="k", seq=1,
+            outcome="ok", provider="p", model="m",
+        )
+        assert flusher.enqueue(
+            "turn.append", conversation_id=cid, key_id="k", seq=2,
+            outcome="ok", provider="p", model="m",
+        )
+        assert not flusher.enqueue(
+            "turn.append", conversation_id=cid, key_id="k", seq=3,
+            outcome="ok", provider="p", model="m",
+        )
+        assert flusher.flush_stats()["in_flight"] == [cid]
+        assert flusher.flush() == 0
+        assert flusher.flush_stats()["in_flight"] == []
+        assert [row["seq"] for row in store.turns(cid, "k")] == [1, 2]
+        store.close()
 
     def test_flush_never_raises_when_store_unavailable(self, tmp_path):
         store = _store(tmp_path)

@@ -48,6 +48,11 @@ _logger = logging.getLogger("relay")
 # Bounded in-memory state so a flood of distinct conversation ids cannot
 # grow the process heap without limit (rows are still durable).
 _MAX_IN_MEMORY_STATES = 512
+# A conversation state keeps only a bounded rolling tail. Older metadata is
+# represented by ``rolling_summary`` and remains durable through the existing
+# summaries table. This prevents a long-lived conversation from retaining
+# every committed turn in the request process.
+_MAX_IN_MEMORY_TURNS = 256
 
 
 def _state_key(key_id: object, conversation_id: str) -> Tuple[str, str]:
@@ -84,6 +89,10 @@ class _ConversationState:
     pending_resume_hash: Optional[str] = None
     resume_up_to_seq: int = 0
     resume_summary: Optional[dict] = None
+    # Bounded rolling summary for turns evicted from ``committed_turns``.
+    # Unlike ``resume_summary`` this is process-built and may be refreshed as
+    # the in-memory tail advances.
+    rolling_summary: Optional[dict] = None
     # P9B: the last committed logical (provider, model) for the
     # conversation (the continuation anchor). Seeded from durable state
     # when a fresh state is created for an existing conversation so the
@@ -122,6 +131,9 @@ class TurnContext:
     resume_token: Optional[str] = None
     resumed: bool = False
     exclude_up_to_seq: int = 0
+    _committed: bool = field(default=False, repr=False)
+    _provisional: bool = field(default=False, repr=False)
+    _aborted: bool = field(default=False, repr=False)
     # P9B: the last committed logical (provider, model) of the
     # conversation (the continuation anchor) at the time this turn began.
     anchor_provider: Optional[str] = None
@@ -180,7 +192,7 @@ class TurnContext:
         if self._handoff is None:
             return {}
         try:
-            return self._handoff.commit(
+            result = self._handoff.commit(
                 self,
                 provider=provider,
                 model=model,
@@ -190,6 +202,10 @@ class TurnContext:
                 latency_ms=latency_ms,
                 task=task,
             )
+            if result:
+                self._committed = True
+                self._provisional = outcome == "denied"
+            return result
         except Exception:  # noqa: BLE001 - continuity never breaks chat
             return {}
 
@@ -211,15 +227,36 @@ class TurnContext:
         if self._handoff is None:
             return {}
         try:
-            return self._handoff.update(
+            result = self._handoff.update(
                 self,
                 outcome=outcome,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 latency_ms=latency_ms,
             )
+            if result:
+                self._committed = True
+                self._provisional = False
+            return result
         except Exception:  # noqa: BLE001 - continuity never breaks chat
             return {}
+
+    def abort(self) -> None:
+        """End an uncommitted/cancelled turn and clear its recovery token.
+
+        A streaming provisional commit is finalized as failed when an
+        outer lifecycle finally-block reaches this method. A turn that did
+        not reach a durable commit only clears its process-local pending
+        token and recovery state; it never pretends the turn succeeded.
+        """
+        if self._handoff is None or self._aborted:
+            return
+        try:
+            self._handoff.abort(self)
+        except Exception:  # noqa: BLE001 - continuity never breaks chat
+            pass
+        finally:
+            self._aborted = True
 
     def inject_message(self, message: str) -> str:
         """Prepend the rendered envelope when one is available."""
@@ -391,6 +428,7 @@ class HandoffCoordinator:
         model_chain_cap: int = 8,
         window_seconds: float = 600.0,
         max_in_memory_states: int = _MAX_IN_MEMORY_STATES,
+        max_in_memory_turns: int = _MAX_IN_MEMORY_TURNS,
     ) -> None:
         from app.core.config import settings
 
@@ -418,6 +456,7 @@ class HandoffCoordinator:
         self._model_chain_cap = max(1, int(model_chain_cap))
         self._window_seconds = max(1.0, float(window_seconds))
         self._max_states = max(1, int(max_in_memory_states))
+        self._max_turns = max(1, int(max_in_memory_turns))
         self._states: "OrderedDict[Tuple[str, str], _ConversationState]" = (
             OrderedDict()
         )
@@ -568,7 +607,9 @@ class HandoffCoordinator:
             turn.resume_token = self._recovery.issue_resume_token(
                 cid, state.key_id
             )
-            state.pending_resume_hash = self._recovery.pending_token_hash(cid)
+            state.pending_resume_hash = self._recovery.pending_token_hash(
+                cid, state.key_id
+            )
             if turn.resume_token:
                 turn.events.append(
                     {
@@ -576,7 +617,7 @@ class HandoffCoordinator:
                         "conversation_id": state.conversation_id,
                     }
                 )
-            self._recovery.on_turn_started(cid)
+            self._recovery.on_turn_started(cid, state.key_id)
 
         # Resume-with-context: assemble the envelope from prior committed
         # turns so the first candidate already carries the context.
@@ -747,6 +788,7 @@ class HandoffCoordinator:
                 "ts": time.time(),
             }
             state.committed_turns.append(record)
+            self._compact_state(state)
             self._remember_model(state, turn, model)
             self._touch(state)
 
@@ -785,6 +827,8 @@ class HandoffCoordinator:
             )
 
         relay_metrics.continuity_turns_committed.inc()
+        turn._committed = True
+        turn._provisional = outcome == "denied"
         return dict(record)
 
     def update(
@@ -849,7 +893,26 @@ class HandoffCoordinator:
                 state.conversation_id, state.key_id
             )
 
+        turn._committed = True
+        turn._provisional = False
         return dict(record)
+
+    def abort(self, turn: TurnContext) -> None:
+        """Release recovery state for a turn that did not complete.
+
+        Provisional streaming turns are converted to a failed update so the
+        already-enqueued durable row remains accounted for. Uncommitted
+        turns only need their pending resume token removed.
+        """
+        if getattr(turn, "_provisional", False):
+            if self.update(turn, outcome="failed"):
+                return
+        if getattr(turn, "_committed", False):
+            return
+        if self._recovery is not None:
+            self._recovery.on_turn_aborted(
+                turn.conversation_id, turn.key_id
+            )
 
     # ------------------------- P9B anchor + transitions -------------------------
 
@@ -1034,6 +1097,23 @@ class HandoffCoordinator:
             )
             return envelope
 
+        if state.rolling_summary is not None:
+            envelope["summary"] = dict(state.rolling_summary)
+            envelope["summary_version"] = state.rolling_summary.get(
+                "version", SUMMARY_VERSION
+            )
+            envelope["tail"] = self._manager.serialize_tail(turns)
+            consumed = self._manager.estimate_tokens(
+                str(envelope.get("tail") or "")
+            )
+            consumed += int(
+                state.rolling_summary.get("tokens_out") or 0
+            )
+            envelope["token_budget_remaining"] = max(
+                0, (state.token_budget or 0) - consumed
+            )
+            return envelope
+
         tail = self._manager.serialize_tail(turns)
         estimate = self._manager.estimate_tokens(tail)
         usable = max(
@@ -1131,6 +1211,63 @@ class HandoffCoordinator:
         state.model_chain.append(model)
         state.model_chain = state.model_chain[-self._model_chain_cap:]
         turn.model_chain = list(state.model_chain)
+
+    def _compact_state(self, state: _ConversationState) -> None:
+        """Bound the in-memory turn history without dropping context.
+
+        The older region is converted to the same bounded metadata summary
+        used by normal envelope compaction. A previous rolling summary is
+        merged with the new extractive summary and truncated to the existing
+        configured summary budget, so the operation is deterministic and
+        cannot grow with conversation length.
+        """
+        if len(state.committed_turns) <= self._max_turns:
+            return
+
+        result = self._manager.compact(
+            list(state.committed_turns),
+            reason=CompactionReason.PREFLIGHT.value,
+            params={"tail_max_items": self._max_turns},
+            now=time.time(),
+        )
+        state.committed_turns = list(result.tail)
+        if len(state.committed_turns) > self._max_turns:
+            state.committed_turns = state.committed_turns[-self._max_turns :]
+        if result.summary is None:
+            return
+
+        summary = result.summary.to_dict()
+        previous = state.rolling_summary
+        if previous is not None:
+            previous_text = str(previous.get("summary_text") or "").strip()
+            current_text = str(summary.get("summary_text") or "").strip()
+            combined = "\n".join(
+                part for part in (previous_text, current_text) if part
+            )
+            limit = max(1, int(self._manager.summary_max_chars))
+            if len(combined) > limit:
+                suffix = "...(rolling summary truncated)"
+                combined = combined[: max(1, limit - len(suffix))].rstrip()
+                combined += suffix
+            summary["summary_text"] = combined
+            summary["up_to_seq"] = max(
+                int(previous.get("up_to_seq") or 0),
+                int(summary.get("up_to_seq") or 0),
+            )
+            summary["tokens_out"] = self._manager.estimate_tokens(combined)
+
+        state.rolling_summary = summary
+        self._enqueue(
+            "summary.record",
+            conversation_id=state.conversation_id,
+            key_id=state.key_id,
+            up_to_seq=summary.get("up_to_seq"),
+            version=summary.get("version", SUMMARY_VERSION),
+            method=summary.get("method", "extractive"),
+            content=summary.get("summary_text") or "",
+            tokens_in=summary.get("tokens_in"),
+            tokens_out=summary.get("tokens_out"),
+        )
 
     def _prune_window(self, state: _ConversationState, now: float) -> None:
         cutoff = now - self._window_seconds

@@ -265,6 +265,7 @@ class ChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result
@@ -479,6 +480,7 @@ class ChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result
@@ -658,6 +660,7 @@ class ChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result
@@ -882,6 +885,7 @@ class ChatService:
         }
 
         if turn is not None:
+            turn.abort()
             turn.attach(result)
 
         return result

@@ -47,6 +47,7 @@ import logging
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from typing import Optional
 
 from app.models.continuity import RecoveryState
@@ -61,6 +62,12 @@ _SCAN_LIMIT = 5000
 
 # Bounded number of anomaly entries surfaced in a reconcile report.
 _REPORT_ANOMALY_CAP = 100
+# Pending resume hashes are process-local and derived. A client that keeps
+# starting abandoned conversations must not be able to grow this map without
+# bound; eviction makes the corresponding token invalid rather than retaining
+# unbounded sensitive bookkeeping.
+_MAX_PENDING_TOKENS = 4096
+_MAX_RECOVERY_STATES = 4096
 
 
 class ContinuityRecovery:
@@ -78,6 +85,8 @@ class ContinuityRecovery:
         *,
         max_resume_replays: Optional[int] = None,
         scan_limit: int = _SCAN_LIMIT,
+        max_pending_tokens: int = _MAX_PENDING_TOKENS,
+        max_in_memory_states: int = _MAX_RECOVERY_STATES,
     ) -> None:
         from app.core.config import settings
 
@@ -91,11 +100,15 @@ class ContinuityRecovery:
             ),
         )
         self._scan_limit = max(1, int(scan_limit))
+        self._max_pending_tokens = max(1, int(max_pending_tokens))
+        self._max_states = max(1, int(max_in_memory_states))
         self._lock = threading.Lock()
         # conversation_id -> RecoveryState (derived, process-local).
-        self._states: dict = {}
-        # conversation_id -> latest issued-but-uncommitted token hash.
-        self._pending_tokens: dict = {}
+        self._states: "OrderedDict[str, RecoveryState]" = OrderedDict()
+        # (key_id, conversation_id) -> latest issued-but-uncommitted token
+        # hash. The key scope prevents one authenticated client from
+        # replacing another client's in-memory token state.
+        self._pending_tokens: "OrderedDict[tuple, str]" = OrderedDict()
 
     # ------------------------- state machine -------------------------
 
@@ -112,12 +125,14 @@ class ContinuityRecovery:
         },
         RecoveryState.INTERRUPTED: {
             "turn_committed": RecoveryState.ACTIVE,
+            "turn_aborted": RecoveryState.ACTIVE,
             "resume_valid": RecoveryState.RECOVERY_IN_PROGRESS,
             "resume_denied": RecoveryState.FAILED_RECOVERY,
             "archive": RecoveryState.ARCHIVED,
         },
         RecoveryState.RECOVERABLE: {
             "resume_valid": RecoveryState.RECOVERY_IN_PROGRESS,
+            "turn_aborted": RecoveryState.ACTIVE,
             "resume_denied": RecoveryState.FAILED_RECOVERY,
             "turn_start": RecoveryState.ACTIVE,
             "turn_committed": RecoveryState.ACTIVE,
@@ -125,6 +140,7 @@ class ContinuityRecovery:
         },
         RecoveryState.RECOVERY_IN_PROGRESS: {
             "turn_committed": RecoveryState.RECOVERED,
+            "turn_aborted": RecoveryState.RECOVERABLE,
             "archive": RecoveryState.ARCHIVED,
         },
         RecoveryState.RECOVERED: {
@@ -134,6 +150,7 @@ class ContinuityRecovery:
         },
         RecoveryState.FAILED_RECOVERY: {
             "resume_valid": RecoveryState.RECOVERY_IN_PROGRESS,
+            "turn_aborted": RecoveryState.ACTIVE,
             "turn_start": RecoveryState.ACTIVE,
             "turn_committed": RecoveryState.ACTIVE,
             "archive": RecoveryState.ARCHIVED,
@@ -146,9 +163,10 @@ class ContinuityRecovery:
         if not conversation_id:
             return RecoveryState.ACTIVE.value
         with self._lock:
-            return self._states.get(
-                conversation_id, RecoveryState.ACTIVE
-            ).value
+            current = self._states.get(conversation_id, RecoveryState.ACTIVE)
+            if conversation_id in self._states:
+                self._states.move_to_end(conversation_id)
+            return current.value
 
     def transition(
         self, conversation_id: str, event: str
@@ -168,7 +186,19 @@ class ContinuityRecovery:
             if next_state is None:
                 return current.value
             self._states[conversation_id] = next_state
+            self._states.move_to_end(conversation_id)
+            while len(self._states) > self._max_states:
+                self._states.popitem(last=False)
             return next_state.value
+
+    def _set_reconciled_state_locked(
+        self, conversation_id: str, state: RecoveryState
+    ) -> None:
+        """Store one reconciled state while preserving the process bound."""
+        self._states[conversation_id] = state
+        self._states.move_to_end(conversation_id)
+        while len(self._states) > self._max_states:
+            self._states.popitem(last=False)
 
     def on_archive(self, conversation_id: str) -> None:
         """Record an archive event (diagnostics only)."""
@@ -190,19 +220,47 @@ class ContinuityRecovery:
             return None
         raw = uuid.uuid4().hex
         token_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        identity = (str(key_id or ""), conversation_id)
         with self._lock:
-            self._pending_tokens[conversation_id] = token_hash
+            self._pending_tokens[identity] = token_hash
+            self._pending_tokens.move_to_end(identity)
+            while len(self._pending_tokens) > self._max_pending_tokens:
+                self._pending_tokens.popitem(last=False)
         # A new issuance ends the previous token's lifecycle: reset its
         # durable replay budget (best-effort, never raises).
         self._clear_replay_best_effort(conversation_id, key_id)
         return raw
 
-    def pending_token_hash(self, conversation_id: str) -> Optional[str]:
+    def pending_token_hash(
+        self, conversation_id: str, key_id: Optional[str] = None
+    ) -> Optional[str]:
         """Hash of the latest issued-but-uncommitted token (for commit)."""
         if not conversation_id:
             return None
         with self._lock:
-            return self._pending_tokens.get(conversation_id)
+            if key_id is not None:
+                identity = (str(key_id or ""), conversation_id)
+                value = self._pending_tokens.get(identity)
+                if value is not None:
+                    self._pending_tokens.move_to_end(identity)
+                return value
+            for identity in reversed(self._pending_tokens):
+                if identity[1] == conversation_id:
+                    self._pending_tokens.move_to_end(identity)
+                    return self._pending_tokens[identity]
+        return None
+
+    def _clear_pending_locked(
+        self, conversation_id: str, key_id: Optional[str] = None
+    ) -> None:
+        if key_id is not None:
+            self._pending_tokens.pop(
+                (str(key_id or ""), conversation_id), None
+            )
+            return
+        for identity in list(self._pending_tokens):
+            if identity[1] == conversation_id:
+                self._pending_tokens.pop(identity, None)
 
     def _clear_replay_best_effort(
         self, conversation_id: str, key_id: Optional[str] = None
@@ -444,7 +502,9 @@ class ContinuityRecovery:
 
     # ------------------------- coordinator events -------------------------
 
-    def on_turn_started(self, conversation_id: str) -> None:
+    def on_turn_started(
+        self, conversation_id: str, key_id: Optional[str] = None
+    ) -> None:
         """A new turn began (in-memory in-flight marker, S4d)."""
         self.transition(conversation_id, "turn_start")
 
@@ -461,8 +521,23 @@ class ContinuityRecovery:
         if not conversation_id:
             return
         with self._lock:
-            self._pending_tokens.pop(conversation_id, None)
+            self._clear_pending_locked(conversation_id, key_id)
         self._clear_replay_best_effort(conversation_id, key_id)
+
+    def on_turn_aborted(
+        self, conversation_id: str, key_id: Optional[str] = None
+    ) -> None:
+        """Clear process-local recovery state for a cancelled turn.
+
+        Cancellation is not a successful commit. It must nevertheless end
+        the interrupted state transition and invalidate the uncommitted
+        token so abandoned requests cannot accumulate pending hashes.
+        """
+        if not conversation_id:
+            return
+        with self._lock:
+            self._clear_pending_locked(conversation_id, key_id)
+        self.transition(conversation_id, "turn_aborted")
 
     # ------------------------- reconcile -------------------------
 
@@ -539,11 +614,15 @@ class ContinuityRecovery:
                     last = None
                 if last and last.get("resume_token_hash"):
                     with self._lock:
-                        self._states[cid] = RecoveryState.RECOVERABLE
+                        self._set_reconciled_state_locked(
+                            cid, RecoveryState.RECOVERABLE
+                        )
                     report["recoverable"] += 1
                     continue
             with self._lock:
-                self._states[cid] = RecoveryState.ACTIVE
+                self._set_reconciled_state_locked(
+                    cid, RecoveryState.ACTIVE
+                )
 
         relay_metrics.continuity_reconciliations.inc()
         self._emit_reconcile_audit(report)
