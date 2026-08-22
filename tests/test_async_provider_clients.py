@@ -740,11 +740,12 @@ class TestAnthropicAsync:
 
 class TestGeminiAsync:
     @pytest.mark.asyncio
-    async def test_achat_embeds_key_in_url_and_returns_text(self, monkeypatch):
+    async def test_achat_sends_key_in_header_and_returns_text(self, monkeypatch):
         seen = {}
 
         def handler(request):
             seen["url"] = request_url(request)
+            seen["headers"] = dict(request.headers)
             seen["json"] = request_json(request)
             return httpx.Response(
                 200,
@@ -761,7 +762,9 @@ class TestGeminiAsync:
         result = await GeminiClient().achat(make_provider(), "m", "hi")
 
         assert result == "Hello Gemini"
-        assert ":generateContent?key=sk-test" in seen["url"]
+        assert ":generateContent" in seen["url"]
+        assert "?key=" not in seen["url"]
+        assert seen["headers"]["x-goog-api-key"] == "sk-test"
         assert "models/m:generateContent" in seen["url"]
         assert seen["json"]["contents"][0]["parts"] == [{"text": "hi"}]
 
@@ -771,6 +774,7 @@ class TestGeminiAsync:
 
         def handler(request):
             seen["url"] = request_url(request)
+            seen["headers"] = dict(request.headers)
             return httpx.Response(
                 200,
                 json={"candidates": [{"content": {"parts": [{"text": "x"}]}}]},
@@ -851,6 +855,7 @@ class TestGeminiAsync:
 
         def handler(request):
             seen["url"] = request_url(request)
+            seen["headers"] = dict(request.headers)
             return httpx.Response(
                 200,
                 text=(
@@ -866,7 +871,9 @@ class TestGeminiAsync:
         chunks = [chunk async for chunk in stream]
 
         assert chunks == ["Hel", "lo"]
-        assert ":streamGenerateContent?alt=sse&key=sk-test" in seen["url"]
+        assert ":streamGenerateContent?alt=sse" in seen["url"]
+        assert "?key=" not in seen["url"]
+        assert seen["headers"]["x-goog-api-key"] == "sk-test"
 
     @pytest.mark.asyncio
     async def test_achat_stream_skips_empty_chunks(self, monkeypatch):

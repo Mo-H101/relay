@@ -598,8 +598,9 @@ class TestAuth:
         elif auth == "x-api-key":
             assert headers.get("x-api-key") == "sk-test"
             assert "Authorization" not in headers
-        elif auth == "query":
-            assert "key=sk-test" in recorder.requests[0]["url"]
+        elif auth == "x-goog-api-key":
+            assert headers.get("x-goog-api-key") == "sk-test"
+            assert "key=sk-test" not in recorder.requests[0]["url"]
             assert "Authorization" not in headers
         else:
             assert "Authorization" not in headers

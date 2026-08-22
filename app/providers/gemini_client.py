@@ -9,9 +9,8 @@ wire format, streaming variants via ``:streamGenerateContent?alt=sse``,
 model listing, probes, proxy support, and a connectivity probe used by the
 health checker.
 
-The API key is passed as a query parameter (``key=...``) per the Gemini
-REST convention, and model ids are URL-quoted. Error bodies are bounded
-and redacted.
+The API key is sent in the ``x-goog-api-key`` header. Model ids are
+URL-quoted and credentials never enter request URLs.
 """
 
 import json
@@ -569,24 +568,27 @@ class GeminiClient:
     def __init__(self) -> None:
         self.name = "Google Gemini"
 
-    def _headers(self) -> dict:
-        return {
+    def _headers(self, provider=None) -> dict:
+        headers = {
             "Content-Type": "application/json",
         }
+        if provider is not None and provider.has_api_key():
+            headers["x-goog-api-key"] = provider.api_key
+        return headers
 
     def _model_list_url(self, provider) -> str:
-        return f"{provider.base_url}/models?key={provider.api_key}"
+        return f"{provider.base_url}/models"
 
     def _generate_url(self, provider, model: str) -> str:
         return (
             f"{provider.base_url}/models/{quote(model, safe='')}"
-            f":generateContent?key={provider.api_key}"
+            ":generateContent"
         )
 
     def _stream_url(self, provider, model: str) -> str:
         return (
             f"{provider.base_url}/models/{quote(model, safe='')}"
-            f":streamGenerateContent?alt=sse&key={provider.api_key}"
+            ":streamGenerateContent?alt=sse"
         )
 
     def proxy_request_kwargs(self, provider, url: str) -> dict:
@@ -597,19 +599,19 @@ class GeminiClient:
 
     def connectivity_probe(self, provider) -> tuple:
         """
-        Probe provider connectivity using the ``?key=`` query convention.
+        Probe provider connectivity without putting the API key in the URL.
 
         Returns ``(ok, details, latency_ms)`` for the health checker.
         """
         url = (
             f"{provider.base_url.rstrip('/')}{provider.health_endpoint}"
-            f"?key={provider.api_key}"
         )
         start = time.perf_counter()
 
         try:
             response = httpx.get(
                 url,
+                headers=self._headers(provider),
                 timeout=10,
                 **proxy_request_kwargs(provider, url),
             )
@@ -631,6 +633,7 @@ class GeminiClient:
         try:
             response = httpx.get(
                 url,
+                headers=self._headers(provider),
                 timeout=30,
                 **proxy_request_kwargs(provider, url),
             )
@@ -663,6 +666,7 @@ class GeminiClient:
         try:
             response = httpx.get(
                 url,
+                headers=self._headers(provider),
                 timeout=30,
                 **proxy_request_kwargs(provider, url),
             )
@@ -687,6 +691,7 @@ class GeminiClient:
         try:
             response = httpx.post(
                 url,
+                headers=self._headers(provider),
                 json=payload,
                 timeout=10,
                 **proxy_request_kwargs(provider, url),
@@ -752,7 +757,7 @@ class GeminiClient:
         try:
             response = httpx.post(
                 url,
-                headers=self._headers(),
+                headers=self._headers(provider),
                 json=payload,
                 timeout=settings.request_timeout,
                 **proxy_request_kwargs(provider, url),
@@ -827,7 +832,7 @@ class GeminiClient:
         try:
             response = httpx.post(
                 url,
-                headers=self._headers(),
+                headers=self._headers(provider),
                 json=body,
                 timeout=settings.request_timeout,
                 **proxy_request_kwargs(provider, url),
@@ -924,7 +929,7 @@ class GeminiClient:
             with httpx.stream(
                 "POST",
                 url,
-                headers=self._headers(),
+                headers=self._headers(provider),
                 json=payload,
                 timeout=settings.request_timeout,
                 **proxy_request_kwargs(provider, url),
@@ -1017,7 +1022,7 @@ class GeminiClient:
             with httpx.stream(
                 "POST",
                 url,
-                headers=self._headers(),
+                headers=self._headers(provider),
                 json=body,
                 timeout=settings.request_timeout,
                 **proxy_request_kwargs(provider, url),
@@ -1120,7 +1125,7 @@ class GeminiClient:
             ) as client:
                 response = await client.post(
                     url,
-                    headers=self._headers(),
+                    headers=self._headers(provider),
                     json=payload,
                     timeout=settings.request_timeout,
                 )
@@ -1213,7 +1218,7 @@ class GeminiClient:
                 async with client.stream(
                     "POST",
                     url,
-                    headers=self._headers(),
+                    headers=self._headers(provider),
                     json=payload,
                     timeout=settings.request_timeout,
                 ) as response:
@@ -1302,7 +1307,7 @@ class GeminiClient:
             ) as client:
                 response = await client.post(
                     url,
-                    headers=self._headers(),
+                    headers=self._headers(provider),
                     json=body,
                     timeout=settings.request_timeout,
                 )
@@ -1388,7 +1393,7 @@ class GeminiClient:
                 async with client.stream(
                     "POST",
                     url,
-                    headers=self._headers(),
+                    headers=self._headers(provider),
                     json=body,
                     timeout=settings.request_timeout,
                 ) as response:
@@ -1462,7 +1467,11 @@ class GeminiClient:
             async with httpx.AsyncClient(
                 **proxy_request_kwargs(provider, url)
             ) as client:
-                response = await client.get(url, timeout=30)
+                response = await client.get(
+                    url,
+                    headers=self._headers(provider),
+                    timeout=30,
+                )
         except httpx.TimeoutException as exc:
             raise ProviderTimeout(
                 f"{self.name} model discovery timed out."
@@ -1496,7 +1505,10 @@ class GeminiClient:
                 **proxy_request_kwargs(provider, url)
             ) as client:
                 response = await client.post(
-                    url, json=payload, timeout=10
+                    url,
+                    headers=self._headers(provider),
+                    json=payload,
+                    timeout=10,
                 )
         except httpx.TimeoutException as exc:
             return ModelProbe(

@@ -379,7 +379,8 @@ GEMINI_WIRE = "gemini"
 # Capability matrix, keyed by registry provider id.
 #
 #   wire                 : wire family implementing the surface
-#   auth                 : credential convention (bearer | x-api-key | query | none)
+#   auth                 : credential convention (bearer | x-api-key |
+#                          x-goog-api-key | none)
 #   tools                : tool-call round-trip supported on chat/chat_messages
 #   stream_usage         : streamed chunks carry a terminal usage chunk
 #   check_model          : client exposes the check_model() shortcut
@@ -457,7 +458,7 @@ PROVIDER_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     },
     "gemini": {
         "wire": GEMINI_WIRE,
-        "auth": "query",
+        "auth": "x-goog-api-key",
         "tools": True,
         "stream_usage": True,
         "check_model": False,

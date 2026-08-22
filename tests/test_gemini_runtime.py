@@ -238,7 +238,7 @@ class TestConfig:
 
 
 class TestAuth:
-    def test_chat_sends_key_in_query(self, monkeypatch):
+    def test_chat_sends_key_in_header(self, monkeypatch):
         recorded = {}
         patch_post(
             monkeypatch,
@@ -251,13 +251,14 @@ class TestAuth:
 
         GeminiClient().chat(make_provider(), "m", "hi")
 
-        assert recorded["url"].endswith(":generateContent?key=sk-test")
+        assert recorded["url"].endswith(":generateContent")
         headers = recorded["headers"]
         assert headers["Content-Type"] == "application/json"
+        assert headers["x-goog-api-key"] == "sk-test"
         assert "Authorization" not in headers
         assert "x-api-key" not in headers
 
-    def test_chat_messages_sends_key_in_query(self, monkeypatch):
+    def test_chat_messages_sends_key_in_header(self, monkeypatch):
         recorded = {}
         patch_post(
             monkeypatch,
@@ -272,13 +273,14 @@ class TestAuth:
             make_provider(), {"model": "m", "messages": []}
         )
 
-        assert recorded["url"].endswith(":generateContent?key=sk-test")
+        assert recorded["url"].endswith(":generateContent")
         headers = recorded["headers"]
         assert headers["Content-Type"] == "application/json"
+        assert headers["x-goog-api-key"] == "sk-test"
         assert "Authorization" not in headers
         assert "x-api-key" not in headers
 
-    def test_list_models_sends_key_in_query(self, monkeypatch):
+    def test_list_models_sends_key_in_header(self, monkeypatch):
         recorded = {}
         patch_get(
             monkeypatch,
@@ -291,8 +293,9 @@ class TestAuth:
         assert (
             recorded["url"]
             == "https://generativelanguage.googleapis.com/v1beta"
-            "/models?key=sk-test"
+            "/models"
         )
+        assert recorded["headers"]["x-goog-api-key"] == "sk-test"
 
 
 class TestChatSync:
@@ -321,7 +324,7 @@ class TestChatSync:
         result = GeminiClient().chat(make_provider(), "m", "hi")
 
         assert result == "Hello world"
-        assert recorded["url"].endswith(":generateContent?key=sk-test")
+        assert recorded["url"].endswith(":generateContent")
         assert recorded["json"]["contents"] == [
             {"role": "user", "parts": [{"text": "hi"}]}
         ]
@@ -402,9 +405,7 @@ class TestChatSync:
         )
 
         assert chunks == ["Hel", "lo"]
-        assert (
-            ":streamGenerateContent?alt=sse&key=sk-test" in recorded["url"]
-        )
+        assert ":streamGenerateContent?alt=sse" in recorded["url"]
         assert recorded["json"]["contents"] == [
             {"role": "user", "parts": [{"text": "hi"}]}
         ]
@@ -648,9 +649,7 @@ class TestStreamMessagesSync:
             )
         )
 
-        assert (
-            ":streamGenerateContent?alt=sse&key=sk-test" in recorded["url"]
-        )
+        assert ":streamGenerateContent?alt=sse" in recorded["url"]
         assert chunks[0]["choices"][0]["delta"]["content"] == "Hel"
         assert chunks[1]["choices"][0]["delta"]["content"] == "lo"
         finish = chunks[2]
@@ -763,7 +762,7 @@ class TestProxySupport:
         provider = make_provider()
         url = (
             "https://generativelanguage.googleapis.com/v1beta"
-            "/models/gemini-pro:generateContent?key=sk-test"
+            "/models/gemini-pro:generateContent"
         )
 
         assert (
@@ -835,7 +834,7 @@ class TestAsyncSurface:
         assert (
             seen["url"]
             == "https://generativelanguage.googleapis.com/v1beta"
-            "/models/m:generateContent?key=sk-test"
+            "/models/m:generateContent"
         )
         assert seen["json"]["contents"] == [
             {"role": "user", "parts": [{"text": "hi"}]}
@@ -867,9 +866,7 @@ class TestAsyncSurface:
         )
         chunks = [chunk async for chunk in stream]
 
-        assert (
-            ":streamGenerateContent?alt=sse&key=sk-test" in seen["url"]
-        )
+        assert ":streamGenerateContent?alt=sse" in seen["url"]
         assert chunks[0]["choices"][0]["delta"]["content"] == "Hel"
         assert chunks[1]["choices"][0]["delta"]["content"] == "lo"
         assert chunks[2]["choices"][0]["finish_reason"] == "stop"
@@ -954,11 +951,12 @@ class TestAsyncSurface:
 
 
 class TestHealthCheck:
-    def test_health_check_healthy_with_query_key(self, monkeypatch):
+    def test_health_check_healthy_with_header_key(self, monkeypatch):
         recorded = {}
 
         def get_handler(url, **kwargs):
             recorded["url"] = url
+            recorded["headers"] = kwargs.get("headers", {})
             return httpx.Response(
                 200,
                 json={"models": [{"name": "models/gemini-pro"}]},
@@ -986,8 +984,9 @@ class TestHealthCheck:
         assert (
             recorded["url"]
             == "https://generativelanguage.googleapis.com/v1beta"
-            "/models?key=sk-test"
+            "/models"
         )
+        assert recorded["headers"]["x-goog-api-key"] == "sk-test"
 
     def test_health_check_unavailable_when_connection_refused(
         self, monkeypatch
@@ -1029,7 +1028,7 @@ class TestHealthCheck:
 
 
 class TestConnectivityProbe:
-    def test_probe_returns_tuple_with_query_key(self, monkeypatch):
+    def test_probe_returns_tuple_with_header_key(self, monkeypatch):
         recorded = {}
 
         def get_handler(url, **kwargs):
@@ -1053,8 +1052,9 @@ class TestConnectivityProbe:
         assert (
             recorded["url"]
             == "https://generativelanguage.googleapis.com/v1beta"
-            "/models?key=sk-test"
+            "/models"
         )
+        assert recorded["headers"]["x-goog-api-key"] == "sk-test"
         assert "Authorization" not in recorded["headers"]
 
 
