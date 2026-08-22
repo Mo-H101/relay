@@ -372,6 +372,10 @@ def test_parse_value_matches_settings(monkeypatch, env, raw, attr, expected):
         ("HEALTH_FRESHNESS_EXPONENT", "nan"),
         ("SCORING_PRIORITY_DENOM", "0"),
         ("LMSTUDIO_BASE_URL", "ftp://bad"),
+        ("ANTHROPIC_BASE_URL", "http://user:password@example.invalid/v1"),
+        ("GEMINI_BASE_URL", "https:///missing-host"),
+        ("OLLAMA_BASE_URL", "http://localhost:11434?token=secret"),
+        ("LMSTUDIO_BASE_URL", "http://[invalid/v1"),
         ("RELAY_PORT", "not-a-port"),
     ],
 )

@@ -410,7 +410,7 @@ _RAW_SPECS = (
               "Load the Anthropic provider at runtime.", "providers"),
     _provider("ANTHROPIC_API_KEY", "anthropic_api_key", "str", "",
               "Anthropic provider API key.", "providers", secret=True),
-    _restart("ANTHROPIC_BASE_URL", "anthropic_base_url", "str",
+    _restart("ANTHROPIC_BASE_URL", "anthropic_base_url", "url",
              "https://api.anthropic.com/v1",
              "Anthropic API base URL.", "providers", provider=True),
     _provider("ANTHROPIC_MODEL_PRIORITY", "anthropic_model_priority", "csv",
@@ -421,7 +421,7 @@ _RAW_SPECS = (
               "Load the Gemini provider at runtime.", "providers"),
     _provider("GEMINI_API_KEY", "gemini_api_key", "str", "",
               "Gemini provider API key.", "providers", secret=True),
-    _restart("GEMINI_BASE_URL", "gemini_base_url", "str",
+    _restart("GEMINI_BASE_URL", "gemini_base_url", "url",
              "https://generativelanguage.googleapis.com/v1beta",
              "Gemini API base URL.", "providers", provider=True),
     _provider("GEMINI_MODEL_PRIORITY", "gemini_model_priority", "csv", [],
@@ -442,7 +442,7 @@ _RAW_SPECS = (
               "LM Studio model priority order.", "providers"),
 
     # ---------------------------------------------------------------- Ollama
-    _restart("OLLAMA_BASE_URL", "ollama_base_url", "str",
+    _restart("OLLAMA_BASE_URL", "ollama_base_url", "url",
              "http://localhost:11434",
              "Ollama server base URL.", "providers", provider=True),
     _provider("OLLAMA_ENABLED", "ollama_enabled", "bool", False,

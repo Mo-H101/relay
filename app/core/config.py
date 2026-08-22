@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import List
 import math
 import os
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -196,16 +197,40 @@ def _valid_float(
 
 def _valid_url(name: str, raw: str, default: str) -> str:
     """
-    Parse an HTTP(S) base URL, rejecting other schemes with a clear
-    message. A trailing slash is stripped so endpoints can be built with
-    "/<path>" safely.
+    Parse a safe HTTP(S) base URL. Credentials, query strings, fragments,
+    missing hosts, malformed ports, and control characters are rejected so
+    provider endpoints cannot accidentally carry secrets or ambiguous URL
+    state. A trailing slash is stripped so endpoints can be built with
+    "/<path>" safely. Localhost and private-network hosts remain valid for
+    explicitly configured local providers.
     """
     value = (raw or default).strip()
 
-    if not value.startswith(("http://", "https://")):
+    parsed = None
+    hostname = None
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError:
+        pass
+
+    invalid = (
+        parsed is None
+        or parsed.scheme.lower() not in ("http", "https")
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or bool(parsed.query)
+        or bool(parsed.fragment)
+        or any(ord(char) < 32 for char in value)
+    )
+
+    if invalid:
         raise ValueError(
-            f"Invalid value for {name}: {value!r} "
-            "(must start with http:// or https://)."
+            f"Invalid value for {name}: "
+            "(must be an HTTP(S) URL with a host and no credentials, "
+            "query, or fragment)."
         )
 
     return value.rstrip("/")
@@ -335,8 +360,9 @@ class Settings:
         self.anthropic_enabled = (
             os.getenv("ANTHROPIC_ENABLED", "false").lower() == "true"
         )
-        self.anthropic_base_url = os.getenv(
+        self.anthropic_base_url = _valid_url(
             "ANTHROPIC_BASE_URL",
+            os.getenv("ANTHROPIC_BASE_URL", ""),
             "https://api.anthropic.com/v1",
         )
         self.anthropic_model_priority = _csv(
@@ -351,8 +377,9 @@ class Settings:
         self.gemini_enabled = (
             os.getenv("GEMINI_ENABLED", "false").lower() == "true"
         )
-        self.gemini_base_url = os.getenv(
+        self.gemini_base_url = _valid_url(
             "GEMINI_BASE_URL",
+            os.getenv("GEMINI_BASE_URL", ""),
             "https://generativelanguage.googleapis.com/v1beta",
         )
         self.gemini_model_priority = _csv(
@@ -381,8 +408,9 @@ class Settings:
             os.getenv("LMSTUDIO_MODEL_PRIORITY", "")
         )
 
-        self.ollama_base_url = os.getenv(
+        self.ollama_base_url = _valid_url(
             "OLLAMA_BASE_URL",
+            os.getenv("OLLAMA_BASE_URL", ""),
             "http://localhost:11434",
         )
         self.ollama_enabled = (
