@@ -1,5 +1,12 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import Iterable, List
+
+
+# A provider catalog is untrusted input. This is intentionally generous for
+# real model registries while bounding memory, routing fan-out, health probe
+# work, and /v1/models response cardinality.
+MAX_PROVIDER_MODELS = 4096
+MAX_MODEL_NAME_CHARS = 1024
 
 
 @dataclass
@@ -62,6 +69,9 @@ def apply_model_priority(
     Reorder models so priority-listed models come first.
     """
 
+    models = bound_model_catalog(models)
+    priority = bound_model_catalog(priority)
+
     if not priority:
         return models
 
@@ -78,3 +88,27 @@ def apply_model_priority(
     ]
 
     return ordered + remaining
+
+
+def bound_model_catalog(
+    models: Iterable[str] | None,
+    max_models: int = MAX_PROVIDER_MODELS,
+) -> List[str]:
+    """Return a bounded, de-duplicated catalog of safe model identifiers."""
+    if not models or max_models <= 0:
+        return []
+
+    bounded: List[str] = []
+    seen = set()
+
+    for model in models:
+        if not isinstance(model, str) or not model:
+            continue
+        if len(model) > MAX_MODEL_NAME_CHARS or model in seen:
+            continue
+        seen.add(model)
+        bounded.append(model)
+        if len(bounded) >= max_models:
+            break
+
+    return bounded

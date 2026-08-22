@@ -1,7 +1,7 @@
 from threading import RLock
 from typing import Dict, List
 
-from app.providers.base import Provider
+from app.providers.base import Provider, bound_model_catalog
 from app.providers.registry import PROVIDER_REGISTRY
 from app.services.failure_classifier import FailureKind
 
@@ -36,6 +36,10 @@ class ProviderManager:
         Register a provider under its stable identity.
         """
         with self._lock:
+            provider.models = bound_model_catalog(provider.models)
+            provider.priority_models = bound_model_catalog(
+                provider.priority_models
+            )
             identity = provider.identity()
             self._providers[identity] = provider
             self._registration[identity] = {

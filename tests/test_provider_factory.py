@@ -14,7 +14,7 @@ import pytest
 from app.core.config import settings
 from app.providers import factory as factory_module
 from app.providers import registry as registry_module
-from app.providers.base import Provider
+from app.providers.base import MAX_PROVIDER_MODELS, Provider
 from app.providers.factory import build_runtime_provider
 from app.providers.lmstudio import create_provider as create_lmstudio_provider
 from app.providers.nvidia import create_provider as create_nvidia_provider
@@ -139,6 +139,26 @@ def test_cloud_provider_with_key_discovers_and_orders(monkeypatch):
 
     assert provider.models == ["b", "c", "a"]
     assert provider.priority_models == ["b", "c"]
+
+
+def test_factory_bounds_and_deduplicates_discovered_catalog(monkeypatch):
+    from app.providers.nvidia_client import NvidiaClient
+
+    monkeypatch.setattr(settings, "nvidia_api_key", "sk-test")
+    oversized = ["duplicate", "duplicate", None, 42, "x" * 1025]
+    oversized.extend(f"model-{index}" for index in range(MAX_PROVIDER_MODELS + 5))
+    monkeypatch.setattr(
+        NvidiaClient,
+        "list_models",
+        lambda self, provider: oversized,
+    )
+
+    provider = build_runtime_provider(PROVIDER_REGISTRY["nvidia"])
+
+    assert len(provider.models) == MAX_PROVIDER_MODELS
+    assert provider.models[0] == "duplicate"
+    assert len(set(provider.models)) == len(provider.models)
+    assert all(isinstance(model, str) for model in provider.models)
 
 
 def test_local_provider_discovers_without_key(monkeypatch):
