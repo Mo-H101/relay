@@ -142,7 +142,10 @@ def test_probe_exception_becomes_unavailable():
     )
 
     assert all(r.status == UNAVAILABLE for r in results)
-    assert all("boom" in r.error for r in results)
+    # Raw exception text must not leak into scan results (3840baf redacts
+    # provider errors behind the safe boundary).
+    assert all(r.error == "Provider request failed." for r in results)
+    assert all("boom" not in r.error for r in results)
 
 
 def test_empty_models():
