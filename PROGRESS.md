@@ -5,15 +5,18 @@ Base all work on: current code + this file + `git log --oneline -10`.
 
 ## Current state
 
-- **HEAD:** `68921c1` (`fix: remediate phase 16 release blockers`).
+- **Branch:** `master`.
+- **HEAD:** `57af339a523022ff2fc5652989c0e1d48ef5e867`
+  (`fix: reconcile provider error expectations`).
+- **origin/master:** matches HEAD.
 - **Working tree:** tracked files clean. The intentionally preserved,
   untracked context documents `OVERNIGHT_REPORT.md` and
   `PHASE_15_PROPOSAL.md` remain present.
 - **CI:** the current workflow tests Ubuntu Python 3.10/3.11/3.12/3.13,
-  Windows Python 3.12, and packaging on Ubuntu Python 3.12. Stage 1 local
-  verification covered the same runtime support contract; remote CI for
-  `68921c1` remains a separate merge-gate check.
-- **Recent history:** Phase 16 Stage 1 remediation at `68921c1`; Phase 14
+  Windows Python 3.12, and packaging on Ubuntu Python 3.12. CI run
+  `32571822641` is green across all six jobs for `57af339`.
+- **Recent history:** Phase 16 Stage 2A remediation through `57af339`;
+  Phase 16 Stage 1 remediation at `68921c1`; Phase 14
   streaming turn accounting at `8e53fd7`;
   Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
   at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
@@ -44,8 +47,8 @@ Base all work on: current code + this file + `git log --oneline -10`.
   full-suite verification passed on Python 3.10 (2771 passed, 21 skipped)
   and Python 3.12 (2772 passed, 20 skipped), with no failures.
 - **Release state:** version `1.0.0rc1`; Phase 15 Stages A–G complete;
-  Phase 16 Stage 1 R-C1/R-C2 remediation complete; `v1.0.0` is not
-  released.
+  Phase 16 Stage 1 and Stage 2A remediation complete; `v1.0.0` is not
+  released. Phase 17 has not started.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
@@ -214,8 +217,37 @@ Base all work on: current code + this file + `git log --oneline -10`.
   work. R-C2 Python 3.10 compatibility was restored by replacing the six
   `datetime.UTC` uses with `timezone.utc`; the application starts and the
   targeted/full verification passes on supported Python versions.
-  Remaining Phase 16 findings R-C3–R-C11 are intentionally deferred to a
-  later remediation stage.
+  Stage 2A subsequently addressed R-C3, R-C4, R-C6, and R-C11; the
+  remaining findings are recorded below.
+- **Phase 16 Stage 2A remediation (completed at `57af339`):**
+  - **R-C3 — authentication CPU amplification: COMPLETE** at `9196c53`.
+    Authentication now performs one KDF verification/classification scan
+    while preserving the existing key format, parameters, constant-time
+    comparison, bootstrap behavior, and revoked/expired handling.
+  - **R-C4 — request/resource admission controls: COMPLETE** at `c77ae16`.
+    Expensive chat execution paths use bounded, process-local, non-queuing
+    admission with release on success, error, cancellation, and streaming
+    cleanup. Health, liveness, and admin behavior remain unchanged.
+  - **R-C6 — provider error redaction boundary: COMPLETE** at `fe9256b`
+    and corrected at `57af339`. External and persisted surfaces receive
+    stable safe classifications rather than provider exception strings,
+    response bodies, credential-bearing URLs, prompts, or headers. The
+    fixed `No candidates to try.` Relay outcome remains safe and compatible.
+  - **R-C11 — provider registration visibility: COMPLETE** at `f302c85`.
+    Registration, disabled, initialization-failed, and discovery-failed
+    states are visible through safe structured health, diagnostics, provider,
+    and TUI surfaces while optional-provider failures remain non-fatal.
+  - **CI correction:** `f302c85` exposed seven stale R-C6 expectations in
+    the full suite. `57af339` corrected those expectations and the safe
+    `No candidates to try.` boundary behavior. CI run `32571822641` is
+    green on Ubuntu Python 3.10/3.11/3.12/3.13, Windows Python 3.12, and
+    packaging.
+  - **Verification:** local non-packaging suite `2759 passed, 20 skipped`;
+    corrected seven-test regression `7 passed`; provider/API regression
+    `45 passed`.
+- **Phase 16 findings intentionally not addressed in Stage 2A:** R-C5,
+  R-C7, R-C8, R-C9, and R-C10 remain deferred. No Phase 17 work has
+  started.
 - **Packaging-test 3.11 skip (`f93c112`):** `test_wheel_upgrade_from_previous_release`
   builds the old 0.1.0 wheel from `_PREVIOUS_RELEASE_TREE` (`dbc2902`),
   whose `metrics.py` uses pre-PEP-701 f-string syntax — un-importable on
@@ -596,8 +628,10 @@ Base all work on: current code + this file + `git log --oneline -10`.
 - **Phase 15 Stage G — Polish & final cleanup:** COMPLETED (see What is
   done).
 - **Phase 16 Stage 1 — R-C1/R-C2 remediation:** COMPLETED at `68921c1`.
-  R-C3–R-C11 remain open and must be reviewed in a later remediation stage
-  before the release gate can pass.
+- **Phase 16 Stage 2A — R-C3/R-C4/R-C6/R-C11 remediation:** COMPLETED at
+  `57af339`; CI run `32571822641` is green. R-C5, R-C7, R-C8, R-C9, and
+  R-C10 were intentionally not addressed in Stage 2A.
+- **Phase 17:** NOT STARTED.
 - **Live smoke testing:** restore valid API keys (NVIDIA key expired,
   OpenAI key quota-exhausted) and run end-to-end provider tests against
   real endpoints. This is the final validation gate before v1.0.0.
