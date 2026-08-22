@@ -16,6 +16,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Select, Static
 
 from app.ui.data import ServiceFacade, candidate_glyph, probe_glyph
+from app.services.redaction import safe_provider_error
 from app.ui.theme import theme
 from app.ui.widgets.chat_view import ChatView
 
@@ -324,7 +325,9 @@ class ChatScreen(Screen):
                 self._facade.start_random_stream, message, _progress
             )
         except Exception as exc:  # noqa: BLE001 - surface in the transcript
-            self._view().add_error(f"Chat failed: {exc}")
+            self._view().add_error(
+                f"Chat failed: {safe_provider_error(exc)}"
+            )
             self._set_busy(False)
             self._set_status("")
             return
@@ -360,7 +363,9 @@ class ChatScreen(Screen):
                 self._facade.start_stream, provider, model, message
             )
         except Exception as exc:  # noqa: BLE001 - surface in the transcript
-            self._view().add_error(f"Chat failed: {exc}")
+            self._view().add_error(
+                f"Chat failed: {safe_provider_error(exc)}"
+            )
             self._set_busy(False)
             self._set_status("")
             return
@@ -434,7 +439,7 @@ class ChatScreen(Screen):
                 )
             except Exception as exc:  # noqa: BLE001 - surface in the transcript
                 self.app.call_from_thread(
-                    self.post_message, StreamError(str(exc))
+                    self.post_message, StreamError(safe_provider_error(exc))
                 )
 
         await asyncio.to_thread(_run)
