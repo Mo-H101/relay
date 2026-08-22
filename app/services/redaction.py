@@ -66,6 +66,7 @@ _SAFE_PROVIDER_MESSAGES = {
     "auth_error": "Provider authentication failed.",
     "unknown": "Provider request failed.",
 }
+_SAFE_RESULT_MESSAGES = {"No candidates to try."}
 
 
 def safe_provider_status(status_code: int | None) -> str:
@@ -132,10 +133,20 @@ def safe_provider_error(exc=None, kind=None) -> str:
 
 def safe_provider_result_error(result: dict | None) -> str:
     """Return a safe message for a provider failure result envelope."""
-    for attempt in reversed((result or {}).get("attempts") or []):
+    result = result or {}
+    attempts = result.get("attempts") or []
+    for attempt in reversed(attempts):
         kind = attempt.get("failure_type")
         if kind:
             return safe_provider_error(kind=kind)
+
+    # This is a fixed Relay routing outcome, not provider-controlled text.
+    # Preserve it for no-candidate compatibility without returning arbitrary
+    # result error strings from an untrusted boundary.
+    error = result.get("error")
+    if not attempts and isinstance(error, str) and error in _SAFE_RESULT_MESSAGES:
+        return error
+
     return safe_provider_error()
 
 

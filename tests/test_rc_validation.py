@@ -980,12 +980,11 @@ class TestReliabilityMatrix:
         assert stats.failure_count >= 1
         assert stats.recent_failures[0].failure_type == "timeout"
 
-    def test_stream_start_error_surfaces_provider_body(
+    def test_stream_start_error_redacts_provider_body(
         self, prod_components, nvidia_mock, rc_client
     ):
-        # A streamed /v1 request whose upstream rejects it must surface the
-        # provider's actual error body, not httpx's internal "Attempted to
-        # access streaming response content" ResponseNotRead message.
+        # A streamed /v1 request whose upstream rejects it must return a safe
+        # classification, not the provider body or httpx internals.
         prod_components()
         nvidia_mock.script(
             error=500,
@@ -1011,7 +1010,8 @@ class TestReliabilityMatrix:
         assert response.status_code == 502
         body = response.json()
         assert body["error"]["code"] == "provider_error"
-        assert "stream rejected" in body["error"]["message"]
+        assert body["error"]["message"] == "Provider returned a server error."
+        assert "stream rejected" not in body["error"]["message"]
         assert "Attempted to access" not in body["error"]["message"]
 
 

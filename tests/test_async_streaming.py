@@ -498,8 +498,8 @@ class TestMidStreamErrors:
         assert "beautiful" in content
         
         # Should contain error information in the stream
-        # The error should be propagated as an SSE comment or error event
-        assert "503" in content or "Service unavailable" in content
+        # Provider bodies/status text are replaced with the safe classification.
+        assert "Provider returned a server error." in content
         
         # Should NOT contain data that came after the error
         assert "world" not in content
@@ -547,7 +547,8 @@ class TestMidStreamErrors:
             # Should contain the first chunk
             assert "ok" in content
             # Should contain error indication
-            assert "Internal error" in content or "500" in content
+            assert "Provider request failed." in content
+            assert "Internal error" not in content
             
             # Should NOT continue processing after error
             assert call_count == 1  # Only called once

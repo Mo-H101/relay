@@ -257,7 +257,7 @@ class TestChatFlow:
 
         assert result["success"] is True
         assert result["provider"] == "OpenAI"
-        assert result["fallback_reason"] == "HTTP 500: boom"
+        assert result["fallback_reason"] == "Provider returned a server error."
 
 
 class TestHealthCompatibility:

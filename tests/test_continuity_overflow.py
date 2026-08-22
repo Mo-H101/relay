@@ -508,7 +508,8 @@ class TestAttemptExc:
 
         assert result["success"] is False
         attempt_dict = result["attempts"][0]
-        assert "rate limited" in attempt_dict["reason"]
+        assert attempt_dict["reason"] == "Provider request failed."
+        assert "rate limited" not in attempt_dict["reason"]
 
     def test_exc_not_set_on_success(self):
         """_exc is None on successful Attempt."""

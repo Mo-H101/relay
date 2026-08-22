@@ -433,7 +433,7 @@ class TestFailoverAndErrors:
         response = client.post("/chat", json={"message": "hello"})
 
         assert response.status_code == 502
-        assert "Model not loaded" in response.json()["detail"]
+        assert response.json()["detail"] == "Provider rejected the request."
 
     def test_unavailable_model_health(self, fake_lmstudio, monkeypatch):
         fake_lmstudio.state["models"] = ["broken-model"]
