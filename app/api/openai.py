@@ -15,7 +15,10 @@ from app.services.decision_record import record_actual_decision
 from app.services.failure_classifier import classify
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
-from app.services.redaction import redact_text
+from app.services.redaction import (
+    safe_provider_error,
+    safe_provider_result_error,
+)
 from app.services import admission_control
 from app.services.routing import TASK_CATEGORIES
 from app.services.task_classifier import classify_task
@@ -520,7 +523,7 @@ async def openai_chat_completion(
             )
             return _openai_error_response(
                 502,
-                result["error"],
+                safe_provider_result_error(result),
                 error_type="server_error",
                 code="provider_error",
                 correlation_id=correlation_id,
@@ -590,10 +593,11 @@ async def openai_chat_completion(
                 yield "data: [DONE]\n\n"
             except Exception as exc:
                 # Stream failed mid-stream
-                failure_type = classify(exc).value
+                kind = classify(exc)
+                failure_type = kind.value
                 error_chunk = {
                     "error": {
-                        "message": redact_text(str(exc)),
+                        "message": safe_provider_error(exc, kind),
                         "type": "stream_error",
                         "code": "stream_error"
                     }
@@ -657,7 +661,7 @@ async def openai_chat_completion(
     except Exception as exc:
         return _openai_error_response(
             500,
-            redact_text(str(exc)),
+            safe_provider_error(exc),
             error_type="server_error",
             code="relay_error",
             correlation_id=correlation_id,
@@ -696,7 +700,7 @@ async def openai_chat_completion(
         )
         return _openai_error_response(
             502,
-            result.get("error", "Provider error"),
+            safe_provider_result_error(result),
             error_type="server_error",
             code="provider_error",
             correlation_id=correlation_id,

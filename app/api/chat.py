@@ -13,6 +13,7 @@ from app.services.routing import TASK_CATEGORIES
 from app.services.task_classifier import classify_task
 from app.services.metrics import relay_metrics
 from app.services.ops_store import ops_store
+from app.services.redaction import safe_provider_result_error
 from app.services import admission_control
 
 router = APIRouter()
@@ -201,7 +202,7 @@ async def chat(request: ChatRequest, http_request: Request, response: Response):
         if "provider" in result:
             raise HTTPException(
                 status_code=502,
-                detail=result.get("error", "Provider request failed."),
+                detail=safe_provider_result_error(result),
                 headers=error_headers,
             )
         raise HTTPException(

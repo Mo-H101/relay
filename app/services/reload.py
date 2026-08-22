@@ -34,6 +34,7 @@ from app.core.config_spec import (
 from app.providers.base import apply_model_priority
 from app.providers.factory import build_runtime_provider, resolve_provider_key
 from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
+from app.services.redaction import safe_provider_error
 
 # Settings read dynamically at request time and safe to reload in place.
 # The reload allowlist lives in app/core/config_spec.py (the single source
@@ -187,7 +188,10 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
                     )
                 except Exception as exc:
                     failures.append(
-                        {"field": f"{prefix}_enabled", "error": _redact(exc)}
+                        {
+                            "field": f"{prefix}_enabled",
+                            "error": safe_provider_error(exc),
+                        }
                     )
             continue
 
@@ -208,7 +212,10 @@ def _apply_provider_side_effects(relay, env, applied_set: set, failures: list) -
                     ]
                 except Exception as exc:
                     failures.append(
-                        {"field": f"{prefix}_api_key", "error": _redact(exc)}
+                        {
+                            "field": f"{prefix}_api_key",
+                            "error": safe_provider_error(exc),
+                        }
                     )
         elif priority_changed:
             priority = list(getattr(env, f"{prefix}_model_priority"))

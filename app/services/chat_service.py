@@ -19,6 +19,7 @@ from app.services.failure_classifier import (
     classify,
 )
 from app.services.metrics import relay_metrics
+from app.services.redaction import safe_provider_error
 
 
 class ChatService:
@@ -67,7 +68,7 @@ class ChatService:
                     latency_ms=latency,
                     success=False,
                     failure_type=kind.value,
-                    reason=str(exc),
+                    reason=safe_provider_error(exc, kind),
                     retry_after=getattr(exc, "retry_after", None),
                     _exc=exc,
                 ),
@@ -305,7 +306,7 @@ class ChatService:
                     latency_ms=latency,
                     success=False,
                     failure_type=kind.value,
-                    reason=str(exc),
+                    reason=safe_provider_error(exc, kind),
                     retry_after=getattr(exc, "retry_after", None),
                     _exc=exc,
                 ),
@@ -589,9 +590,12 @@ class ChatService:
                         "model": model,
                         "latency_ms": int((time.perf_counter() - start) * 1000),
                         "failure_type": kind.value,
-                        "reason": str(exc),
+                        "reason": safe_provider_error(exc, kind),
                     })
-                    errors.append(f"{model} ({provider.name}): {exc}")
+                    errors.append(
+                        f"{model} ({provider.name}): "
+                        f"{safe_provider_error(exc, kind)}"
+                    )
 
                     if (
                         not overflow_retried
@@ -791,9 +795,12 @@ class ChatService:
                         "model": model,
                         "latency_ms": int((time.perf_counter() - start) * 1000),
                         "failure_type": kind.value,
-                        "reason": str(exc),
+                        "reason": safe_provider_error(exc, kind),
                     })
-                    errors.append(f"{model} ({provider.name}): {exc}")
+                    errors.append(
+                        f"{model} ({provider.name}): "
+                        f"{safe_provider_error(exc, kind)}"
+                    )
 
                     if (
                         not overflow_retried
@@ -814,7 +821,7 @@ class ChatService:
                             "total": total,
                             "provider": provider.name,
                             "model": model,
-                            "reason": str(exc),
+                            "reason": safe_provider_error(exc, kind),
                         })
 
                     if kind in PROVIDER_LEVEL:

@@ -218,7 +218,7 @@ class TestModelLevelFailover:
         assert len(attempts) == 2
         assert attempts[0]["success"] is False
         assert attempts[0]["failure_type"] == "unknown"
-        assert attempts[0]["reason"] == "a-1 down"
+        assert attempts[0]["reason"] == "Provider request failed."
         assert attempts[1]["success"] is True
         assert attempts[1]["model"] == "a-2"
 
@@ -240,7 +240,7 @@ class TestModelLevelFailover:
             max_retries=0,
         )
 
-        assert result["fallback_reason"] == "first failure"
+        assert result["fallback_reason"] == "Provider request failed."
 
     def test_fallback_reason_none_when_first_candidate_wins(
         self, fake_registry
@@ -363,7 +363,7 @@ class TestProviderLevelFailover:
         assert result["model"] == "b-1"
         assert result["response"] == "ok-from-b"
         assert client_a.calls == [("A", "a-1")]
-        assert result["fallback_reason"] == "HTTP 401: auth rejected"
+        assert result["fallback_reason"] == "Provider authentication failed."
 
     def test_quota_failure_skips_entire_provider(self, fake_registry):
         provider_a = make_provider("A", ["a-1", "a-2"])
@@ -525,7 +525,8 @@ class TestAllCandidatesFail:
         assert result["model"] == "a-1"
         assert "response" not in result
         assert result["error"] == (
-            "a-1 (A): HTTP 400: bad request; a-2 (A): slow"
+            "a-1 (A): Provider rejected the request.; "
+            "a-2 (A): Provider request timed out."
         )
 
     def test_attempt_history_is_preserved(self, fake_registry):
@@ -701,7 +702,9 @@ class TestConvenienceChat:
         with pytest.raises(ProviderError) as excinfo:
             service.chat(provider, "hello")
 
-        assert "bad request" in str(excinfo.value)
+        assert str(excinfo.value) == (
+            "a-1 (A): Provider rejected the request."
+        )
 
 
 class FakeStreamMessagesClient:
@@ -767,7 +770,7 @@ class TestStreamMessagesProgress:
         assert events[0]["index"] == 1
         assert events[0]["total"] == 2
         assert events[1]["stage"] == "failed"
-        assert "boom" in events[1]["reason"]
+        assert events[1]["reason"] == "Provider returned a server error."
         assert events[2]["stage"] == "attempt"
         assert events[2]["index"] == 2
         assert events[3]["stage"] == "started"
@@ -794,7 +797,7 @@ class TestStreamMessagesProgress:
         assert result["success"] is False
         assert events[0]["stage"] == "attempt"
         assert events[1]["stage"] == "failed"
-        assert "down" in events[1]["reason"]
+        assert events[1]["reason"] == "Provider returned a server error."
 
     def test_on_progress_omitted_still_streams(self, fake_registry):
         provider = make_provider("A", ["a-1"])

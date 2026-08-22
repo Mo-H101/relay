@@ -423,7 +423,7 @@ class TestChatFailure:
         response = client.post("/chat", json={"message": "hi"})
 
         assert response.status_code == 502
-        assert "bad request" in response.json()["detail"]
+        assert response.json()["detail"] == "Provider rejected the request."
 
     def test_chat_no_providers_maps_to_503(self, wired_relay, client):
         wired_relay(providers=[])
@@ -884,7 +884,7 @@ class TestFailoverThroughRelay:
             ("A", "a-2"),
             ("A", "a-3"),
         ]
-        assert result["fallback_reason"] == "boom"
+        assert result["fallback_reason"] == "Provider request failed."
 
     def test_provider_level_failover_skips_provider(
         self, wired_relay, fake_registry
@@ -905,7 +905,7 @@ class TestFailoverThroughRelay:
         assert result["provider"] == "B"
         assert result["response"] == "ok-from-b"
         assert client_a.chat_calls == [("A", "a-1")]
-        assert result["fallback_reason"] == "HTTP 401: auth"
+        assert result["fallback_reason"] == "Provider authentication failed."
 
     def test_all_candidates_fail_returns_failure(self, wired_relay, fake_registry):
         provider = make_provider("A", ["a-1"])
@@ -921,4 +921,4 @@ class TestFailoverThroughRelay:
         assert result["success"] is False
         assert result["provider"] == "A"
         assert result["fallback_reason"] is None
-        assert "down" in result["error"]
+        assert "Provider returned a server error." in result["error"]

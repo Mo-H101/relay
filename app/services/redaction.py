@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import re
 
+from app.providers.exceptions import ProviderHTTPError, ProviderTimeout
+
 # Key-name substrings whose value is always masked. ``authorization`` is
 # included so an Authorization header value can never be rendered.
 SENSITIVE_KEYS = (
@@ -53,6 +55,88 @@ _REDACTED = "<redacted>"
 # Bound for provider error bodies surfaced in error responses and logs.
 # Kept small so an untrusted provider body can never flow verbatim anywhere.
 _MAX_PROVIDER_ERROR_BODY = 200
+
+_SAFE_PROVIDER_MESSAGES = {
+    "timeout": "Provider request timed out.",
+    "rate_limit": "Provider rate limit reached.",
+    "quota_exhausted": "Provider quota is unavailable.",
+    "invalid_request": "Provider rejected the request.",
+    "empty_response": "Provider returned empty content.",
+    "server_error": "Provider returned a server error.",
+    "auth_error": "Provider authentication failed.",
+    "unknown": "Provider request failed.",
+}
+
+
+def safe_provider_status(status_code: int | None) -> str:
+    """Return a stable, body-free message for a provider status code."""
+    if status_code in (401, 403):
+        return _SAFE_PROVIDER_MESSAGES["auth_error"]
+    if status_code == 429:
+        return _SAFE_PROVIDER_MESSAGES["rate_limit"]
+    if status_code is not None and 400 <= status_code < 500:
+        return _SAFE_PROVIDER_MESSAGES["invalid_request"]
+    if status_code is not None and status_code >= 500:
+        return _SAFE_PROVIDER_MESSAGES["server_error"]
+    return _SAFE_PROVIDER_MESSAGES["unknown"]
+
+
+def safe_provider_health_detail(
+    detail: str | None,
+    status_code: int | None = None,
+) -> str:
+    """Keep only controlled health labels and HTTP status summaries."""
+    if not detail:
+        return ""
+
+    normalized = detail.strip()
+    if normalized in {"timeout", "no client registered"}:
+        return normalized
+    if re.fullmatch(r"HTTP [1-5][0-9]{2}", normalized):
+        return normalized
+    return safe_provider_status(status_code)
+
+
+def safe_provider_error(exc=None, kind=None) -> str:
+    """Map an internal provider failure to a body-free public message.
+
+    The exception may be retained by the in-memory failure classifier, but
+    its string, response body, URL, headers, and request data are never
+    copied to a response, log, metric, or persisted record.
+    """
+    kind_value = getattr(kind, "value", kind)
+
+    if kind_value in _SAFE_PROVIDER_MESSAGES:
+        return _SAFE_PROVIDER_MESSAGES[kind_value]
+
+    if isinstance(exc, ProviderTimeout):
+        return _SAFE_PROVIDER_MESSAGES["timeout"]
+
+    if isinstance(exc, ProviderHTTPError):
+        status_code = getattr(exc, "status_code", None)
+        message = (getattr(exc, "message", "") or "").lower()
+        if status_code == 402 or any(
+            marker in message
+            for marker in (
+                "quota",
+                "insufficient_quota",
+                "billing",
+                "exceeded your current quota",
+            )
+        ):
+            return _SAFE_PROVIDER_MESSAGES["quota_exhausted"]
+        return safe_provider_status(status_code)
+
+    return _SAFE_PROVIDER_MESSAGES["unknown"]
+
+
+def safe_provider_result_error(result: dict | None) -> str:
+    """Return a safe message for a provider failure result envelope."""
+    for attempt in reversed((result or {}).get("attempts") or []):
+        kind = attempt.get("failure_type")
+        if kind:
+            return safe_provider_error(kind=kind)
+    return safe_provider_error()
 
 
 def _mask_auth_header(match: re.Match) -> str:

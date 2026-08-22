@@ -16,6 +16,10 @@ from app.services.capabilities import (
 from app.services.client_registry import ClientRegistry
 from app.services.health_store import HealthStore
 from app.services.metrics import relay_metrics
+from app.services.redaction import (
+    safe_provider_error,
+    safe_provider_health_detail,
+)
 
 HEALTHY = "healthy"
 DEGRADED = "degraded"
@@ -175,7 +179,12 @@ class HealthChecker:
         probe = getattr(self._client_for(provider), "connectivity_probe", None)
 
         if probe is not None:
-            return probe(provider)
+            ok, details, latency = probe(provider)
+            return (
+                ok,
+                safe_provider_health_detail(details),
+                latency,
+            )
 
         start = time.perf_counter()
 
@@ -199,7 +208,7 @@ class HealthChecker:
 
         except Exception as exc:
             ok = False
-            details = str(exc)
+            details = safe_provider_error(exc)
 
         latency = int((time.perf_counter() - start) * 1000)
 
@@ -312,7 +321,10 @@ class HealthChecker:
                         capability=detect_capability(model).value,
                         latency_ms=probe.latency_ms,
                         status_code=probe.status_code,
-                        error=probe.error,
+                        error=safe_provider_health_detail(
+                            probe.error,
+                            probe.status_code,
+                        ),
                     )
                 )
 

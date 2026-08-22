@@ -568,7 +568,9 @@ class TestOpenAIChatCompletions:
         assert response.status_code == 502
         payload = response.json()
         assert "error" in payload
-        assert "bad request" in payload["error"]["message"]
+        assert payload["error"]["message"] == (
+            "Provider rejected the request."
+        )
 
     def test_no_providers_available_returns_400(self, wired_relay, client):
         wired_relay(providers=[])
