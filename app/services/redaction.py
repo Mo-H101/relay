@@ -68,6 +68,15 @@ _SAFE_PROVIDER_MESSAGES = {
     "resource_limit": "Provider response exceeded Relay limits.",
 }
 _SAFE_RESULT_MESSAGES = {"No candidates to try."}
+_KEY_EXPIRED_MARKERS = ("expired", "revoked", "invalid")
+_KEY_QUOTA_MARKERS = (
+    "quota",
+    "insufficient_quota",
+    "billing",
+    "usage limit",
+    "rate limit",
+    "exceeded",
+)
 
 
 def safe_provider_status(status_code: int | None) -> str:
@@ -96,6 +105,26 @@ def safe_provider_health_detail(
         return normalized
     if re.fullmatch(r"HTTP [1-5][0-9]{2}", normalized):
         return normalized
+    return safe_provider_status(status_code)
+
+
+def safe_provider_key_detail(status_code: int | None, body: str | None) -> str:
+    """Return only a controlled key-validation classification.
+
+    Provider catalog responses are untrusted and may contain prompts,
+    credentials, or arbitrary internal details. Key validation needs a
+    small amount of body classification for the setup wizard, so preserve
+    only the existing expired/quota buckets and discard the original body.
+    """
+    normalized = (body or "").lower()
+    if status_code in (401, 403) and any(
+        marker in normalized for marker in _KEY_EXPIRED_MARKERS
+    ):
+        return "expired"
+    if status_code in (402, 429) or any(
+        marker in normalized for marker in _KEY_QUOTA_MARKERS
+    ):
+        return "quota"
     return safe_provider_status(status_code)
 
 

@@ -108,7 +108,7 @@ class TestConnectivityProbe:
         ok, details, _ = OllamaClient().connectivity_probe(make_provider())
 
         assert ok is False
-        assert "server offline" in details
+        assert details == "provider unavailable"
 
 
 def ollama_defn():

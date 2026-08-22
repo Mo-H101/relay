@@ -11,6 +11,7 @@ is ever shown.
 from dataclasses import dataclass
 
 from app.providers.availability import AVAILABLE, GLYPH, UNAVAILABLE
+from app.services.redaction import safe_provider_error
 
 # Body fragments that make a 401/403 look like a dead/expired credential
 # rather than a plain wrong one.
@@ -76,7 +77,7 @@ def classify(status_code: int | None, body: str) -> KeyValidation:
         return KeyValidation(
             False,
             "unavailable",
-            body or "provider is unreachable",
+            "Provider is unreachable.",
         )
 
     if status_code in (401, 403):
@@ -113,7 +114,13 @@ def validate_key(client, provider) -> KeyValidation:
     try:
         status_code, body = client.key_check(provider)
     except Exception as exc:  # noqa: BLE001 - any failure is "unavailable"
-        return KeyValidation(False, "unavailable", str(exc))
+        # Provider exception text can contain URLs, response bodies, or
+        # request details. Keep the wizard on the fixed safe vocabulary.
+        return KeyValidation(
+            False,
+            "unavailable",
+            safe_provider_error(exc),
+        )
 
     return classify(status_code, body or "")
 

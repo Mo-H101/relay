@@ -14,7 +14,11 @@ from app.providers.exceptions import (
     ProviderTimeout,
 )
 from app.services.metrics import relay_metrics
-from app.services.redaction import redact_provider_error, redact_text
+from app.services.redaction import (
+    redact_provider_error,
+    redact_text,
+    safe_provider_key_detail,
+)
 from app.providers.transport_limits import (
     BoundedResponseHook,
     bounded_aiter_lines,
@@ -590,9 +594,13 @@ class OpenAICompatibleClient:
                 ),
             )
         except httpx.HTTPError as exc:
-            return None, redact_text(str(exc))
+            return None, "provider unavailable"
 
-        return response.status_code, response.text
+        if response.status_code >= 400:
+            return response.status_code, safe_provider_key_detail(
+                response.status_code, response.text
+            )
+        return response.status_code, ""
 
     def check_model(self, provider: Provider, model: str) -> bool:
         """

@@ -14,6 +14,7 @@ from app.providers.base import Provider
 from app.providers.exceptions import ProviderHTTPError
 from app.providers.openai_compat_client import OpenAICompatibleClient
 from app.providers.anthropic_client import AnthropicClient
+from app.providers.gemini_client import GeminiClient
 from app.services.redaction import redact_text
 
 
@@ -29,6 +30,14 @@ def make_anthropic_provider(key="sk-ant-test-key-abc123"):
     return Provider(
         name="Test",
         base_url="https://api.anthropic.com/v1",
+        api_key=key,
+    )
+
+
+def make_gemini_provider(key="gemini-test-key-abc123"):
+    return Provider(
+        name="Test",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
         api_key=key,
     )
 
@@ -306,6 +315,42 @@ class TestTransportErrorRedactionAnthropic:
             AnthropicClient().chat(make_anthropic_provider(), "m", "hi")
 
         assert "connection refused" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    ("client_path", "provider_factory"),
+    [
+        ("app.providers.openai_compat_client.httpx.get", make_openai_provider),
+        ("app.providers.anthropic_client.httpx.get", make_anthropic_provider),
+        ("app.providers.gemini_client.httpx.get", make_gemini_provider),
+    ],
+)
+def test_key_check_does_not_return_provider_error_body(
+    monkeypatch, client_path, provider_factory
+):
+    """Key validation must not copy an untrusted provider body to callers."""
+    secret = "RELAY_AUDIT_PROVIDER_BODY_SECRET"
+    body = f"provider detail prompt=do-not-export key={secret}"
+
+    def handler(url, **kwargs):
+        return httpx.Response(
+            401,
+            text=body,
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(client_path, handler)
+    client_type = {
+        "app.providers.openai_compat_client.httpx.get": OpenAICompatibleClient,
+        "app.providers.anthropic_client.httpx.get": AnthropicClient,
+        "app.providers.gemini_client.httpx.get": GeminiClient,
+    }[client_path]
+
+    status, error = client_type().key_check(provider_factory(secret))
+
+    assert status == 401
+    assert secret not in error
+    assert "do-not-export" not in error
 
 
 class TestNonStreamingAPIErrorRedaction:

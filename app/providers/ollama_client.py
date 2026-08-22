@@ -245,7 +245,7 @@ class OllamaClient:
                 f"{self.name} model discovery timed out."
             ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
         if response.status_code >= 400:
             raise ProviderHTTPError(
@@ -305,7 +305,7 @@ class OllamaClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                "provider transport failure",
             )
 
         latency = int((time.perf_counter() - start) * 1000)
@@ -343,9 +343,9 @@ class OllamaClient:
             )
             ok = response.status_code == 200
             details = f"HTTP {response.status_code}"
-        except Exception as exc:
+        except Exception:
             ok = False
-            details = str(exc)
+            details = "provider unavailable"
 
         latency = int((time.perf_counter() - start) * 1000)
         return ok, details, latency
@@ -420,7 +420,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -494,7 +494,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -666,7 +666,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
     def chat_stream_messages(
         self,
@@ -751,7 +751,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
     async def achat(
         self,
@@ -824,7 +824,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -960,7 +960,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
     async def achat_messages(self, provider, payload: dict) -> dict:
         """
@@ -1015,7 +1015,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -1127,7 +1127,7 @@ class OllamaClient:
                 0,
                 (time.perf_counter() - start) * 1000,
             )
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
     async def alist_models(self, provider) -> list:
         """
@@ -1145,7 +1145,7 @@ class OllamaClient:
                 f"{self.name} model discovery timed out."
             ) from exc
         except httpx.HTTPError as exc:
-            raise ProviderHTTPError(0, str(exc)) from exc
+            raise ProviderHTTPError(0, "provider transport failure") from exc
 
         if response.status_code >= 400:
             raise ProviderHTTPError(
@@ -1197,7 +1197,7 @@ class OllamaClient:
                 False,
                 int((time.perf_counter() - start) * 1000),
                 0,
-                str(exc),
+                "provider transport failure",
             )
 
         latency = int((time.perf_counter() - start) * 1000)

@@ -17,7 +17,11 @@ from dataclasses import dataclass
 import os
 from typing import Callable, List, Optional
 
-from app.providers.availability import UNAVAILABLE, classify_probe
+from app.providers.availability import (
+    UNAVAILABLE,
+    classify_probe,
+)
+from app.services.redaction import safe_provider_error, safe_provider_health_detail
 
 
 def _default_concurrency() -> int:
@@ -75,7 +79,9 @@ class ScanEngine:
                     status=classify_probe(probe),
                     latency_ms=probe.latency_ms,
                     status_code=probe.status_code,
-                    error=probe.error,
+                    error=safe_provider_health_detail(
+                        probe.error, probe.status_code
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001 - a probe never throws
                 return index, ScanResult(
@@ -83,7 +89,7 @@ class ScanEngine:
                     status=UNAVAILABLE,
                     latency_ms=0,
                     status_code=None,
-                    error=str(exc),
+                    error=safe_provider_error(exc),
                 )
 
         with ThreadPoolExecutor(max_workers=self.concurrency) as executor:

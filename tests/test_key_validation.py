@@ -48,6 +48,7 @@ def test_classify_unreachable():
     result = classify(None, "connection refused")
     assert not result.ok
     assert result.category == "unavailable"
+    assert result.message == "Provider is unreachable."
 
 
 def test_classify_auth_error():
@@ -90,10 +91,13 @@ def test_validate_key_ok():
 
 
 def test_validate_key_unavailable_on_exception():
-    client = FakeClient(ValueError("boom"))
+    client = FakeClient(
+        ValueError("https://user:RELAY_AUDIT_SECRET_123@provider.invalid/error")
+    )
     result = validate_key(client, make_provider())
     assert result.category == "unavailable"
-    assert "boom" in result.message
+    assert "RELAY_AUDIT_SECRET_123" not in result.message
+    assert result.message == "Provider request failed."
 
 
 def test_mask_key():

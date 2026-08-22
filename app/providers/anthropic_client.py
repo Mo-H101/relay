@@ -33,7 +33,7 @@ from app.providers.openai_compat_client import (
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
-from app.services.redaction import redact_text
+from app.services.redaction import redact_text, safe_provider_key_detail
 
 
 def _image_source(url: str) -> dict | None:
@@ -541,9 +541,13 @@ class AnthropicClient:
                 **proxy_request_kwargs(provider, url),
             )
         except httpx.HTTPError as exc:
-            return None, redact_text(str(exc))
+            return None, "provider unavailable"
 
-        return response.status_code, response.text
+        if response.status_code >= 400:
+            return response.status_code, safe_provider_key_detail(
+                response.status_code, response.text
+            )
+        return response.status_code, ""
 
     def probe_model(self, provider, model: str) -> ModelProbe:
         """
