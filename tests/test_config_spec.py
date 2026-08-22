@@ -376,6 +376,10 @@ def test_parse_value_matches_settings(monkeypatch, env, raw, attr, expected):
         ("GEMINI_BASE_URL", "https:///missing-host"),
         ("OLLAMA_BASE_URL", "http://localhost:11434?token=secret"),
         ("LMSTUDIO_BASE_URL", "http://[invalid/v1"),
+        # Out-of-range / non-numeric ports raise lazily from SplitResult.port;
+        # a swallowed ValueError there used to leak a partially-parsed result.
+        ("LMSTUDIO_BASE_URL", "https://example.invalid:99999/v1"),
+        ("OLLAMA_BASE_URL", "http://localhost:abc"),
         ("RELAY_PORT", "not-a-port"),
     ],
 )

@@ -213,7 +213,12 @@ def _valid_url(name: str, raw: str, default: str) -> str:
         hostname = parsed.hostname
         parsed.port
     except ValueError:
-        pass
+        # Any failure during parsing (including an out-of-range or
+        # malformed port raised lazily by ``.port``) must discard the
+        # partially-built result, otherwise a URL like
+        # ``https://host:99999`` would pass every check below.
+        parsed = None
+        hostname = None
 
     invalid = (
         parsed is None
