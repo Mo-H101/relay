@@ -74,7 +74,7 @@ class TestConnectivityProbe:
             recorded["timeout"] = kwargs.get("timeout")
             return FakeResponse(status_code=200)
 
-        monkeypatch.setattr("app.providers.ollama_client.httpx.get", handler)
+        monkeypatch.setattr("app.providers.ollama_client.bounded_get", handler)
 
         provider = make_provider()
         provider.health_endpoint = "/api/tags"
@@ -90,7 +90,7 @@ class TestConnectivityProbe:
 
     def test_http_error_status_is_failure(self, monkeypatch):
         monkeypatch.setattr(
-            "app.providers.ollama_client.httpx.get",
+            "app.providers.ollama_client.bounded_get",
             lambda *args, **kwargs: FakeResponse(status_code=500),
         )
 
@@ -103,7 +103,7 @@ class TestConnectivityProbe:
         def handler(url, **kwargs):
             raise httpx.ConnectError("server offline")
 
-        monkeypatch.setattr("app.providers.ollama_client.httpx.get", handler)
+        monkeypatch.setattr("app.providers.ollama_client.bounded_get", handler)
 
         ok, details, _ = OllamaClient().connectivity_probe(make_provider())
 
@@ -124,7 +124,7 @@ def patch_post(monkeypatch, response, recorded=None):
             recorded["timeout"] = kwargs.get("timeout")
         return response
 
-    monkeypatch.setattr("app.providers.ollama_client.httpx.post", handler)
+    monkeypatch.setattr("app.providers.ollama_client.bounded_post", handler)
 
 
 def patch_get(monkeypatch, response, recorded=None):
@@ -134,7 +134,7 @@ def patch_get(monkeypatch, response, recorded=None):
             recorded["headers"] = kwargs.get("headers", {})
         return response
 
-    monkeypatch.setattr("app.providers.ollama_client.httpx.get", handler)
+    monkeypatch.setattr("app.providers.ollama_client.bounded_get", handler)
 
 
 def patch_stream(monkeypatch, response, recorded=None):
@@ -144,7 +144,7 @@ def patch_stream(monkeypatch, response, recorded=None):
             recorded["json"] = kwargs.get("json")
         return response
 
-    monkeypatch.setattr("app.providers.ollama_client.httpx.stream", handler)
+    monkeypatch.setattr("app.providers.ollama_client.bounded_stream", handler)
 
 
 class _SpyAsyncClient(httpx.AsyncClient):
@@ -303,7 +303,10 @@ class TestKeylessAuth:
             )
 
         monkeypatch.setattr(
-            "app.services.health_checker.httpx.get", handler
+            "app.services.health_checker.bounded_get", handler
+        )
+        monkeypatch.setattr(
+            "app.providers.ollama_client.bounded_get", handler
         )
         monkeypatch.setattr(
             "app.providers.ollama_client.OllamaClient.probe_model",
@@ -394,7 +397,7 @@ class TestChatSync:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.ollama_client.httpx.post", handler
+            "app.providers.ollama_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderTimeout):
@@ -718,7 +721,10 @@ class TestHealthCheck:
             )
 
         monkeypatch.setattr(
-            "app.services.health_checker.httpx.get", get_handler
+            "app.services.health_checker.bounded_get", get_handler
+        )
+        monkeypatch.setattr(
+            "app.providers.ollama_client.bounded_get", get_handler
         )
         monkeypatch.setattr(
             "app.providers.ollama_client.OllamaClient.probe_model",
@@ -741,7 +747,10 @@ class TestHealthCheck:
             raise httpx.ConnectError("connection refused")
 
         monkeypatch.setattr(
-            "app.services.health_checker.httpx.get", get_handler
+            "app.services.health_checker.bounded_get", get_handler
+        )
+        monkeypatch.setattr(
+            "app.providers.ollama_client.bounded_get", get_handler
         )
 
         provider = ollama_defn().build_provider()
@@ -761,7 +770,10 @@ class TestHealthCheck:
             )
 
         monkeypatch.setattr(
-            "app.services.health_checker.httpx.get", get_handler
+            "app.services.health_checker.bounded_get", get_handler
+        )
+        monkeypatch.setattr(
+            "app.providers.ollama_client.bounded_get", get_handler
         )
         monkeypatch.setattr(
             "app.providers.ollama_client.OllamaClient.probe_model",

@@ -2,6 +2,7 @@ from typing import AsyncIterator, List, Union, Optional, Generator
 import os
 import time
 import json
+from contextlib import contextmanager
 from urllib.parse import urlparse
 
 import httpx
@@ -236,6 +237,49 @@ def proxy_request_kwargs(provider: Provider, url: str) -> dict:
     }
 
 
+def _bounded_http_client(kwargs: dict) -> httpx.Client:
+    """
+    Build a short-lived sync Client carrying the response budget hook.
+
+    The top-level ``httpx.get/post/stream`` helpers construct their own
+    internal Client but cannot install response event hooks (a
+    Client-only argument), so the synchronous wire paths route through
+    this explicitly constructed client. The ``trust_env``, ``proxy``,
+    and ``event_hooks`` values produced by :func:`proxy_request_kwargs`
+    configure the client; every other keyword stays a per-request
+    argument. Connection behavior is unchanged: each request still uses
+    its own short-lived client.
+    """
+    client_kwargs = {
+        "trust_env": kwargs.pop("trust_env", True),
+        "proxy": kwargs.pop("proxy", None),
+    }
+    event_hooks = kwargs.pop("event_hooks", None)
+    if event_hooks:
+        client_kwargs["event_hooks"] = event_hooks
+    return httpx.Client(**client_kwargs)
+
+
+def bounded_get(url: str, **kwargs) -> httpx.Response:
+    """``httpx.get`` stand-in that carries the response budget hook."""
+    with _bounded_http_client(kwargs) as client:
+        return client.get(url, **kwargs)
+
+
+def bounded_post(url: str, **kwargs) -> httpx.Response:
+    """``httpx.post`` stand-in that carries the response budget hook."""
+    with _bounded_http_client(kwargs) as client:
+        return client.post(url, **kwargs)
+
+
+@contextmanager
+def bounded_stream(method: str, url: str, **kwargs):
+    """``httpx.stream`` stand-in that carries the response budget hook."""
+    with _bounded_http_client(kwargs) as client:
+        with client.stream(method, url, **kwargs) as response:
+            yield response
+
+
 class OpenAICompatibleClient:
     """
     OpenAI-compatible chat client.
@@ -277,7 +321,7 @@ class OpenAICompatibleClient:
             headers["Authorization"] = f"Bearer {provider.api_key}"
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=headers,
                 timeout=10,
@@ -342,7 +386,7 @@ class OpenAICompatibleClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 f"{provider.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
@@ -432,7 +476,7 @@ class OpenAICompatibleClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 f"{provider.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
@@ -510,7 +554,7 @@ class OpenAICompatibleClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 f"{provider.base_url}/models",
                 headers=headers,
                 timeout=30,
@@ -585,7 +629,7 @@ class OpenAICompatibleClient:
             headers["Authorization"] = f"Bearer {provider.api_key}"
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 f"{provider.base_url}/models",
                 headers=headers,
                 timeout=30,
@@ -638,7 +682,7 @@ class OpenAICompatibleClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 f"{provider.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
@@ -759,7 +803,7 @@ class OpenAICompatibleClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 f"{provider.base_url}/chat/completions",
                 headers=headers,
@@ -867,7 +911,7 @@ class OpenAICompatibleClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 f"{provider.base_url}/chat/completions",
                 headers=headers,

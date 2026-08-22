@@ -55,7 +55,7 @@ class TestTransportErrorRedactionOpenAICompat:
             )
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post", handler
+            "app.providers.openai_compat_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -77,7 +77,7 @@ class TestTransportErrorRedactionOpenAICompat:
             )
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post", handler
+            "app.providers.openai_compat_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -96,7 +96,7 @@ class TestTransportErrorRedactionOpenAICompat:
             raise httpx.HTTPError(f"DNS failed for {url} key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get", handler
+            "app.providers.openai_compat_client.bounded_get", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -112,7 +112,7 @@ class TestTransportErrorRedactionOpenAICompat:
             raise httpx.HTTPError(f"connection reset key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get", handler
+            "app.providers.openai_compat_client.bounded_get", handler
         )
 
         status, error = OpenAICompatibleClient().key_check(
@@ -130,7 +130,7 @@ class TestTransportErrorRedactionOpenAICompat:
             raise httpx.HTTPError(f"connect timeout at {url} bearer={secret}")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post", handler
+            "app.providers.openai_compat_client.bounded_post", handler
         )
 
         probe = OpenAICompatibleClient().probe_model(
@@ -148,7 +148,7 @@ class TestTransportErrorRedactionOpenAICompat:
             raise httpx.ConnectError(f"refused at {url} key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get", handler
+            "app.providers.openai_compat_client.bounded_get", handler
         )
 
         ok, details, _ = OpenAICompatibleClient().connectivity_probe(
@@ -164,7 +164,7 @@ class TestTransportErrorRedactionOpenAICompat:
             raise httpx.ConnectError("connection refused")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post", handler
+            "app.providers.openai_compat_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -182,7 +182,7 @@ class TestTransportErrorRedactionOpenAICompat:
             )
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post", handler
+            "app.providers.openai_compat_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -204,7 +204,7 @@ class TestTransportErrorRedactionAnthropic:
             )
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.post", handler
+            "app.providers.anthropic_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -221,7 +221,7 @@ class TestTransportErrorRedactionAnthropic:
             raise httpx.HTTPError(f"network error key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.post", handler
+            "app.providers.anthropic_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -240,7 +240,7 @@ class TestTransportErrorRedactionAnthropic:
             raise httpx.HTTPError(f"DNS error key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.get", handler
+            "app.providers.anthropic_client.bounded_get", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -256,7 +256,7 @@ class TestTransportErrorRedactionAnthropic:
             raise httpx.HTTPError(f"reset key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.get", handler
+            "app.providers.anthropic_client.bounded_get", handler
         )
 
         status, error = AnthropicClient().key_check(
@@ -274,7 +274,7 @@ class TestTransportErrorRedactionAnthropic:
             raise httpx.HTTPError(f"timeout key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.post", handler
+            "app.providers.anthropic_client.bounded_post", handler
         )
 
         probe = AnthropicClient().probe_model(
@@ -292,7 +292,7 @@ class TestTransportErrorRedactionAnthropic:
             raise httpx.ConnectError(f"refused key={secret}")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.get", handler
+            "app.providers.anthropic_client.bounded_get", handler
         )
 
         ok, details, _ = AnthropicClient().connectivity_probe(
@@ -308,7 +308,7 @@ class TestTransportErrorRedactionAnthropic:
             raise httpx.ConnectError("connection refused")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.post", handler
+            "app.providers.anthropic_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderHTTPError) as exc:
@@ -320,9 +320,9 @@ class TestTransportErrorRedactionAnthropic:
 @pytest.mark.parametrize(
     ("client_path", "provider_factory"),
     [
-        ("app.providers.openai_compat_client.httpx.get", make_openai_provider),
-        ("app.providers.anthropic_client.httpx.get", make_anthropic_provider),
-        ("app.providers.gemini_client.httpx.get", make_gemini_provider),
+        ("app.providers.openai_compat_client.bounded_get", make_openai_provider),
+        ("app.providers.anthropic_client.bounded_get", make_anthropic_provider),
+        ("app.providers.gemini_client.bounded_get", make_gemini_provider),
     ],
 )
 def test_key_check_does_not_return_provider_error_body(
@@ -341,9 +341,9 @@ def test_key_check_does_not_return_provider_error_body(
 
     monkeypatch.setattr(client_path, handler)
     client_type = {
-        "app.providers.openai_compat_client.httpx.get": OpenAICompatibleClient,
-        "app.providers.anthropic_client.httpx.get": AnthropicClient,
-        "app.providers.gemini_client.httpx.get": GeminiClient,
+        "app.providers.openai_compat_client.bounded_get": OpenAICompatibleClient,
+        "app.providers.anthropic_client.bounded_get": AnthropicClient,
+        "app.providers.gemini_client.bounded_get": GeminiClient,
     }[client_path]
 
     status, error = client_type().key_check(provider_factory(secret))

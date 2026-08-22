@@ -83,7 +83,7 @@ def patch_post(monkeypatch, response, recorded=None):
             recorded["proxy"] = kwargs.get("proxy")
         return response
 
-    monkeypatch.setattr("app.providers.anthropic_client.httpx.post", handler)
+    monkeypatch.setattr("app.providers.anthropic_client.bounded_post", handler)
 
 
 def patch_get(monkeypatch, response, recorded=None):
@@ -93,7 +93,7 @@ def patch_get(monkeypatch, response, recorded=None):
             recorded["headers"] = kwargs.get("headers", {})
         return response
 
-    monkeypatch.setattr("app.providers.anthropic_client.httpx.get", handler)
+    monkeypatch.setattr("app.providers.anthropic_client.bounded_get", handler)
 
 
 def patch_stream(monkeypatch, response, recorded=None):
@@ -104,7 +104,7 @@ def patch_stream(monkeypatch, response, recorded=None):
         return response
 
     monkeypatch.setattr(
-        "app.providers.anthropic_client.httpx.stream", handler
+        "app.providers.anthropic_client.bounded_stream", handler
     )
 
 
@@ -363,7 +363,7 @@ class TestChatSync:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.post", handler
+            "app.providers.anthropic_client.bounded_post", handler
         )
 
         with pytest.raises(ProviderTimeout):
@@ -733,7 +733,7 @@ class TestProxySupport:
             )
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.post", handler
+            "app.providers.anthropic_client.bounded_post", handler
         )
 
         provider = Provider(
@@ -902,7 +902,7 @@ class TestHealthCheck:
             )
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.get", get_handler
+            "app.providers.anthropic_client.bounded_get", get_handler
         )
         monkeypatch.setattr(
             "app.providers.anthropic_client.AnthropicClient.probe_model",
@@ -932,7 +932,7 @@ class TestHealthCheck:
             raise httpx.ConnectError("connection refused")
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.get", get_handler
+            "app.providers.anthropic_client.bounded_get", get_handler
         )
 
         provider = anthropic_defn().build_provider(api_key="sk-test")
@@ -955,7 +955,7 @@ class TestHealthCheck:
             )
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.get", get_handler
+            "app.providers.anthropic_client.bounded_get", get_handler
         )
 
         provider = anthropic_defn().build_provider(api_key="")
@@ -979,7 +979,7 @@ class TestConnectivityProbe:
             )
 
         monkeypatch.setattr(
-            "app.providers.anthropic_client.httpx.get", get_handler
+            "app.providers.anthropic_client.bounded_get", get_handler
         )
 
         provider = anthropic_defn().build_provider(api_key="sk-test")

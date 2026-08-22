@@ -25,7 +25,10 @@ from app.providers.openai_compat_client import (
     _stream_error_text,
     _stream_error_text_async,
     bounded_aiter_lines,
+    bounded_get,
     bounded_iter_lines,
+    bounded_post,
+    bounded_stream,
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
@@ -235,7 +238,7 @@ class OllamaClient:
         url = f"{provider.base_url}/api/tags"
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 timeout=30,
                 **proxy_request_kwargs(provider, url),
@@ -287,7 +290,7 @@ class OllamaClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 json=payload,
                 timeout=10,
@@ -336,7 +339,7 @@ class OllamaClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 timeout=10,
                 **proxy_request_kwargs(provider, url),
@@ -385,7 +388,7 @@ class OllamaClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=headers,
                 json=payload,
@@ -459,7 +462,7 @@ class OllamaClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=headers,
                 json=body,
@@ -588,7 +591,7 @@ class OllamaClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 url,
                 headers=headers,
@@ -688,7 +691,7 @@ class OllamaClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 url,
                 headers=headers,

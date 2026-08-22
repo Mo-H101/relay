@@ -29,7 +29,10 @@ from app.providers.openai_compat_client import (
     _stream_error_text_async,
     _text_content,
     bounded_aiter_lines,
+    bounded_get,
     bounded_iter_lines,
+    bounded_post,
+    bounded_stream,
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
@@ -478,7 +481,7 @@ class AnthropicClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=self._headers(provider),
                 timeout=10,
@@ -500,7 +503,7 @@ class AnthropicClient:
         url = f"{provider.base_url}/models"
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=self._headers(provider),
                 timeout=30,
@@ -534,7 +537,7 @@ class AnthropicClient:
         url = f"{provider.base_url}/models"
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=self._headers(provider),
                 timeout=30,
@@ -569,7 +572,7 @@ class AnthropicClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=self._headers(provider),
                 json=payload,
@@ -644,7 +647,7 @@ class AnthropicClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=self._headers(provider),
                 json=payload,
@@ -716,7 +719,7 @@ class AnthropicClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=self._headers(provider),
                 json=body,
@@ -812,7 +815,7 @@ class AnthropicClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 url,
                 headers=self._headers(provider),
@@ -907,7 +910,7 @@ class AnthropicClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 url,
                 headers=self._headers(provider),

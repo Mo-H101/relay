@@ -1049,20 +1049,58 @@ class _SpyAsyncClient:
         return False
 
 
+class _SpySyncClient:
+    """
+    httpx.Client stand-in sharing the HTTPRecorder's handlers so sync
+    surfaces exercise the same scripts and request log.
+    """
+
+    def __init__(self, recorder: HTTPRecorder, **kwargs) -> None:
+        self.recorder = recorder
+        self.init_kwargs = kwargs
+
+    def get(self, url: str, **kwargs) -> Any:
+        return self.recorder.get(url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> Any:
+        return self.recorder.post(url, **kwargs)
+
+    def stream(self, method: str, url: str, **kwargs) -> Any:
+        return self.recorder.stream(method, url, **kwargs)
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "_SpySyncClient":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
 def install_http_mocks(
     monkeypatch,
     handlers: Dict[str, Any],
 ) -> HTTPRecorder:
     """
-    Monkeypatch httpx.get/post/stream and httpx.AsyncClient with the
-    recorder for the duration of a test. All four client modules share
-    the module-level httpx object, so one patch covers every surface.
+    Monkeypatch the sync and async wire surfaces with the recorder for
+    the duration of a test.
+
+    Async surfaces construct ``httpx.AsyncClient`` and sync surfaces
+    construct ``httpx.Client`` (via the bounded-request stand-ins,
+    because the top-level ``httpx`` helpers cannot carry the response
+    budget hook), so two constructor patches cover every module. The
+    legacy top-level ``httpx.get/post/stream`` names stay patched for
+    any remaining direct callers.
     """
     recorder = HTTPRecorder(handlers)
     monkeypatch.setattr(httpx, "get", recorder.get)
     monkeypatch.setattr(httpx, "post", recorder.post)
     monkeypatch.setattr(httpx, "stream", recorder.stream)
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _SpyAsyncClient(recorder, **kw))
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: _SpySyncClient(recorder, **kw)
+    )
     return recorder
 
 

@@ -31,7 +31,10 @@ from app.providers.openai_compat_client import (
     _stream_error_text_async,
     _text_content,
     bounded_aiter_lines,
+    bounded_get,
     bounded_iter_lines,
+    bounded_post,
+    bounded_stream,
     proxy_request_kwargs,
 )
 from app.services.metrics import relay_metrics
@@ -609,7 +612,7 @@ class GeminiClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=self._headers(provider),
                 timeout=10,
@@ -631,7 +634,7 @@ class GeminiClient:
         url = self._model_list_url(provider)
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=self._headers(provider),
                 timeout=30,
@@ -664,7 +667,7 @@ class GeminiClient:
         url = self._model_list_url(provider)
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=self._headers(provider),
                 timeout=30,
@@ -689,7 +692,7 @@ class GeminiClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=self._headers(provider),
                 json=payload,
@@ -755,7 +758,7 @@ class GeminiClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=self._headers(provider),
                 json=payload,
@@ -830,7 +833,7 @@ class GeminiClient:
         start = time.perf_counter()
 
         try:
-            response = httpx.post(
+            response = bounded_post(
                 url,
                 headers=self._headers(provider),
                 json=body,
@@ -926,7 +929,7 @@ class GeminiClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 url,
                 headers=self._headers(provider),
@@ -1019,7 +1022,7 @@ class GeminiClient:
         try:
             start = time.perf_counter()
 
-            with httpx.stream(
+            with bounded_stream(
                 "POST",
                 url,
                 headers=self._headers(provider),

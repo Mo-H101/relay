@@ -91,7 +91,7 @@ def patch_post(monkeypatch, response, recorded=None):
         return response
 
     monkeypatch.setattr(
-        "app.providers.openai_compat_client.httpx.post",
+        "app.providers.openai_compat_client.bounded_post",
         handler,
     )
 
@@ -104,7 +104,7 @@ def patch_get(monkeypatch, response, recorded=None):
         return response
 
     monkeypatch.setattr(
-        "app.providers.openai_compat_client.httpx.get",
+        "app.providers.openai_compat_client.bounded_get",
         handler,
     )
 
@@ -120,7 +120,7 @@ def patch_stream(monkeypatch, response, recorded=None):
         return FakeStreamCtx(response)
 
     monkeypatch.setattr(
-        "app.providers.openai_compat_client.httpx.stream",
+        "app.providers.openai_compat_client.bounded_stream",
         handler,
     )
 
@@ -244,7 +244,7 @@ class TestProviderCreation:
             raise httpx.ConnectError("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get",
+            "app.providers.openai_compat_client.bounded_get",
             handler,
         )
 
@@ -329,7 +329,7 @@ class TestModelDiscovery:
             raise httpx.TimeoutException("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get",
+            "app.providers.openai_compat_client.bounded_get",
             handler,
         )
 
@@ -419,7 +419,7 @@ class TestNonStreamChat:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post",
+            "app.providers.openai_compat_client.bounded_post",
             handler,
         )
 
@@ -548,7 +548,7 @@ class TestStreamingPath:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.stream",
+            "app.providers.openai_compat_client.bounded_stream",
             handler,
         )
 

@@ -42,7 +42,7 @@ def patch_post(monkeypatch, response, recorded=None):
         return response
 
     monkeypatch.setattr(
-        "app.providers.openai_compat_client.httpx.post",
+        "app.providers.openai_compat_client.bounded_post",
         handler,
     )
 
@@ -55,7 +55,7 @@ def patch_get(monkeypatch, response, recorded=None):
         return response
 
     monkeypatch.setattr(
-        "app.providers.openai_compat_client.httpx.get",
+        "app.providers.openai_compat_client.bounded_get",
         handler,
     )
 
@@ -147,7 +147,7 @@ class TestConnectivityProbe:
             return response
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get", handler
+            "app.providers.openai_compat_client.bounded_get", handler
         )
 
     def test_success_with_key_sends_bearer_and_times_out_at_ten(
@@ -196,7 +196,7 @@ class TestConnectivityProbe:
             raise httpx.ConnectError("connection refused")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get", handler
+            "app.providers.openai_compat_client.bounded_get", handler
         )
 
         ok, details, latency = OpenAICompatibleClient().connectivity_probe(
@@ -212,7 +212,7 @@ class TestConnectivityProbe:
             raise httpx.TimeoutException("timed out")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get", handler
+            "app.providers.openai_compat_client.bounded_get", handler
         )
 
         ok, details, _ = OpenAICompatibleClient().connectivity_probe(
@@ -336,7 +336,7 @@ class TestChat:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post",
+            "app.providers.openai_compat_client.bounded_post",
             handler,
         )
 
@@ -348,7 +348,7 @@ class TestChat:
             raise httpx.TimeoutException("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post",
+            "app.providers.openai_compat_client.bounded_post",
             handler,
         )
 
@@ -360,7 +360,7 @@ class TestChat:
             raise httpx.HTTPError("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post",
+            "app.providers.openai_compat_client.bounded_post",
             handler,
         )
 
@@ -406,7 +406,7 @@ class TestListModels:
             raise httpx.TimeoutException("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get",
+            "app.providers.openai_compat_client.bounded_get",
             handler,
         )
 
@@ -445,7 +445,7 @@ class TestProbeModel:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post",
+            "app.providers.openai_compat_client.bounded_post",
             handler,
         )
 
@@ -524,7 +524,7 @@ class TestProviderSpecificWording:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post",
+            "app.providers.openai_compat_client.bounded_post",
             handler,
         )
 
@@ -538,7 +538,7 @@ class TestProviderSpecificWording:
             raise httpx.ReadTimeout("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.post",
+            "app.providers.openai_compat_client.bounded_post",
             handler,
         )
 
@@ -552,7 +552,7 @@ class TestProviderSpecificWording:
             raise httpx.TimeoutException("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get",
+            "app.providers.openai_compat_client.bounded_get",
             handler,
         )
 
@@ -566,7 +566,7 @@ class TestProviderSpecificWording:
             raise httpx.TimeoutException("boom")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get",
+            "app.providers.openai_compat_client.bounded_get",
             handler,
         )
 
@@ -616,7 +616,7 @@ def _patch_stream(monkeypatch, response):
     def handler(*args, **kwargs):
         return _FakeStreamContext(response)
     monkeypatch.setattr(
-        "app.providers.openai_compat_client.httpx.stream",
+        "app.providers.openai_compat_client.bounded_stream",
         handler,
     )
 

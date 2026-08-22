@@ -4,11 +4,12 @@ from datetime import datetime, timezone
 from typing import List
 import time
 
-import httpx
-
 from app.providers.availability import classify_probe
 from app.providers.base import Provider
-from app.providers.openai_compat_client import proxy_request_kwargs
+from app.providers.openai_compat_client import (
+    bounded_get,
+    proxy_request_kwargs,
+)
 from app.services.capabilities import (
     detect_capability,
     is_chat_testable,
@@ -196,7 +197,7 @@ class HealthChecker:
         url = provider.base_url.rstrip("/") + provider.health_endpoint
 
         try:
-            response = httpx.get(
+            response = bounded_get(
                 url,
                 headers=headers,
                 timeout=10,

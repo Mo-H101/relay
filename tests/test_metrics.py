@@ -522,7 +522,7 @@ class TestProviderMetrics:
                 200, {"choices": [{"message": {"content": "hi"}}]}
             )
 
-        monkeypatch.setattr(occ.httpx, "post", fake_post)
+        monkeypatch.setattr(occ, "bounded_post", fake_post)
 
         provider = make_provider("A", ["a-1"])
         occ.OpenAICompatibleClient().chat(provider, "a-1", "hello")
@@ -542,7 +542,7 @@ class TestProviderMetrics:
         def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
             return FakeResponse(429, {}, text="rate limited")
 
-        monkeypatch.setattr(occ.httpx, "post", fake_post)
+        monkeypatch.setattr(occ, "bounded_post", fake_post)
 
         provider = make_provider("A", ["a-1"])
         with pytest.raises(ProviderHTTPError):
@@ -563,7 +563,7 @@ class TestProviderMetrics:
         def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
             raise httpx.ReadTimeout("timed out", request=None)
 
-        monkeypatch.setattr(occ.httpx, "post", fake_post)
+        monkeypatch.setattr(occ, "bounded_post", fake_post)
 
         provider = make_provider("A", ["a-1"])
         with pytest.raises(ProviderTimeout):
@@ -584,7 +584,7 @@ class TestProviderMetrics:
         def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
             raise httpx.ConnectError("refused")
 
-        monkeypatch.setattr(occ.httpx, "post", fake_post)
+        monkeypatch.setattr(occ, "bounded_post", fake_post)
 
         provider = make_provider("A", ["a-1"])
         with pytest.raises(ProviderHTTPError):
@@ -604,7 +604,7 @@ class TestProviderMetrics:
                 200, {"data": [{"id": "a-1"}, {"id": "a-2"}]}
             )
 
-        monkeypatch.setattr(occ.httpx, "get", fake_get)
+        monkeypatch.setattr(occ, "bounded_get", fake_get)
 
         provider = make_provider("A", ["a-1", "a-2"])
         models = occ.OpenAICompatibleClient().list_models(provider)

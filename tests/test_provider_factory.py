@@ -254,9 +254,12 @@ def test_runtime_provider_exposes_connectivity_probe(provider_id, monkeypatch):
     class _Resp:
         status_code = 200
 
+    import sys
+
+    client_module = sys.modules[type(client).connectivity_probe.__module__]
     monkeypatch.setattr(
-        type(client).connectivity_probe.__globals__["httpx"],
-        "get",
+        client_module,
+        "bounded_get",
         lambda *args, **kwargs: _Resp(),
     )
 

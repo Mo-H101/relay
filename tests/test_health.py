@@ -100,7 +100,9 @@ class TestConnectivityDispatch:
             captured["timeout"] = kwargs.get("timeout")
             return self._Resp()
 
-        monkeypatch.setattr("app.services.health_checker.httpx.get", fake_get)
+        monkeypatch.setattr(
+            "app.services.health_checker.bounded_get", fake_get
+        )
 
         provider = Provider(
             name="Ghost", base_url="https://ghost.invalid", api_key="k"
@@ -116,8 +118,6 @@ class TestConnectivityDispatch:
         assert captured["timeout"] == 10
 
     def test_client_probe_matches_fallback_for_same_response(self, monkeypatch):
-        import app.services.health_checker as hc
-
         from app.providers.openai_compat_client import OpenAICompatibleClient
 
         calls = []
@@ -126,9 +126,11 @@ class TestConnectivityDispatch:
             calls.append(url)
             return self._Resp()
 
-        monkeypatch.setattr(hc.httpx, "get", shared_get)
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get", shared_get
+            "app.services.health_checker.bounded_get", shared_get
+        )
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.bounded_get", shared_get
         )
 
         provider = make_provider([])

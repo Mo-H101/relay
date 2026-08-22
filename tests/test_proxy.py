@@ -195,7 +195,7 @@ class TestCallSites:
             response = FakeResponse()
             return response
 
-        monkeypatch.setattr(occ.httpx, "post", fake_post)
+        monkeypatch.setattr(occ, "bounded_post", fake_post)
         monkeypatch.setattr(settings, "proxy_enabled", True)
         monkeypatch.setattr(settings, "http_proxy", "http://proxy:8080")
         monkeypatch.setattr(settings, "https_proxy", "http://proxy:8080")
@@ -215,7 +215,7 @@ class TestCallSites:
             recorded["kwargs"] = kwargs
             return FakeResponse()
 
-        monkeypatch.setattr(occ.httpx, "post", fake_post)
+        monkeypatch.setattr(occ, "bounded_post", fake_post)
         monkeypatch.setattr(settings, "proxy_enabled", True)
         monkeypatch.setattr(settings, "https_proxy", "http://global:8080")
 
@@ -237,7 +237,7 @@ class TestCallSites:
                 payload={"data": [{"id": "m1"}, {"id": "m2"}]}
             )
 
-        monkeypatch.setattr(occ.httpx, "get", fake_get)
+        monkeypatch.setattr(occ, "bounded_get", fake_get)
         monkeypatch.setattr(settings, "proxy_enabled", True)
         monkeypatch.setattr(settings, "https_proxy", "http://proxy:8080")
 

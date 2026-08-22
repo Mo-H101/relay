@@ -64,7 +64,7 @@ def patch_discovery(monkeypatch, data, recorded=None):
         return FakeResponse(200, {"data": data})
 
     monkeypatch.setattr(
-        "app.providers.openai_compat_client.httpx.get",
+        "app.providers.openai_compat_client.bounded_get",
         handler,
     )
 
@@ -110,7 +110,7 @@ class TestCreateProvider:
             raise ProviderHTTPError(0, "offline")
 
         monkeypatch.setattr(
-            "app.providers.openai_compat_client.httpx.get",
+            "app.providers.openai_compat_client.bounded_get",
             handler,
         )
         monkeypatch.setattr(
@@ -263,7 +263,7 @@ class TestChatFlow:
 class TestHealthCompatibility:
     def test_health_check_reports_lmstudio_healthy(self, monkeypatch):
         monkeypatch.setattr(
-            "app.services.health_checker.httpx.get",
+            "app.services.health_checker.bounded_get",
             lambda url, **kwargs: FakeResponse(200, {"data": []}),
         )
         monkeypatch.setattr(
