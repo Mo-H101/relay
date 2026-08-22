@@ -62,6 +62,29 @@ class DiagnosticsService:
             return []
         return getter()
 
+    @staticmethod
+    def _safe_storage_errors(errors) -> list[dict]:
+        """Project persistence failures without paths or exception text."""
+        safe = []
+        for error in errors or []:
+            if not isinstance(error, dict):
+                safe.append({"kind": "storage_error"})
+                continue
+            item = {"kind": "storage_error"}
+            operation = error.get("operation")
+            if isinstance(operation, str) and operation:
+                item["operation"] = operation
+            timestamp = error.get("at")
+            if isinstance(timestamp, (int, float)):
+                item["at"] = timestamp
+            safe.append(item)
+        return safe
+
+    @staticmethod
+    def _safe_persistence_path(enabled: bool) -> str | None:
+        """Keep the diagnostics field while withholding filesystem paths."""
+        return "configured" if enabled else None
+
     def _operations(self) -> dict:
         """
         Rolling operational summary (last OPS_WINDOW_SECONDS) plus
@@ -456,7 +479,7 @@ class DiagnosticsService:
             return {
                 "enabled": enabled,
                 "available": False,
-                "path": str(settings.persistence_path) if enabled else None,
+                "path": self._safe_persistence_path(enabled),
                 "schema_version": None,
                 "storage_status": (
                     "disabled" if not enabled else "unavailable"
@@ -474,8 +497,10 @@ class DiagnosticsService:
                 "flush_count": 0,
                 "load_errors": [],
                 "flush_errors": [],
-                "initialization_error": getattr(
-                    relay, "persistence_init_error", None
+                "initialization_error": (
+                    "storage_error"
+                    if getattr(relay, "persistence_init_error", None)
+                    else None
                 ),
             }
 
@@ -494,13 +519,15 @@ class DiagnosticsService:
                 "decision_stats_rows": 0,
             }
 
-        load_errors = store_stats["load_errors"]
-        flush_errors = flush_stats.get("flush_errors", [])
+        load_errors = self._safe_storage_errors(store_stats["load_errors"])
+        flush_errors = self._safe_storage_errors(
+            flush_stats.get("flush_errors", [])
+        )
 
         return {
             "enabled": enabled,
             "available": True,
-            "path": store_stats["path"],
+            "path": self._safe_persistence_path(enabled),
             "schema_version": store_stats.get("schema_version"),
             "storage_status": (
                 "ok"

@@ -481,7 +481,7 @@ class TestPersistence:
         persistence = response.json()["persistence"]
         assert persistence["enabled"] is True
         assert persistence["available"] is True
-        assert persistence["path"] == str(path)
+        assert persistence["path"] == "configured"
         assert persistence["schema_version"] == StateStore.SCHEMA_VERSION
         assert persistence["storage_status"] == "ok"
         assert persistence["learned_memory"] == {
@@ -497,6 +497,28 @@ class TestPersistence:
         assert persistence["last_flush_at"]
         assert persistence["load_errors"] == []
         assert persistence["flush_errors"] == []
+
+    def test_persistence_diagnostics_redacts_paths_and_error_text(self):
+        errors = DiagnosticsService._safe_storage_errors(
+            [
+                {
+                    "operation": "load",
+                    "at": 123.0,
+                    "message": r"unable to open C:\private\relay.db",
+                },
+                {
+                    "at": 456.0,
+                    "message": "secret provider response",
+                },
+            ]
+        )
+
+        assert errors == [
+            {"kind": "storage_error", "operation": "load", "at": 123.0},
+            {"kind": "storage_error", "at": 456.0},
+        ]
+        assert "private" not in json.dumps(errors)
+        assert "secret provider response" not in json.dumps(errors)
 
 
 class TestAdaptiveSection:
