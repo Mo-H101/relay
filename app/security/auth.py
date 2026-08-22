@@ -325,11 +325,13 @@ def require_api_key(request: Request) -> None:
             ) from exc
 
         try:
-            meta = store.verify(token)
+            result = store.authenticate(token)
         except KeyStoreError:
             _deny(request, "store_unavailable")
 
-        if meta is not None:
+        meta = result.get("meta")
+
+        if result.get("status") == "ok" and meta is not None:
             authorization = request.headers.get("authorization", "")
             scheme = auth_scheme(
                 path=path,
@@ -340,7 +342,7 @@ def require_api_key(request: Request) -> None:
             _grant_store(request, meta, scheme, path)
             return
 
-        reason = store.classify(token)["status"]
+        reason = result.get("status", "invalid")
         if reason == "ok":
             reason = "invalid"
 

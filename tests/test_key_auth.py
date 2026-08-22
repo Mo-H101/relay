@@ -90,6 +90,31 @@ def test_unknown_store_key_is_401(store_auth, client):
     assert response.json() == {"detail": "Unauthorized"}
 
 
+def test_store_auth_performs_one_scrypt_scan(store_auth, client, monkeypatch):
+    """A failed request must not verify and classify in separate scans."""
+    for index in range(3):
+        _create_key(store_auth, scopes=[f"scope-{index}"])
+
+    from app.services import key_store as key_store_module
+
+    original_scrypt = key_store_module._scrypt
+    calls = []
+
+    def counted_scrypt(*args, **kwargs):
+        calls.append(True)
+        return original_scrypt(*args, **kwargs)
+
+    monkeypatch.setattr(key_store_module, "_scrypt", counted_scrypt)
+
+    response = client.get(
+        "/providers",
+        headers={"Authorization": "Bearer rl_wrong"},
+    )
+
+    assert response.status_code == 401
+    assert len(calls) == 3
+
+
 def test_store_auth_records_key_metric(store_auth, client):
     key_id, raw_key = _create_key(store_auth)
     client.get("/providers", headers={"Authorization": f"Bearer {raw_key}"})

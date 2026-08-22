@@ -397,6 +397,54 @@ class KeyStore:
 
         return {"status": "invalid", "meta": None}
 
+    def authenticate(self, token: str) -> dict:
+        """
+        Verify a token and classify a matching revoked/expired row in one
+        constant-time scan.
+
+        The auth dependency needs both the successful metadata and the
+        failure status for an unsuccessful token.  Keeping those operations
+        together prevents one request from performing the full scrypt scan
+        twice.  Existing ``verify`` and ``classify`` callers retain their
+        original behavior; this method is the combined request-path API.
+        """
+        if not token:
+            return {"status": "invalid", "meta": None}
+
+        now = time.time()
+        self._ensure_open()
+
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_SELECT_COLUMNS} FROM api_keys"
+            ).fetchall()
+
+        matched_status = None
+        matched_meta = None
+
+        for row in rows:
+            _, (n, r, p) = _parse_kdf(row[3])
+            digest = _scrypt(token, row[2], n, r, p)
+
+            if not _constant_time_eq(digest, row[1]):
+                continue
+
+            meta = self._row_to_meta(row)
+
+            if row[9] is not None:
+                matched_status = "revoked"
+            elif row[6] is not None and row[6] <= now:
+                matched_status = "expired"
+            else:
+                matched_status = "ok"
+
+            matched_meta = meta
+
+        if matched_status == "ok":
+            self.mark_used(matched_meta["id"])
+
+        return {"status": matched_status or "invalid", "meta": matched_meta}
+
     def verify(self, token: str) -> Optional[dict]:
         """
         Verify a raw key against active (not revoked, not expired) rows.
