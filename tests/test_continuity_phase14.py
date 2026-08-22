@@ -864,9 +864,56 @@ class TestFlusherIntegration:
             seq=999,
             outcome="ok",
         )
-        # Should not raise
         flusher.flush()
         store.close()
+
+    def test_project_coalesce_keeps_distinct_projects(self, tmp_path):
+        """Two projects under one key: a newer update for project B must
+        never replace a still-queued update for project A.
+
+        Project-state rows are keyed by (key_id, project_key) and carry no
+        conversation id; coalescing them by (operation, cid, key_id) alone
+        silently dropped the older project's durable update.
+        """
+        store, flusher = _wired_store_flusher(tmp_path)
+
+        accepted_a = flusher.enqueue(
+            "project_state.update",
+            key_id="k",
+            project_key="a" * 32,
+            last_models=["m1"],
+            counters={"turns": 3, "switches": 0},
+        )
+        accepted_b = flusher.enqueue(
+            "project_state.update",
+            key_id="k",
+            project_key="b" * 32,
+            last_models=["m2"],
+            counters={"turns": 7, "switches": 1},
+        )
+        assert accepted_a and accepted_b
+
+        # Same-project repeat still coalesces (latest wins).
+        accepted_a2 = flusher.enqueue(
+            "project_state.update",
+            key_id="k",
+            project_key="a" * 32,
+            last_models=["m3"],
+            counters={"turns": 9, "switches": 2},
+        )
+        assert accepted_a2
+        assert flusher.queue_size == 2
+
+        flusher.flush()
+
+        pa = store.project_state("k", "a" * 32)
+        pb = store.project_state("k", "b" * 32)
+        store.close()
+
+        assert pa is not None, "project A state row was never written"
+        assert pa["counters"]["turns"] == 9
+        assert pb is not None, "project B state row was never written"
+        assert pb["counters"]["turns"] == 7
 
 
 # ---------------------------------------------------------------------------

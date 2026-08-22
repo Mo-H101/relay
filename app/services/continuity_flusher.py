@@ -160,11 +160,20 @@ class ContinuityFlusher:
             "summary.record",
             "compaction.record",
         }:
-            identity = (operation, cid, key_id)
+            # project_state rows are keyed by (key_id, project_key) in the
+            # store and carry no conversation id; folding two different
+            # projects into one queue slot silently drops the older
+            # project's update, so its identity must include project_key.
+            identity = (operation, cid, key_id, kwargs.get("project_key"))
             for index in range(len(self._queue) - 1, -1, -1):
                 existing_op, existing = self._queue[index]
                 if (
-                    (existing_op, existing.get("conversation_id"), existing.get("key_id"))
+                    (
+                        existing_op,
+                        existing.get("conversation_id"),
+                        existing.get("key_id"),
+                        existing.get("project_key"),
+                    )
                     == identity
                 ):
                     self._queue[index] = (operation, dict(kwargs))
