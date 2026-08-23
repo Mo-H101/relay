@@ -426,6 +426,27 @@ class Settings:
         )
 
         # =========================
+        # Provider recovery
+        # =========================
+
+        # F1 remediation: a provider whose startup model discovery failed
+        # is retried in the background with per-provider exponential
+        # backoff instead of staying demoted until process restart.
+        self.provider_recovery_enabled = (
+            os.getenv("PROVIDER_RECOVERY_ENABLED", "true").lower() == "true"
+        )
+        self.provider_recovery_interval_seconds = _valid_int(
+            "PROVIDER_RECOVERY_INTERVAL_SECONDS",
+            os.getenv("PROVIDER_RECOVERY_INTERVAL_SECONDS", "30"),
+            minimum=1,
+        )
+        self.provider_recovery_max_interval_seconds = _valid_int(
+            "PROVIDER_RECOVERY_MAX_INTERVAL_SECONDS",
+            os.getenv("PROVIDER_RECOVERY_MAX_INTERVAL_SECONDS", "600"),
+            minimum=1,
+        )
+
+        # =========================
         # Relay
         # =========================
 

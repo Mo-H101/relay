@@ -35,6 +35,9 @@ async def lifespan(fastapi_app: FastAPI):
     if settings.health_refresh_enabled:
         relay.health_refresher.start()
 
+    if settings.provider_recovery_enabled:
+        relay.provider_recovery.start()
+
     if relay.state_flusher is not None:
         relay.state_flusher.start()
 
@@ -70,6 +73,10 @@ async def lifespan(fastapi_app: FastAPI):
     try:
         yield
     finally:
+        # Stop provider recovery first: it mutates provider state and its
+        # in-flight pass should never race shutdown of the other services.
+        relay.provider_recovery.stop()
+
         relay.health_refresher.stop()
 
         if relay.state_flusher is not None:

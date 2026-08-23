@@ -510,6 +510,20 @@ _RAW_SPECS = (
     _restart("HEALTH_DEEP_REFRESH_ENABLED", "health_deep_refresh_enabled",
              "bool", False, "Enable deep health refresh.", "health"),
 
+    # -------------------------------------------- provider recovery (restart)
+    _restart("PROVIDER_RECOVERY_ENABLED", "provider_recovery_enabled",
+             "bool", True,
+             "Retry model discovery for providers that failed at startup.",
+             "providers"),
+    _restart("PROVIDER_RECOVERY_INTERVAL_SECONDS",
+             "provider_recovery_interval_seconds", "int", 30,
+             "First rediscovery delay after a failed discovery, in seconds; "
+             "doubles per consecutive failure.", "providers", minimum=1),
+    _restart("PROVIDER_RECOVERY_MAX_INTERVAL_SECONDS",
+             "provider_recovery_max_interval_seconds", "int", 600,
+             "Upper bound for the rediscovery backoff, in seconds.",
+             "providers", minimum=1),
+
     # ------------------------------------------------- telemetry capacity
     _restart("TELEMETRY_MAX_FAILURE_HISTORY", "telemetry_max_failure_history",
              "int", 50, "Cap on retained failure-history entries.",

@@ -7,6 +7,7 @@ from app.services.provider_manager import ProviderManager
 from app.services.correlation import new_correlation_id
 from app.services.health_checker import HealthChecker
 from app.services.health_refresher import HealthRefresher
+from app.services.provider_recovery import ProviderRecovery
 from app.services.health_store import HealthStore
 from app.services.candidate_builder import CandidateBuilder
 from app.services.chat_service import ChatService
@@ -69,6 +70,13 @@ class Relay:
             health_checker=self.health_checker,
             interval_seconds=settings.health_refresh_interval_seconds,
             deep=settings.health_deep_refresh_enabled,
+        )
+        # F1: background rediscovery for providers whose startup model
+        # discovery failed. Inert until start() (lifespan).
+        self.provider_recovery = ProviderRecovery(
+            provider_manager=self.provider_manager,
+            interval_seconds=settings.provider_recovery_interval_seconds,
+            max_interval_seconds=settings.provider_recovery_max_interval_seconds,
         )
         self.routing = RoutingEngine()
         self.telemetry = TelemetryStore(

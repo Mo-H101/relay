@@ -482,6 +482,11 @@ class RelayMetrics:
             "Provider connectivity (1 = reachable).",
             ("provider",),
         )
+        self.provider_recovery_attempts = r.counter(
+            "relay_provider_recovery_attempts_total",
+            "Background rediscovery attempts for startup-failed providers.",
+            ("provider", "outcome"),
+        )
 
         # Routing
         self.routing_selected = r.counter(

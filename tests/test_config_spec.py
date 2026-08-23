@@ -42,7 +42,7 @@ from app.providers.registry import PROVIDER_REGISTRY, RUNTIME_READY
 def test_spec_covers_every_settings_attribute():
     expected = set(vars(Settings()))
     assert set(SPEC_BY_ATTR) == expected
-    assert len(SPECS) == len(expected) == 121
+    assert len(SPECS) == len(expected) == 124
 
 
 def test_every_spec_env_is_unique():
@@ -247,6 +247,9 @@ def test_non_reloadable_fields_are_never_live():
             "provider_max_response_bytes",
             "provider_max_chunk_bytes",
             "provider_max_response_seconds",
+            "provider_recovery_enabled",
+            "provider_recovery_interval_seconds",
+            "provider_recovery_max_interval_seconds",
         }
     )
 
