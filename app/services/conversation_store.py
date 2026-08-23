@@ -105,6 +105,16 @@ class ConversationStore:
         return self._path
 
     def close(self) -> None:
+        """
+        Release the underlying SQLite connection.
+
+        Closing is intentionally not terminal: exactly like ``KeyStore``
+        (whose ``verify_reopens_after_close`` contract is pinned by
+        tests), the store lazily reopens on its next operation. Late
+        writers during shutdown drain keep working and background
+        flushers can never crash on a closed handle; callers that need a
+        truly terminal close must stop scheduling work first.
+        """
         with self._lock:
             if self._conn is not None:
                 self._conn.close()

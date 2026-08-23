@@ -119,6 +119,25 @@ class TestSchemaMigration:
 
         assert version == 8
 
+    def test_close_reopens_lazily_on_next_use(self, tmp_path):
+        # Contract (mirrors KeyStore.verify_reopens_after_close): close()
+        # releases the connection but is not terminal; the next store
+        # operation lazily reopens. Late shutdown-drain writers keep
+        # working and flushers never crash on a closed handle.
+        store = _store(tmp_path)
+        record = store.create(
+            key_id="k", client_bucket="cline", project_key="p" * 32
+        )
+        store.close()
+        assert store.stats()["open"] is False
+
+        fetched = store.get(record["id"], "k")
+        assert fetched is not None
+        assert store.stats()["open"] is True
+
+        store.close()
+        assert store.stats()["open"] is False
+
 
 class TestConversations:
     def test_create_and_get_roundtrip(self, tmp_path):
