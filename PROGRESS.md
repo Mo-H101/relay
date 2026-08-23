@@ -6,59 +6,82 @@ Base all work on: current code + this file + `git log --oneline -10`.
 ## Current state
 
 - **Branch:** `master`.
-- **HEAD:** `c1f8840125087ec87d00976bf4b6f8d9db8a9557`
-  (`fix: bump python-dotenv to patched 1.2.2 release`).
-- **origin/master:** `619dbac952ef1aa9d95819dcf7024c777366d258` —
-  master is **20 commits ahead, 0 behind**.
-- **Push status:** **NOT PUSHED.** The repository is at a verified
-  **pre-push remediation checkpoint** (see next section).
+- **HEAD:** `e42f14342fa629be020730c075e73b3a6cf53335`
+  (`docs: pin ConversationStore lazy-reopen-after-close contract`).
+- **origin/master:** `6ba7308010a6d122880855c39a64bf7791e7285c` —
+  master is **2 commits ahead, 0 behind** (final hardening checkpoint;
+  see next section). Push + CI verification happen as part of that
+  checkpoint.
 - **Working tree:** tracked files clean. The intentionally preserved,
   untracked context documents `OVERNIGHT_REPORT.md` and
   `PHASE_15_PROPOSAL.md` remain present.
 - **CI:** the current workflow tests Ubuntu Python 3.10/3.11/3.12/3.13,
   Windows Python 3.12, and packaging on Ubuntu Python 3.12. CI run
-  `32571822641` is green across all six jobs for `57af339`
-  (historical). The remediation history ending at `c1f8840` has **not
-  run CI yet** — verify CI after the controlled push.
-- **Recent history:** Codex/OpenCode adversarial security/reliability
-  remediation gate (20 commits, `619dbac..c1f8840`) completed,
-  independently verified PASS WITH NOTES; earlier Phase 16 Stage 2A
-  remediation through `57af339`; Phase 16 Stage 1 remediation at
-  `68921c1`; Phase 14 streaming turn accounting at `8e53fd7`;
-  Phase 15 Stages A+B design system at `3ab1de9`; Stage C core screens
-  at `6ba1dc3`; Stage C hotfix at `608ee0f`; Stage D chat screen &
-  streaming redesign at `d520a11`; Stage E diagnostics sub-tabs at
-  `1d05f9a`; Stage F config collapsibles + wizard at `726f09c`; Stage G
-  polish & final cleanup at `e1661ec`; post-Stage-G wizard CI-regression
-  hotfix at `66cb775`.
-- **Phase 15 Stage G (polish & final cleanup) is COMPLETED** —
-  CSS dead-class cleanup, .chat-assistant fix, status transitions, tab
-  description subtitles. Follow-up hotfix `66cb775` resolved a Stage G
-  CI regression (see What is done).
-- **Phase 15 Stage F (config collapsibles + wizard) is COMPLETED** —
-  collapsible sections and guided wizard implemented, committed at
-  `726f09c`, 36 config tests pass (was 20).
-- **Phase 15 Stage E (diagnostics sub-tabs) is COMPLETED**
-  — implemented and verified at `1d05f9a` (see What is done).
-- **Phase 15 Stage D (chat screen & streaming redesign) is COMPLETED**
-  — implemented and verified at `d520a11` (see What is done).
-- **Phase 15 Stage C (core screens redesign) is COMPLETED** —
-  implemented and verified at `6ba1dc3`/`608ee0f` (see What is done).
-- **Phase 15 Stages A+B (design system foundations + dead code cleanup)
-  is COMPLETED** — implemented and verified at `3ab1de9` (see What is
-  done).
-- **Phase 14 (streaming turn accounting) is COMPLETED** — implemented
-  and verified at `8e53fd7` (see What is done).
-- **Baseline suite:** pre-remediation baseline was 2777 passed, 8 skipped,
-  0 failed. Stage 1 added seven authentication regression tests; local
-  full-suite verification passed on Python 3.10 (2771 passed, 21 skipped)
-  and Python 3.12 (2772 passed, 20 skipped), with no failures.
-- **Release state:** version `1.0.0rc1`; Phase 15 Stages A–G complete;
-  Phase 16 Stage 1 and Stage 2A remediation complete; `v1.0.0` is not
-  released. Phase 17 has not started.
+  `32602878705` is green for baseline `6ba7308`. The two hardening
+  commits (`da7adc5`, `e42f143`) have not run CI yet — verify CI after
+  the controlled push.
+- **Recent history:** post-campaign final hardening (2 commits,
+  `6ba7308..e42f143`) completed; before that the Codex/OpenCode
+  adversarial security/reliability remediation gate through `6ba7308`
+  (pushed, CI green); earlier Phase 16 Stage 2A remediation through
+  `57af339`; Phase 16 Stage 1 remediation at `68921c1`; Phase 14
+  streaming turn accounting at `8e53fd7`; Phase 15 Stages A+B design
+  system at `3ab1de9`; Stage C core screens at `6ba1dc3`; Stage C
+  hotfix at `608ee0f`; Stage D chat screen & streaming redesign at
+  `d520a11`; Stage E diagnostics sub-tabs at `1d05f9a`; Stage F config
+  collapsibles + wizard at `726f09c`; Stage G polish & final cleanup at
+  `e1661ec`; post-Stage-G wizard CI-regression hotfix at `66cb775`.
+- **Release state:** version `1.0.0rc1`; pre-release validation campaign
+  complete (verdict: RELEASE AFTER SPECIFIC FIXES); its single blocker
+  F1 is now fixed at `da7adc5` (see next section). Phase 17 has not
+  started.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.
+
+### Final hardening checkpoint — F1 provider recovery (post-campaign)
+
+- **Baseline:** `6ba7308` — the read-only pre-release validation
+  campaign's HEAD; verdict RELEASE AFTER SPECIFIC FIXES with F1 as the
+  only blocker.
+- **`da7adc5 fix: recover providers whose startup discovery failed`:**
+  new `ProviderRecovery` service closes F1 — providers whose startup
+  model discovery failed are retried in the background by a single
+  daemon worker using the same registry-driven factory as startup, with
+  per-provider exponential backoff (`PROVIDER_RECOVERY_INTERVAL_SECONDS`
+  doubling up to `PROVIDER_RECOVERY_MAX_INTERVAL_SECONDS`), serialized
+  passes (no duplicate discovery), backoff-state pruning so
+  `/admin/reload` semantics stay exact, healthy/disabled providers never
+  touched, clean lifespan shutdown ordering, and outcomes exposed via
+  `relay_provider_recovery_attempts_total{provider,outcome}`. Enabled by
+  default (`PROVIDER_RECOVERY_ENABLED=true`). Regression coverage:
+  startup-failure → automatic rediscovery → routable without restart;
+  no runaway tasks under repeated failures; clean shutdown; reload/admin
+  paths unchanged; metrics deltas; settings/spec parity tests updated
+  (spec count 124).
+- **`e42f143 docs: pin ConversationStore lazy-reopen-after-close
+  contract`:** campaign follow-up decision — the auto-reopen after
+  `close()` is intentional house design (same contract as `KeyStore`,
+  already pinned by `verify_reopens_after_close`): documented on
+  `ConversationStore.close()` and locked with
+  `test_close_reopens_lazily_on_next_use`. Behavior unchanged.
+- **Validation (local, Python 3.12):** final checkpoint full-suite run
+  **2873 passed / 20 skipped / 2 failed**; packaging suite **29/29**
+  (wheel build + console script, arbitrary-cwd install, sdist pruning,
+  upgrade from 0.1.0); new F1 regression suite **16/16**; continuity-
+  store and config-spec suites green post-commit. Both failures are the
+  known environmental flakes (see Known failures / flakes), neither
+  caused by these commits: the retry wall-clock test fails on pristine
+  `6ba7308` too (proven via stash; its `<1s` bound vs ~1s/request local
+  overhead) while staying green in CI, and the UI key-masking test
+  passed standalone immediately after the loaded run.
+- **Remaining accepted risks:** Retry-After still not honored
+  (documented RC behavior-proof test pins current behavior); starlette
+  0.47.3 advisory family unchanged (pinned via fastapi, mitigated
+  in-app); provider recovery intentionally covers startup failures only
+  (runtime degradation remains health/telemetry's job).
+- **Next transition:** controlled push of `da7adc5..e42f143` → verify
+  CI green → release transition proceeds; Phase 17 not started.
 
 ### Adversarial remediation gate — completed, pre-push checkpoint
 
@@ -144,7 +167,9 @@ Base all work on: current code + this file + `git log --oneline -10`.
   driver error). Passes standalone, passes file-level (12/12), and
   passed on the immediate full-suite rerun. Not a deterministic
   regression; left unmodified. Revisit pilot timeouts only if it
-  recurs.
+  recurs. Recurred once during the final hardening checkpoint full run
+  (`6ba7308..e42f143`) and passed standalone immediately after — same
+  classification.
 
 ## What is done
 
