@@ -28,6 +28,7 @@ import time
 from collections import deque
 from typing import Optional
 
+from app.services.conversation_store import MalformedInputError
 from app.services.metrics import relay_metrics
 
 _logger = logging.getLogger("relay")
@@ -288,6 +289,23 @@ class ContinuityFlusher:
                 self._retain_row(operation, kwargs)
                 clean = False
                 break
+            except MalformedInputError as exc:
+                # N-4: malformed input (e.g. negative/float/bool tokens from
+                # an untrusted provider) can never succeed on retry.  Drop
+                # the row so one bad operation cannot poison the write-behind
+                # queue and block later valid operations from being persisted.
+                # ConversationStore raises ValueError exclusively for
+                # validation failures -- never for infrastructure errors,
+                # which retain their existing retry/error behavior above.
+                _logger.warning(
+                    "continuity flush: dropping malformed operation "
+                    "%s (conversation_id=%s): %s",
+                    operation,
+                    kwargs.get("conversation_id"),
+                    exc,
+                )
+                self._on_op_drained(kwargs.get("conversation_id"))
+                continue
             except Exception as exc:
                 self._record_flush_error(exc)
                 self._retain_row(operation, kwargs)

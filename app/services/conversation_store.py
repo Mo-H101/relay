@@ -56,18 +56,29 @@ _VALID_STATUS = frozenset({"active", "archived"})
 _VALID_OUTCOMES = frozenset({"ok", "failed", "denied"})
 
 
+class MalformedInputError(ValueError):
+    """Raised when caller-supplied data fails input validation.
+
+    Distinguished from plain ``ValueError`` so that the continuity
+    flusher can drop malformed operations (which can never succeed on
+    retry) without conflating them with other validation errors (e.g.
+    "conversation not found") that represent transient state and should
+    be retained and retried.
+    """
+
+
 def _validate_non_negative_int(value, name: str) -> None:
     """Validate that *value* is ``None`` or a non-negative ``int``.
 
     Rejects booleans (``bool`` is a subclass of ``int`` in Python),
-    floats, strings, and negative integers.  Raises ``ValueError`` on
-    invalid input so that bad accounting data cannot cross the
-    persistence boundary.
+    floats, strings, and negative integers.  Raises
+    ``MalformedInputError`` on invalid input so that bad accounting
+    data cannot cross the persistence boundary.
     """
     if value is None:
         return
     if type(value) is not int or value < 0:
-        raise ValueError(f"invalid {name}: {value!r}")
+        raise MalformedInputError(f"invalid {name}: {value!r}")
 
 
 class ConversationStoreError(Exception):
@@ -1342,5 +1353,6 @@ __all__ = [
     "ConversationRecord",
     "ConversationScope",
     "ConversationStatus",
+    "MalformedInputError",
     "TurnOutcome",
 ]
