@@ -800,6 +800,7 @@ class OpenAICompatibleClient:
         if seed is not None:
             payload["seed"] = seed
 
+        done_seen = False
         try:
             start = time.perf_counter()
 
@@ -837,6 +838,7 @@ class OpenAICompatibleClient:
                     if line.startswith("data: "):
                         data_str = line[6:]
                         if data_str.strip() == "[DONE]":
+                            done_seen = True
                             break
                         try:
                             chunk = json.loads(data_str)
@@ -876,6 +878,8 @@ class OpenAICompatibleClient:
             ) from exc
 
         except httpx.HTTPError as exc:
+            if done_seen:
+                return
             relay_metrics.record_provider(
                 provider.name,
                 "chat_stream",
@@ -908,6 +912,7 @@ class OpenAICompatibleClient:
         if provider.has_api_key():
             headers["Authorization"] = f"Bearer {provider.api_key}"
 
+        done_seen = False
         try:
             start = time.perf_counter()
 
@@ -945,6 +950,7 @@ class OpenAICompatibleClient:
                         continue
                     data_str = line[6:]
                     if data_str.strip() == "[DONE]":
+                        done_seen = True
                         break
                     try:
                         chunk = json.loads(data_str)
@@ -984,6 +990,8 @@ class OpenAICompatibleClient:
             ) from exc
 
         except httpx.HTTPError as exc:
+            if done_seen:
+                return
             relay_metrics.record_provider(
                 provider.name,
                 "chat_stream_messages",
@@ -1171,6 +1179,7 @@ class OpenAICompatibleClient:
 
         url = f"{provider.base_url}/chat/completions"
 
+        done_seen = False
         try:
             start = time.perf_counter()
 
@@ -1207,6 +1216,7 @@ class OpenAICompatibleClient:
                         if line.startswith("data: "):
                             data_str = line[6:]
                             if data_str.strip() == "[DONE]":
+                                done_seen = True
                                 break
                             try:
                                 chunk = json.loads(data_str)
@@ -1245,6 +1255,8 @@ class OpenAICompatibleClient:
             ) from exc
 
         except httpx.HTTPError as exc:
+            if done_seen:
+                return
             relay_metrics.record_provider(
                 provider.name,
                 "chat_stream",
@@ -1370,6 +1382,7 @@ class OpenAICompatibleClient:
 
         url = f"{provider.base_url}/chat/completions"
 
+        done_seen = False
         try:
             start = time.perf_counter()
 
@@ -1407,6 +1420,7 @@ class OpenAICompatibleClient:
                             continue
                         data_str = line[6:]
                         if data_str.strip() == "[DONE]":
+                            done_seen = True
                             break
                         try:
                             chunk = json.loads(data_str)
@@ -1446,6 +1460,8 @@ class OpenAICompatibleClient:
             ) from exc
 
         except httpx.HTTPError as exc:
+            if done_seen:
+                return
             relay_metrics.record_provider(
                 provider.name,
                 "chat_stream_messages",

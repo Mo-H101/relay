@@ -1137,6 +1137,198 @@ class TestUpdateTurnTokenValidation:
         assert updated["tokens_in"] is None
         assert updated["tokens_out"] is None
 
+    def test_float_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        store.append_turn(
+            conversation_id=conv["id"], key_id="k", seq=1,
+            outcome="denied", provider="openai", model="gpt-4o",
+        )
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.update_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in=1.5,
+            )
+        store.close()
+
+    def test_bool_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        store.append_turn(
+            conversation_id=conv["id"], key_id="k", seq=1,
+            outcome="denied", provider="openai", model="gpt-4o",
+        )
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.update_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in=True,
+            )
+        store.close()
+
+    def test_string_tokens_out_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        store.append_turn(
+            conversation_id=conv["id"], key_id="k", seq=1,
+            outcome="denied", provider="openai", model="gpt-4o",
+        )
+        with pytest.raises(ValueError, match="invalid tokens_out"):
+            store.update_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_out="100",
+            )
+        store.close()
+
+    def test_float_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in=1.5,
+            )
+        store.close()
+
+    def test_bool_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in=True,
+            )
+        store.close()
+
+    def test_string_tokens_out_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_out"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_out="100",
+            )
+        store.close()
+
+
+# ---------------------------------------------------------------------------
+# F-4 (N-1): append_turn() token validation regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestAppendTurnTokenValidation:
+    """Verify that append_turn() rejects invalid accounting values at the
+    persistence boundary.  Before the fix, append_turn() had zero
+    validation for tokens_in/tokens_out/latency_ms."""
+
+    def test_negative_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in=-5,
+            )
+        store.close()
+
+    def test_negative_tokens_out_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_out"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_out=-1,
+            )
+        store.close()
+
+    def test_negative_latency_ms_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid latency_ms"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", latency_ms=-100,
+            )
+        store.close()
+
+    def test_float_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in=1.5,
+            )
+        store.close()
+
+    def test_bool_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in=True,
+            )
+        store.close()
+
+    def test_bool_false_latency_ms_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid latency_ms"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", latency_ms=False,
+            )
+        store.close()
+
+    def test_string_tokens_in_raises(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        with pytest.raises(ValueError, match="invalid tokens_in"):
+            store.append_turn(
+                conversation_id=conv["id"], key_id="k", seq=1,
+                outcome="ok", tokens_in="100",
+            )
+        store.close()
+
+    def test_zero_tokens_accepted(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        store.append_turn(
+            conversation_id=conv["id"], key_id="k", seq=1,
+            outcome="ok", tokens_in=0, tokens_out=0, latency_ms=0,
+        )
+        turns = store.turns(conv["id"], "k")
+        store.close()
+        assert turns[0]["tokens_in"] == 0
+        assert turns[0]["tokens_out"] == 0
+        assert turns[0]["latency_ms"] == 0
+
+    def test_positive_tokens_persisted(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        store.append_turn(
+            conversation_id=conv["id"], key_id="k", seq=1,
+            outcome="ok", tokens_in=150, tokens_out=75, latency_ms=320,
+        )
+        turns = store.turns(conv["id"], "k")
+        store.close()
+        assert turns[0]["tokens_in"] == 150
+        assert turns[0]["tokens_out"] == 75
+        assert turns[0]["latency_ms"] == 320
+
+    def test_none_tokens_persisted_as_none(self, tmp_path):
+        store = _store(tmp_path)
+        conv = store.create(key_id="k", client_bucket="cline", project_key="p" * 32)
+        store.append_turn(
+            conversation_id=conv["id"], key_id="k", seq=1,
+            outcome="ok",
+        )
+        turns = store.turns(conv["id"], "k")
+        store.close()
+        assert turns[0]["tokens_in"] is None
+        assert turns[0]["tokens_out"] is None
+        assert turns[0]["latency_ms"] is None
+
 
 # ---------------------------------------------------------------------------
 # F-5: TurnContext.update() token preservation regression tests

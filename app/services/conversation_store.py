@@ -56,6 +56,20 @@ _VALID_STATUS = frozenset({"active", "archived"})
 _VALID_OUTCOMES = frozenset({"ok", "failed", "denied"})
 
 
+def _validate_non_negative_int(value, name: str) -> None:
+    """Validate that *value* is ``None`` or a non-negative ``int``.
+
+    Rejects booleans (``bool`` is a subclass of ``int`` in Python),
+    floats, strings, and negative integers.  Raises ``ValueError`` on
+    invalid input so that bad accounting data cannot cross the
+    persistence boundary.
+    """
+    if value is None:
+        return
+    if type(value) is not int or value < 0:
+        raise ValueError(f"invalid {name}: {value!r}")
+
+
 class ConversationStoreError(Exception):
     """Raised when the conversation store cannot open or read."""
 
@@ -554,6 +568,9 @@ class ConversationStore:
             raise ValueError("resume_token_hash must be a short string")
         if not isinstance(seq, int) or seq < 1:
             raise ValueError(f"invalid turn seq: {seq!r}")
+        _validate_non_negative_int(tokens_in, "tokens_in")
+        _validate_non_negative_int(tokens_out, "tokens_out")
+        _validate_non_negative_int(latency_ms, "latency_ms")
 
         now = time.time()
         conn = self._require_open()
@@ -630,12 +647,9 @@ class ConversationStore:
             raise ValueError(f"invalid turn outcome: {outcome!r}")
         if not isinstance(seq, int) or seq < 1:
             raise ValueError(f"invalid turn seq: {seq!r}")
-        if tokens_in is not None and (not isinstance(tokens_in, int) or tokens_in < 0):
-            raise ValueError(f"invalid tokens_in: {tokens_in!r}")
-        if tokens_out is not None and (not isinstance(tokens_out, int) or tokens_out < 0):
-            raise ValueError(f"invalid tokens_out: {tokens_out!r}")
-        if latency_ms is not None and (not isinstance(latency_ms, int) or latency_ms < 0):
-            raise ValueError(f"invalid latency_ms: {latency_ms!r}")
+        _validate_non_negative_int(tokens_in, "tokens_in")
+        _validate_non_negative_int(tokens_out, "tokens_out")
+        _validate_non_negative_int(latency_ms, "latency_ms")
 
         now = time.time()
         conn = self._require_open()
