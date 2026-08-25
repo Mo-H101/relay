@@ -19,6 +19,13 @@ Repo integrity: working-tree status hash `3f62f322…4358` byte-identical before
 > into a `turn.append`. Malformed fields are stripped (set to None) so valid provisional
 > turns survive. 12 new regression tests. Full suite: 2942 passed, 20 skipped, 1 pre-existing
 > timing flake (unrelated).
+>
+> **N-8 Remediation (2026-08-25):** Standalone malformed turn.update data-loss bug fixed.
+> Three-layer defense: (1) `HandoffCoordinator.update()` validates accounting before any
+> state mutation; (2) `ContinuityFlusher.enqueue()` rejects standalone malformed
+> `turn.update` operations; (3) `ConversationStore.update_turn()` preserves existing
+> durable accounting when None is passed (F-5). 34 new regression tests. Full suite:
+> 2976 passed, 20 skipped, 1 pre-existing UI flake (unrelated, passes in isolation).
 > This document retains its original Step 1 / F-C3 content below for historical record.
 
 ---

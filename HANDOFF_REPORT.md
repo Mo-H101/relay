@@ -17,6 +17,13 @@
 > `_coalesce_locked()` validates accounting before merging update into append.
 > Malformed fields stripped, valid state preserved. Full suite: 2942 passed, 20 skipped,
 > 1 pre-existing timing flake (unrelated).
+>
+> **N-8 Remediation (2026-08-25):** Standalone malformed turn.update data-loss bug fixed.
+> Three-layer defense: (1) `HandoffCoordinator.update()` validates accounting before
+> state mutation; (2) `ContinuityFlusher.enqueue()` rejects standalone malformed
+> turn.update; (3) `ConversationStore.update_turn()` preserves existing accounting when
+> None is passed (F-5). 34 new regression tests. Full suite: 2976 passed, 20 skipped,
+> 1 pre-existing UI flake (passes in isolation).
 
 ---
 
