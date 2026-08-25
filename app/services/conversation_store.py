@@ -855,6 +855,9 @@ class ConversationStore:
         from app.services.redaction import redact_text
         from app.services.summary_verifier import is_instruction_shaped
 
+        _validate_non_negative_int(tokens_in, "tokens_in")
+        _validate_non_negative_int(tokens_out, "tokens_out")
+
         max_chars = settings.continuity_summary_max_chars
         safe_content = redact_text(str(content or ""))[: max_chars]
 
@@ -952,6 +955,9 @@ class ConversationStore:
         Record one compaction event (metadata only). Emits a best-effort
         ``continuity.compact`` audit row.
         """
+        _validate_non_negative_int(from_tokens, "from_tokens")
+        _validate_non_negative_int(to_tokens, "to_tokens")
+
         conn = self._require_open()
         now = time.time()
 
