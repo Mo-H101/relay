@@ -12,6 +12,11 @@
 > **N-4 Remediation (2026-08-25):** ContinuityFlusher poison-row bug fixed.
 > `MalformedInputError` introduced to distinguish malformed input from transient errors.
 > Malformed rows are dropped, not retried. Full suite: 2931 passed, 20 skipped, 0 failures.
+>
+> **N-7 Remediation (2026-08-25):** Coalesced malformed accounting data-loss bug fixed.
+> `_coalesce_locked()` validates accounting before merging update into append.
+> Malformed fields stripped, valid state preserved. Full suite: 2942 passed, 20 skipped,
+> 1 pre-existing timing flake (unrelated).
 
 ---
 

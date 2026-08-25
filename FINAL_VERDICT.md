@@ -13,6 +13,12 @@ Repo integrity: working-tree status hash `3f62f322…4358` byte-identical before
 > been fixed. Malformed provider accounting now drops the bad row instead of blocking the
 > write-behind queue. `MalformedInputError` distinguishes malformed input from transient
 > state errors. 29 new regression tests. Full suite: 2931 passed, 20 skipped, 0 failures.
+>
+> **N-7 Remediation (2026-08-25):** Coalesced malformed accounting data-loss bug fixed.
+> `_coalesce_locked()` now validates accounting fields before merging a `turn.update`
+> into a `turn.append`. Malformed fields are stripped (set to None) so valid provisional
+> turns survive. 12 new regression tests. Full suite: 2942 passed, 20 skipped, 1 pre-existing
+> timing flake (unrelated).
 > This document retains its original Step 1 / F-C3 content below for historical record.
 
 ---
