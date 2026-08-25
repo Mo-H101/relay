@@ -8,6 +8,10 @@
 > Codex review have been remediated and pushed. Current HEAD: `cc22578`.
 > Sections below retain original Step 1 / F-C3 content for historical record.
 > See §K for the current post-remediation state.
+>
+> **N-4 Remediation (2026-08-25):** ContinuityFlusher poison-row bug fixed.
+> `MalformedInputError` introduced to distinguish malformed input from transient errors.
+> Malformed rows are dropped, not retried. Full suite: 2931 passed, 20 skipped, 0 failures.
 
 ---
 

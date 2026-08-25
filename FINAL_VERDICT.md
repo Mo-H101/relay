@@ -8,6 +8,11 @@ Repo integrity: working-tree status hash `3f62f322…4358` byte-identical before
 > **Post-Codex Remediation (2026-08-25):** Two findings from the independent Codex review
 > have been remediated. F-4 (persisted turn accounting validation incomplete) and F-C3
 > (implementation only in working tree) are now fixed and committed. Current HEAD: `cc22578`.
+> 
+> **N-4 Remediation (2026-08-25):** The ContinuityFlusher poison-row reliability bug has
+> been fixed. Malformed provider accounting now drops the bad row instead of blocking the
+> write-behind queue. `MalformedInputError` distinguishes malformed input from transient
+> state errors. 29 new regression tests. Full suite: 2931 passed, 20 skipped, 0 failures.
 > This document retains its original Step 1 / F-C3 content below for historical record.
 
 ---
