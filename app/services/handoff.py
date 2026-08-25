@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 
 from app.models.continuity import SUMMARY_VERSION, CompactionReason, SummaryBlock
+from app.services.conversation_store import MalformedInputError
+from app.services.conversation_store import _validate_non_negative_int
 from app.services.continuity_headers import new_conversation_id
 from app.services.context_manager import ContextManager
 from app.services.metrics import relay_metrics
@@ -926,7 +928,23 @@ class HandoffCoordinator:
 
         Called by ``TurnContext.update()`` from the API layer after a
         streaming turn completes, fails, or is cancelled.
+
+        N-8: malformed accounting (negative, float, bool, string tokens
+        from an untrusted provider) is rejected before any state mutation.
+        A malformed update must never contaminate in-memory committed-turn
+        state or erase durable accounting via NULL overwrite.
         """
+        for _field, _value in (
+            ("tokens_in", tokens_in),
+            ("tokens_out", tokens_out),
+            ("latency_ms", latency_ms),
+        ):
+            if _value is not None:
+                try:
+                    _validate_non_negative_int(_value, _field)
+                except MalformedInputError:
+                    return {}
+
         with self._lock:
             state = self._states.get(
                 _state_key(turn.key_id, turn.conversation_id)

@@ -653,6 +653,11 @@ class ConversationStore:
         Key-scoped: the turn must belong to a conversation owned by
         ``key_id``.  Returns the updated turn record, or ``{}`` when the
         row does not exist or the conversation is not owned by the key.
+
+        F-5 / N-8: accounting fields that are ``None`` are intentionally
+        *not* written.  Only explicitly-provided non-``None`` accounting
+        values overwrite existing durable data.  This prevents a partial
+        update from erasing valid accounting with NULL.
         """
         if outcome not in _VALID_OUTCOMES:
             raise ValueError(f"invalid turn outcome: {outcome!r}")
@@ -665,12 +670,23 @@ class ConversationStore:
         now = time.time()
         conn = self._require_open()
 
+        sets = ["outcome = ?"]
+        params: list = [outcome]
+        if tokens_in is not None:
+            sets.append("tokens_in = ?")
+            params.append(tokens_in)
+        if tokens_out is not None:
+            sets.append("tokens_out = ?")
+            params.append(tokens_out)
+        if latency_ms is not None:
+            sets.append("latency_ms = ?")
+            params.append(latency_ms)
+
         with self._lock:
             with conn:
                 cursor = conn.execute(
                     "UPDATE conversation_turns"
-                    " SET outcome = ?, tokens_in = ?, tokens_out = ?,"
-                    "  latency_ms = ?"
+                    f" SET {', '.join(sets)}"
                     " WHERE conversation_id = ?"
                     "   AND seq = ?"
                     "   AND EXISTS ("
@@ -678,8 +694,7 @@ class ConversationStore:
                     "     WHERE id = conversation_turns.conversation_id"
                     "       AND key_id = ?"
                     "  )",
-                    (outcome, tokens_in, tokens_out, latency_ms,
-                     conversation_id, seq, key_id),
+                    (*params, conversation_id, seq, key_id),
                 )
 
                 if cursor.rowcount == 0:

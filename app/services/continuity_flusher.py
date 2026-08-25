@@ -94,17 +94,46 @@ class ContinuityFlusher:
         coalesce a safe metadata update; otherwise it rejects the new row
         without evicting an older operation or registering a false pending
         count.
+
+        N-8: a ``turn.update`` with malformed accounting (negative, float,
+        bool, or string tokens) is rejected when it does not coalesce with
+        a matching queue entry.  When it *does* coalesce, the N-7 stripping
+        applies and only the malformed fields are discarded.
         """
         if operation not in _OP_METHODS:
             return False
 
         conversation_id = kwargs.get("conversation_id")
 
+        # N-8: pre-validate accounting before coalescing.  This flag
+        # records whether any non-None accounting field is malformed so
+        # the standalone (non-coalescing) path can reject the update.
+        _has_malformed_accounting = False
+        if operation == "turn.update":
+            for field in self._ACCOUNTING_FIELDS:
+                value = kwargs.get(field)
+                if value is not None:
+                    try:
+                        _validate_non_negative_int(value, field)
+                    except MalformedInputError:
+                        _has_malformed_accounting = True
+                        break
+
         with self._lock:
             if self._coalesce_locked(operation, kwargs):
                 self._queued_count += 1
                 relay_metrics.continuity_rows_queued.set(len(self._queue))
                 return True
+
+            # N-8: reject standalone malformed turn.update.  When
+            # coalescing did not find a match, the update would be
+            # persisted as-is — including a changed outcome and NULL
+            # accounting that erases durable state.  Drop it entirely.
+            if _has_malformed_accounting:
+                self._dropped_count += 1
+                relay_metrics.continuity_rows_queued.set(len(self._queue))
+                return False
+
             if len(self._queue) >= _MAX_QUEUE:
                 self._rejected_count += 1
                 relay_metrics.continuity_rows_queued.set(len(self._queue))
