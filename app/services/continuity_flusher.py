@@ -29,6 +29,7 @@ from collections import deque
 from typing import Optional
 
 from app.services.conversation_store import MalformedInputError
+from app.services.conversation_store import _validate_non_negative_int
 from app.services.metrics import relay_metrics
 
 _logger = logging.getLogger("relay")
@@ -128,6 +129,8 @@ class ContinuityFlusher:
 
         return True
 
+    _ACCOUNTING_FIELDS = ("tokens_in", "tokens_out", "latency_ms")
+
     def _coalesce_locked(self, operation: str, kwargs: dict) -> bool:
         """Fold a superseded non-turn operation into the queue.
 
@@ -140,6 +143,21 @@ class ContinuityFlusher:
         key_id = kwargs.get("key_id")
 
         if operation == "turn.update":
+            # N-7: validate accounting before merging.  Malformed fields
+            # (e.g. negative/float/bool tokens from an untrusted provider)
+            # are set to None so the merge loop's ``if value is not None``
+            # check preserves the existing row's original (valid) values.
+            # This prevents a malformed update from contaminating a valid
+            # provisional append and causing the entire coalesced row to be
+            # dropped by the drain loop.
+            for field in self._ACCOUNTING_FIELDS:
+                value = kwargs.get(field)
+                if value is not None:
+                    try:
+                        _validate_non_negative_int(value, field)
+                    except MalformedInputError:
+                        kwargs[field] = None
+
             seq = kwargs.get("seq")
             for index in range(len(self._queue) - 1, -1, -1):
                 existing_op, existing = self._queue[index]
