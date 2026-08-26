@@ -6,27 +6,29 @@ Base all work on: current code + this file + `git log --oneline -10`.
 ## Current state
 
 - **Branch:** `master`.
-- **HEAD:** `d2699e8` (synced with origin/master).
-- **origin/master:** `d2699e8` — master is up to date. N-10 fix
-  pending push after CI verification.
+- **HEAD:** `1aabfb0` (synced with origin/master).
+- **origin/master:** `1aabfb0` — N-10 fix + hardening pushed and
+  CI-verified.
 - **Working tree:** tracked files clean. The intentionally preserved,
   untracked context documents `OVERNIGHT_REPORT.md`,
   `PHASE_15_PROPOSAL.md`, `STEP_1_REPORT.md`, `CAMPAIGN_RECORD.md`
   remain present.
 - **CI:** the current workflow tests Ubuntu Python 3.10/3.11/3.12/3.13,
-  Windows Python 3.12, and packaging on Ubuntu Python 3.12. CI run
-  `32602878705` is green for baseline `d2699e8`. N-10 fix commit
-  pending push — verify CI after the controlled push.
-- **Recent history:** N-10 commit() accounting validation fix
+  Windows Python 3.12, and packaging on Ubuntu Python 3.12. Full suite:
+  3003 passed, 20 skipped, 0 failures. CI run pending for latest push.
+- **Recent history:** N-10 hardening (guarded metric increment, 4 metric
+  observability tests), N-10 commit() accounting validation fix
   (sanitized malformed provider accounting to None, added metric
-  `relay_continuity_sanitized_accounting_total`, 22 new tests);
+  `relay_continuity_sanitized_accounting_total`, 22 regression tests);
   before that N-8 standalone update data-loss fix, N-7 coalescing
   data-loss fix, N-4 poison-row reliability fix, F1 provider recovery,
   post-campaign hardening checkpoint, security/reliability remediation
   gate.
 - **Release state:** version `1.0.0rc1`; all release-blocking defects
-  resolved (N-4, N-7, N-8, N-10). Full suite: 2999 passed, 20
-  skipped, 0 failures. Phase 17 has not started.
+  resolved (N-4, N-7, N-8, N-10). Full suite: 3003 passed, 20
+  skipped, 0 failures. Comprehensive downstream/upstream impact
+  investigation completed — no new actionable defects found. Phase 17
+  has not started.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.

@@ -34,7 +34,10 @@ Repo integrity: working-tree status hash `3f62f322…4358` byte-identical before
 > turn.append queue. Sanitized turns preserve metadata (provider, model, outcome, seq)
 > while preventing invalid accounting from corrupting envelope building, compaction, and
 > summary accounting. Observability metric `relay_continuity_sanitized_accounting_total`
-> added. 22 new regression tests. Full suite: 2999 passed, 20 skipped, 0 failures.
+> added. Metric increment wrapped in try/except to prevent metrics failure from breaking
+> commit. 26 regression tests (including 4 metric observability tests). Full suite: 3003
+> passed, 20 skipped, 0 failures. Comprehensive downstream/upstream impact investigation
+> completed — no new actionable defects found.
 
 ---
 
