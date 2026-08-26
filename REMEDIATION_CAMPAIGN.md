@@ -9,10 +9,10 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 
 | Field | Value |
 |-------|-------|
-| Current Iteration | 2 (beginning) |
-| Current Commit | `6ef4c14` |
-| Current Phase | INVESTIGATE — Iteration 2 pre-fix scanning complete, fixes identified |
-| Tests Baseline | 3006 passed, 20 skipped, 0 failures |
+| Current Iteration | 3 (beginning) |
+| Current Commit | `daaadae` |
+| Current Phase | RE-SCAN — Iteration 2 fixes verified, cascading re-scan complete |
+| Tests Baseline | 3029 passed, 20 skipped, 0 failures (3006 → 3029) |
 | Loop Status | ACTIVE — DO NOT EXIT |
 
 ## Issues Discovered — This Campaign
@@ -24,10 +24,10 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | N-10-G | No test for metric increment observability | Low | FIXED | `1aabfb0` |
 | I1-EL | Event log emit failures have no log line (metric only) | Medium | FIXED | `6ef4c14` |
 | I1-LL | LOG_LEVEL accepts any string, invalid values fail at runtime | Low | FIXED | `6ef4c14` |
-| I2-H1 | Unguarded `response.json()` on 200 OK — unclassified error bypasses retry | High | OPEN | — |
-| I2-P0a | Streaming error chunks use non-standard shape — crashes SDK parsers | High | OPEN | — |
-| I2-H2 | Anthropic simple streams ignore in-stream error events | High | OPEN | — |
-| I2-H3 | Gemini simple streams ignore in-stream error events | High | OPEN | — |
+| I2-H1 | Unguarded `response.json()` on 200 OK — unclassified error bypasses retry | High | FIXED | `046ecbe` |
+| I2-P0a | Streaming error chunks use non-standard shape — crashes SDK parsers | High | FIXED | `046ecbe` |
+| I2-H2 | Anthropic simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
+| I2-H3 | Gemini simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
 
 ## Issues Investigated and Closed (Not Defects)
 
@@ -56,21 +56,23 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | tests/test_n10_commit_accounting_validation.py | 26 tests | Pre-campaign |
 | tests/test_event_log.py | 1 test (emit warning) | Iteration 1 |
 | tests/test_config_spec.py | 2 tests (LOG_LEVEL validation) | Iteration 1 |
+| tests/test_provider_json_and_stream_errors.py | 23 tests (I2-H1, I2-P0a, I2-H2, I2-H3) | Iteration 2 |
 
 ## Areas Re-scanned
 
 | Area | Iteration | Result |
 |------|-----------|--------|
-| Provider client streaming parsers | 2 | Found I2-H2, I2-H3 |
-| Provider client non-streaming error handling | 2 | Found I2-H1 |
+| Provider client streaming parsers | 2 | Found I2-H2, I2-H3 — FIXED |
+| Provider client non-streaming error handling | 2 | Found I2-H1 — FIXED |
 | Error classification (failure_classifier) | 2 | Closed 3 findings as not defects |
 | Data integrity / state transitions | 2 | Closed 3 findings as not defects |
-| API contract / OpenAI compatibility | 2 | Found I2-P0a, closed 2 as not defects |
+| API contract / OpenAI compatibility | 2 | Found I2-P0a — FIXED, closed 2 as not defects |
 | Security | 1 | PASS |
 | Concurrency | 1 | PASS |
 | Configuration | 1 | Fixed I1-LL |
 | Supply chain | 1 | PASS (CVE mitigated) |
 | TODO/debt markers | 1 | PASS |
+| Post-fix cascading re-scan (Iteration 2) | 2 | No new defects; test coverage gaps addressed |
 
 ## Areas Still Requiring Investigation
 
@@ -91,11 +93,11 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 
 ## Next Action
 
-1. Update REMEDIATION_CAMPAIGN.md with Iteration 2 fix plan
-2. Implement Fix I2-H1: Guard all `response.json()` calls in provider clients
-3. Implement Fix I2-P0a: Fix streaming error chunk shape
-4. Implement Fix I2-H2/H3: Add in-stream error detection for Anthropic/Gemini simple streams
-5. Write regression tests for all three fixes
-6. Run full test suite
-7. Perform mandatory cascading re-scan
-8. Continue loop
+Iteration 3: Begin fresh adversarial sweep of entire codebase. Focus on:
+1. Provider client edge cases not yet investigated (Azure, LM Studio, NVIDIA)
+2. Async streaming error propagation (achat_stream, achat_stream_messages)
+3. Process lifecycle edge cases (startup, shutdown, hot reload under load)
+4. Test coverage gap analysis for all code paths
+5. API contract validation (request/response schemas, error shapes)
+6. Packaging/release readiness
+7. Any remaining patterns from Iteration 2 fixes that could mask other defects
