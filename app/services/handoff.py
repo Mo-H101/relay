@@ -855,7 +855,10 @@ class HandoffCoordinator:
                         latency_ms = None
                         _sanitized = True
                 if _sanitized:
-                    relay_metrics.continuity_sanitized_accounting.inc()
+                    try:
+                        relay_metrics.continuity_sanitized_accounting.inc()
+                    except Exception:  # noqa: BLE001 — metrics must never break commit
+                        pass
 
                 seq = state.next_seq
                 record = {

@@ -29,6 +29,7 @@ from app.services.conversation_store import (
 from app.services.continuity_flusher import ContinuityFlusher
 from app.services.context_manager import ContextManager
 from app.services.handoff import HandoffCoordinator, TurnContext
+from app.services.metrics import relay_metrics
 
 
 # ---------------------------------------------------------------------------
@@ -663,3 +664,68 @@ class TestN10QueueCoalescing:
         assert appends[0]["provider"] == "openai"
         assert appends[0]["model"] == "gpt-4"
         assert appends[0]["outcome"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Metric observability
+# ---------------------------------------------------------------------------
+
+
+class TestN10MetricObservability:
+    """Verify relay_continuity_sanitized_accounting_total increments
+    when commit() sanitizes malformed accounting, and does NOT increment
+    when accounting is valid or None."""
+
+    def test_metric_increments_on_single_malformed_field(self, tmp_path):
+        store = _store(tmp_path)
+        cid = "c" * 32
+        _create_conversation(store, cid)
+        coord = _coordinator()
+        tc = _turn_context(coord, cid)
+
+        before = relay_metrics.continuity_sanitized_accounting.total()
+        tc.finish(provider="openai", model="gpt-4", tokens_in=-1)
+        after = relay_metrics.continuity_sanitized_accounting.total()
+        assert after == before + 1
+
+    def test_metric_increments_once_for_multiple_malformed_fields(self, tmp_path):
+        store = _store(tmp_path)
+        cid = "c" * 32
+        _create_conversation(store, cid)
+        coord = _coordinator()
+        tc = _turn_context(coord, cid)
+
+        before = relay_metrics.continuity_sanitized_accounting.total()
+        tc.finish(
+            provider="openai",
+            model="gpt-4",
+            tokens_in="bad",
+            tokens_out=1.5,
+            latency_ms=True,
+        )
+        after = relay_metrics.continuity_sanitized_accounting.total()
+        assert after == before + 1
+
+    def test_metric_not_incremented_for_valid_accounting(self, tmp_path):
+        store = _store(tmp_path)
+        cid = "c" * 32
+        _create_conversation(store, cid)
+        coord = _coordinator()
+        tc = _turn_context(coord, cid)
+
+        before = relay_metrics.continuity_sanitized_accounting.total()
+        tc.finish(provider="openai", model="gpt-4", tokens_in=100, tokens_out=50)
+        after = relay_metrics.continuity_sanitized_accounting.total()
+        assert after == before
+
+    def test_metric_not_incremented_for_none_accounting(self, tmp_path):
+        store = _store(tmp_path)
+        cid = "c" * 32
+        _create_conversation(store, cid)
+        coord = _coordinator()
+        tc = _turn_context(coord, cid)
+
+        before = relay_metrics.continuity_sanitized_accounting.total()
+        tc.finish(provider="openai", model="gpt-4")
+        after = relay_metrics.continuity_sanitized_accounting.total()
+        assert after == before
