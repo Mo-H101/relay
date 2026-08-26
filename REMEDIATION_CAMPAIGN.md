@@ -1,6 +1,6 @@
 # REMEDIATION CAMPAIGN — PERSISTENT STATE
 
-STATUS: READY FOR FINAL EXTERNAL REVIEW
+STATUS: READY FOR FINAL EXTERNAL REVIEW — CI BLOCKED BY BILLING
 
 ## Objective
 Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the entire connected defect surface is exhausted and an independent final review confirms RELEASE-READY.
@@ -10,8 +10,8 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | Field | Value |
 |-------|-------|
 | Current Iteration | 6 (complete) |
-| Current Commit | `5f04003` |
-| Current Phase | CONVERGED — 6 iterations, 11 defects fixed, 0 new actionable defects in Iterations 3 and partial Iteration 5/6 |
+| Current Commit | `1c7a900` (HEAD) |
+| Current Phase | CI BLOCKED — billing issue prevents all GitHub Actions runners. All 12 code issues fixed; 0 code defects in CI failures. |
 | Tests Baseline | 3041 passed, 20 skipped, 0 failures |
 | Loop Status | CONVERGED — Ready for external review |
 
@@ -30,7 +30,9 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | I2-H3 | Gemini simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
 | F-1 | ValueError from store methods stalls continuity flusher queue indefinitely | Medium | FIXED | `94abd21` |
 | I5-FC | HTTP 501 Not Implemented retried as SERVER_ERROR | Medium | FIXED | `94a1c46` |
-| I6-N1 | _parse_provider_json returns non-dict JSON without error | Medium | FIXED | (uncommitted) |
+| I6-N1 | _parse_provider_json returns non-dict JSON without error | Medium | FIXED | `5f04003` |
+
+Total: 12 issues found and fixed across 7 unique fix commits (some commits fix multiple related issues).
 
 ## Issues Investigated and Closed (Not Defects)
 
