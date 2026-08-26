@@ -59,9 +59,13 @@ def _parse_provider_json(
     normal error-classification and retry pipeline.  Without this guard,
     an empty or non-JSON body from a 200 OK response produces an
     unclassified exception that bypasses retry and failover logic.
+
+    Also rejects non-``dict`` JSON (arrays, strings, numbers, null)
+    which would cause ``AttributeError`` at every call site that
+    accesses the result with ``.get()``.
     """
     try:
-        return response.json()
+        data = response.json()
     except (json.JSONDecodeError, ValueError) as exc:
         raise ProviderHTTPError(
             status_code,
@@ -71,6 +75,18 @@ def _parse_provider_json(
                 f"Invalid JSON from provider: {exc}",
             ),
         ) from exc
+
+    if not isinstance(data, dict):
+        raise ProviderHTTPError(
+            status_code,
+            _safe_provider_body(
+                provider,
+                status_code,
+                f"Expected JSON object from provider, got {type(data).__name__}",
+            ),
+        )
+
+    return data
 
 
 def _text_content(content) -> str:

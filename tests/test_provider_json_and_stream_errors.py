@@ -91,9 +91,12 @@ class TestParseProviderJson:
             status_code = 200
             def json(self):
                 return None
-        # None is valid JSON, so _parse_provider_json should return None
-        result = _parse_provider_json(_NoneResponse(), _provider(), 200)
-        assert result is None
+        # None is valid JSON but not a dict — must raise ProviderHTTPError
+        # so callers don't crash with AttributeError on .get().
+        with pytest.raises(ProviderHTTPError) as exc_info:
+            _parse_provider_json(_NoneResponse(), _provider(), 200)
+        assert "Expected JSON object" in exc_info.value.message
+        assert exc_info.value.status_code == 200
 
     def test_status_code_preserved_in_error(self):
         resp = _FakeResponse(status_code=200)
@@ -555,3 +558,35 @@ class TestGeminiChatStreamIntegration:
             list(GeminiClient().chat_stream(
                 _provider(name="Gemini"), "gemini-pro", "hi"
             ))
+
+
+# ---------------------------------------------------------------------------
+# I6-N1: _parse_provider_json rejects non-dict JSON (arrays, strings, etc.)
+# ---------------------------------------------------------------------------
+
+
+class TestParseProviderJsonNonDict:
+    """_parse_provider_json must reject non-dict JSON values (lists,
+    strings, numbers, booleans, null) which would cause AttributeError
+    at every .get() call site."""
+
+    @pytest.mark.parametrize("payload", [
+        [],
+        [1, 2, 3],
+        "text",
+        42,
+        3.14,
+        True,
+        False,
+    ])
+    def test_non_dict_json_raises_provider_http_error(self, payload):
+        resp = _FakeResponse(status_code=200, json_data=payload)
+        with pytest.raises(ProviderHTTPError) as exc_info:
+            _parse_provider_json(resp, _provider(), 200)
+        assert "Expected JSON object" in exc_info.value.message
+        assert exc_info.value.status_code == 200
+
+    def test_dict_json_passes_through(self):
+        resp = _FakeResponse(status_code=200, json_data={"key": "value"})
+        result = _parse_provider_json(resp, _provider(), 200)
+        assert result == {"key": "value"}

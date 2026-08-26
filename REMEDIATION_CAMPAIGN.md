@@ -10,9 +10,9 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | Field | Value |
 |-------|-------|
 | Current Iteration | 6 (beginning) |
-| Current Commit | (uncommitted — 501 fix + Iteration 5 sweep results) |
-| Current Phase | RE-SCAN — Iteration 5 sweeps complete, HTTP 501 fix applied |
-| Tests Baseline | 3033 passed, 20 skipped, 0 failures |
+| Current Commit | (uncommitted — non-dict JSON guard + Iteration 6 results) |
+| Current Phase | RE-SCAN — Iteration 6 sweep complete, non-dict JSON guard applied |
+| Tests Baseline | 3041 passed, 20 skipped, 0 failures |
 | Loop Status | ACTIVE — DO NOT EXIT |
 
 ## Issues Discovered — This Campaign
@@ -29,7 +29,8 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | I2-H2 | Anthropic simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
 | I2-H3 | Gemini simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
 | F-1 | ValueError from store methods stalls continuity flusher queue indefinitely | Medium | FIXED | `94abd21` |
-| I5-FC | HTTP 501 Not Implemented retried as SERVER_ERROR | Medium | FIXED | (uncommitted) |
+| I5-FC | HTTP 501 Not Implemented retried as SERVER_ERROR | Medium | FIXED | `94a1c46` |
+| I6-N1 | _parse_provider_json returns non-dict JSON without error | Medium | FIXED | (uncommitted) |
 
 ## Issues Investigated and Closed (Not Defects)
 
