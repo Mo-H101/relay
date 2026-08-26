@@ -76,6 +76,12 @@ def classify(exc) -> FailureKind:
         if code in (400, 404, 405, 415, 422):
             return FailureKind.INVALID_REQUEST
 
+        # 501 Not Implemented is a permanent failure — the endpoint or
+        # feature does not exist on this provider.  Retrying is always
+        # futile; failover to the next candidate is the correct path.
+        if code == 501:
+            return FailureKind.INVALID_REQUEST
+
         if code >= 500:
             return FailureKind.SERVER_ERROR
 

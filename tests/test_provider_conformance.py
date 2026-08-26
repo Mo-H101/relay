@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.providers.exceptions import ProviderHTTPError, ProviderTimeout
 from app.providers.registry import RUNTIME_READY
 from app.services.client_registry import ClientRegistry
-from app.services.failure_classifier import FailureKind, classify
+from app.services.failure_classifier import RETRYABLE, FailureKind, classify
 
 from tests.conformance_helpers import (
     ANTHROPIC_WIRE,
@@ -510,6 +510,13 @@ class TestErrorRedaction:
         assert provider.api_key not in exc.value.message
         assert "[REDACTED]" in exc.value.message
         assert classify(exc.value) == FailureKind.SERVER_ERROR
+
+    def test_501_not_implemented_not_retryable(self):
+        """HTTP 501 Not Implemented is a permanent failure — retrying is
+        always futile; failover to the next candidate is the correct path."""
+        exc = ProviderHTTPError(501, "Not Implemented")
+        assert classify(exc) == FailureKind.INVALID_REQUEST
+        assert classify(exc) not in RETRYABLE
 
 
 class TestRetryAfter:

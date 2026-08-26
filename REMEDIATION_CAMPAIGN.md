@@ -9,10 +9,10 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 
 | Field | Value |
 |-------|-------|
-| Current Iteration | 5 (beginning) |
-| Current Commit | (uncommitted — F-1 fix + test adjustments) |
-| Current Phase | RE-SCAN — Iteration 4 sweeps complete, F-1 fixed, cascading re-scan clean |
-| Tests Baseline | 3032 passed, 20 skipped, 0 failures |
+| Current Iteration | 6 (beginning) |
+| Current Commit | (uncommitted — 501 fix + Iteration 5 sweep results) |
+| Current Phase | RE-SCAN — Iteration 5 sweeps complete, HTTP 501 fix applied |
+| Tests Baseline | 3033 passed, 20 skipped, 0 failures |
 | Loop Status | ACTIVE — DO NOT EXIT |
 
 ## Issues Discovered — This Campaign
@@ -28,7 +28,8 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | I2-P0a | Streaming error chunks use non-standard shape — crashes SDK parsers | High | FIXED | `046ecbe` |
 | I2-H2 | Anthropic simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
 | I2-H3 | Gemini simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
-| F-1 | ValueError from store methods stalls continuity flusher queue indefinitely | Medium | FIXED | (uncommitted) |
+| F-1 | ValueError from store methods stalls continuity flusher queue indefinitely | Medium | FIXED | `94abd21` |
+| I5-FC | HTTP 501 Not Implemented retried as SERVER_ERROR | Medium | FIXED | (uncommitted) |
 
 ## Issues Investigated and Closed (Not Defects)
 
@@ -48,6 +49,13 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | I4-C3 | Middleware/routing edge cases | Subagent sweep | No release-blocking findings |
 | I4-C4 | DB migration edge cases | Subagent sweep | All migrations correct; non-idempotent ALTER TABLE is low risk (SQLite DDL is implicit commit) |
 | I4-C5 | Test quality review | Subagent sweep | 50+ timing-dependent tests pre-existing; not release-blocking |
+| I5-A1 | update() modifies in-memory state before durable enqueue | Subagent sweep | Already closed as I2-DI-M1 — recovery handles crash divergence |
+| I5-A2 | state.pending_resume_hash mutated outside lock | Subagent sweep | CPython GIL makes this safe; not actionable |
+| I5-A3 | _compact_state truncation before flush | Subagent sweep | Mitigated by 5s flush interval; design trade-off |
+| I5-B1 | OpenAI-compat streaming swallows provider error JSON | Subagent sweep | Design risk — OpenAI-compat errors come as HTTP responses, not SSE events |
+| I5-B2 | Double turn.abort() in non-streaming error path | Subagent sweep | NOT A DEFECT — TurnContext.abort() is idempotent (line 261) |
+| I5-B3 | verify() hashes expired keys before checking expiry | Subagent sweep | Low-priority perf issue; not a correctness defect |
+| I5-D1 | Chat-scoped keys can access /diagnostics, /metrics | Subagent sweep | Design risk — all require valid key, just not scope-gated |
 
 ## Issues Deferred (External Limitation)
 
@@ -64,6 +72,7 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | tests/test_config_spec.py | 2 tests (LOG_LEVEL validation) | Iteration 1 |
 | tests/test_provider_json_and_stream_errors.py | 23 tests (I2-H1, I2-P0a, I2-H2, I2-H3) | Iteration 2 |
 | tests/test_n4_flusher_poison_row.py | 3 tests (F-1 regression) | Iteration 4 |
+| tests/test_provider_conformance.py | 1 test (501 not retryable) | Iteration 5 |
 
 ## Areas Re-scanned
 
@@ -92,16 +101,19 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | DB migrations | 4 | Correct; non-idempotent ALTER TABLE low risk |
 | Test quality | 4 | Pre-existing timing issues; not release-blocking |
 | MalformedInputError change impact (F-1 cascading) | 4 | No callers break — all 14 raises are permanent failures |
+| API → Handoff → Recovery end-to-end path | 5 | No new actionable defects |
+| Error propagation across all layers | 5 | Found I5-FC (501) — FIXED; closed 3 as not defects/design risks |
+| Shutdown, graceful degradation, resource management | 5 | 0 genuine defects, 8 design risks (pre-existing) |
+| Config, auth, routing, test coverage | 5 | Closed 1 as design risk |
 
 ## Areas Still Requiring Investigation
 
-- [ ] Iteration 5 adversarial sweep of remaining areas
-- [ ] Any equivalent/parallel implementations not yet searched
+- [ ] Iteration 6 adversarial sweep (next iteration)
 
 ## Next Action
 
-Iteration 5: Another adversarial sweep — focus on:
-1. End-to-end integration paths (API → handoff → flusher → store)
-2. Shutdown/drain behavior under load
-3. Any remaining patterns that could mask defects
-4. If no new actionable defects found → set STATUS to "READY FOR FINAL EXTERNAL REVIEW"
+Iteration 6: Another adversarial sweep — if no new actionable defects are found, set STATUS to "READY FOR FINAL EXTERNAL REVIEW".
+1. Any remaining patterns from all fixes that could mask other defects
+2. Equivalent/parallel implementations not yet searched
+3. End-to-end integration test coverage
+4. Final security re-review
