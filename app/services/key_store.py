@@ -416,7 +416,7 @@ class KeyStore:
             try:
                 _, (n, r, p) = _parse_kdf(row[3])
                 digest = _scrypt(token, row[2], n, r, p)
-            except (KeyStoreError, ValueError, IndexError):
+            except (KeyStoreError, ValueError, IndexError, MemoryError):
                 continue
 
             if not _constant_time_eq(digest, row[1]):
@@ -464,7 +464,7 @@ class KeyStore:
             try:
                 _, (n, r, p) = _parse_kdf(row[3])
                 digest = _scrypt(token, row[2], n, r, p)
-            except (KeyStoreError, ValueError, IndexError):
+            except (KeyStoreError, ValueError, IndexError, MemoryError):
                 continue
 
             if not _constant_time_eq(digest, row[1]):
@@ -519,7 +519,7 @@ class KeyStore:
             try:
                 _, (n, r, p) = _parse_kdf(row[3])
                 digest = _scrypt(token, row[2], n, r, p)
-            except (KeyStoreError, ValueError, IndexError):
+            except (KeyStoreError, ValueError, IndexError, MemoryError):
                 continue
 
             if _constant_time_eq(digest, row[1]):

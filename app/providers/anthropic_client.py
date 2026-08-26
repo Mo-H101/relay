@@ -22,7 +22,7 @@ import httpx
 from app.core.config import settings
 from app.providers.availability import safe_error_body
 from app.providers.base import ModelProbe
-from app.providers.exceptions import ProviderHTTPError, ProviderTimeout
+from app.providers.exceptions import ProviderHTTPError, ProviderResponseLimit, ProviderTimeout
 from app.providers.openai_compat_client import (
     _retry_after_seconds,
     _stream_error_text,
@@ -782,7 +782,16 @@ class AnthropicClient:
             latency_ms,
         )
 
-        return _openai_response(_parse_provider_json(response, provider, response.status_code))
+        try:
+            return _openai_response(_parse_provider_json(response, provider, response.status_code))
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_messages",
+                0,
+                latency_ms,
+            )
+            raise
 
     def chat_stream(
         self,
@@ -871,6 +880,15 @@ class AnthropicClient:
                     (time.perf_counter() - start) * 1000,
                 )
 
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
+
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
@@ -955,6 +973,15 @@ class AnthropicClient:
                     200,
                     (time.perf_counter() - start) * 1000,
                 )
+
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
 
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
@@ -1170,6 +1197,15 @@ class AnthropicClient:
                         (time.perf_counter() - start) * 1000,
                     )
 
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
+
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
@@ -1276,7 +1312,16 @@ class AnthropicClient:
             latency_ms,
         )
 
-        return _openai_response(_parse_provider_json(response, provider, response.status_code))
+        try:
+            return _openai_response(_parse_provider_json(response, provider, response.status_code))
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_messages",
+                0,
+                latency_ms,
+            )
+            raise
 
     async def achat_stream_messages(
         self,
@@ -1334,6 +1379,15 @@ class AnthropicClient:
                         200,
                         (time.perf_counter() - start) * 1000,
                     )
+
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
 
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(

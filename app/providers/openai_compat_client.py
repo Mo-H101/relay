@@ -593,7 +593,13 @@ class OpenAICompatibleClient:
             provider.name, "chat_messages", response.status_code, latency_ms
         )
 
-        return _parse_provider_json(response, provider, response.status_code)
+        try:
+            return _parse_provider_json(response, provider, response.status_code)
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name, "chat_messages", 0, latency_ms
+            )
+            raise
 
     def list_models(self, provider: Provider) -> List[str]:
         """
@@ -911,6 +917,15 @@ class OpenAICompatibleClient:
                     (time.perf_counter() - start) * 1000,
                 )
 
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
+
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
@@ -1021,6 +1036,15 @@ class OpenAICompatibleClient:
                     200,
                     (time.perf_counter() - start) * 1000,
                 )
+
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
 
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
@@ -1297,6 +1321,15 @@ class OpenAICompatibleClient:
                         (time.perf_counter() - start) * 1000,
                     )
 
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
+
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
@@ -1419,7 +1452,13 @@ class OpenAICompatibleClient:
             provider.name, "chat_messages", response.status_code, latency_ms
         )
 
-        return _parse_provider_json(response, provider, response.status_code)
+        try:
+            return _parse_provider_json(response, provider, response.status_code)
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name, "chat_messages", 0, latency_ms
+            )
+            raise
 
     async def achat_stream_messages(
         self,
@@ -1500,6 +1539,15 @@ class OpenAICompatibleClient:
                         200,
                         (time.perf_counter() - start) * 1000,
                     )
+
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "chat_stream_messages",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
 
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
