@@ -489,9 +489,20 @@ class OpenAICompatibleClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        data = _parse_provider_json(response, provider, response.status_code)
+        try:
+            data = _parse_provider_json(response, provider, response.status_code)
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name, "chat", 0, latency_ms
+            )
+            raise
 
-        return data["choices"][0]["message"]["content"]
+        choices = data.get("choices") or []
+        if not choices:
+            raise ProviderHTTPError(
+                response.status_code, "empty provider response"
+            )
+        return choices[0]["message"]["content"]
 
     def chat_messages(
         self,
@@ -656,6 +667,7 @@ class OpenAICompatibleClient:
         return [
             model["id"]
             for model in data.get("data", [])
+            if isinstance(model, dict) and "id" in model
         ]
 
     def key_check(self, provider: Provider):
@@ -1160,9 +1172,20 @@ class OpenAICompatibleClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        data = _parse_provider_json(response, provider, response.status_code)
+        try:
+            data = _parse_provider_json(response, provider, response.status_code)
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name, "chat", 0, latency_ms
+            )
+            raise
 
-        return data["choices"][0]["message"]["content"]
+        choices = data.get("choices") or []
+        if not choices:
+            raise ProviderHTTPError(
+                response.status_code, "empty provider response"
+            )
+        return choices[0]["message"]["content"]
 
     async def achat_stream(
         self,
@@ -1586,6 +1609,7 @@ class OpenAICompatibleClient:
         return [
             model["id"]
             for model in data.get("data", [])
+            if isinstance(model, dict) and "id" in model
         ]
 
     async def aprobe_model(

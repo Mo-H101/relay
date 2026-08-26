@@ -1298,13 +1298,17 @@ class ConversationStore:
 
     @staticmethod
     def _conversation_row(row) -> dict:
+        try:
+            model_chain = json.loads(row[5] or "[]")
+        except (json.JSONDecodeError, TypeError, ValueError):
+            model_chain = []
         return {
             "id": row[0],
             "key_id": row[1],
             "client_bucket": row[2],
             "project_key": row[3],
             "status": row[4],
-            "model_chain": json.loads(row[5] or "[]"),
+            "model_chain": model_chain,
             "token_budget": row[6],
             "created_at": row[7],
             "updated_at": row[8],

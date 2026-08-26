@@ -258,7 +258,7 @@ class TurnContext:
         not reach a durable commit only clears its process-local pending
         token and recovery state; it never pretends the turn succeeded.
         """
-        if self._handoff is None or self._aborted:
+        if self._handoff is None or self._aborted or self._committed:
             return
         try:
             self._handoff.abort(self)

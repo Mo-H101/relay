@@ -31,6 +31,7 @@ $Py = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & "$Prefix\Scripts\python.exe" -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & "$Prefix\Scripts\python.exe" -m pip install "$Source"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

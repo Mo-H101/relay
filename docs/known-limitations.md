@@ -80,8 +80,7 @@ leaked is fixed and covered by
 
 - The `.env` OpenAI key was **out of quota** during RC (HTTP 429 on every
   completion). Relay surfaced this correctly (502 + `provider_error`), but
-  no OpenAI completion could succeed until billing was restored. See
-  `docs/blockers-before-public-release.md`.
+  no OpenAI completion could succeed until billing was restored.
 - `RELAY_API_KEY` is empty by default, which **disables authentication**.
   Do not expose an instance without setting it.
 
@@ -133,8 +132,7 @@ Project continuity is **off by default** and additive when enabled
 
 ## 9. RC1 release-caveat record (decisions D11–D15)
 
-Recorded at the RC1 decision closure (`docs/release-decisions.md` §R2–R3 /
-RC1):
+Recorded at the RC1 decision closure:
 
 - **OpenAI quota (B1) — NVIDIA-ready-only RC1.** The `.env` OpenAI key is
   out of quota (HTTP 429 on every completion). RC1 and the `v1.0.0` release
@@ -151,6 +149,6 @@ RC1):
   shows overflow.
 - **Known timing flake accepted (D14).** One pre-existing timing flake,
   baseline-reproduced at `d344116`, is **excluded from every measured
-  baseline** (2360/22 → 2399/20) and accepted as a known limitation for the
+  baseline** and accepted as a known limitation for the
   tag; it is not a P0–P8 regression and is tracked for a post-v1
   stabilization pass.

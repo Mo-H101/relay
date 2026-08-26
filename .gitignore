@@ -49,6 +49,7 @@ evidence/
 
 # Internal development artifacts (session state, campaign records, audits).
 # Retained locally for developer context but not part of the public repository.
+RELEASE_PRE_CODEX.md
 PROGRESS.md
 FINAL_VERDICT.md
 HANDOFF_REPORT.md

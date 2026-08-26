@@ -1,8 +1,7 @@
 # Rollback Procedure
 
 How to revert a Relay deployment to a previous known-good state. Assume
-the rollback target is the last version whose RC checklist was green
-(see [release-candidate-checklist.md](release-candidate-checklist.md)).
+the rollback target is the last version whose test suite was green.
 
 ## 1. Decide scope
 

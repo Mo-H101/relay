@@ -70,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- The full regression baseline at the v1.0.0 tag is **2360 passed / 22
+- The full regression baseline at the v1.0.0 tag is **3041 passed / 20
   skipped**, with the adversarial (80) and continuity-simulation (6) suites
   green.
 - The project is released source-available under the MIT License with a

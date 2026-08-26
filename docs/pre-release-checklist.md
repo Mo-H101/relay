@@ -52,8 +52,6 @@ accepted, documented deviation.
 - [ ] All items above are PASS, or each deviation is recorded with a reason
       and an owner.
 - [ ] No open P0–P8 regressions vs. the previous baseline.
-- [ ] Release decision record (`docs/release-decisions.md`) reviewed for
-      this release.
 
 ## After this checklist passes
 

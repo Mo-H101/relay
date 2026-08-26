@@ -88,7 +88,7 @@ Before tagging, the full suite must pass on the release commit:
 python -m pytest tests -q
 ```
 
-Expected baseline: **2456 passed, 20 skipped** (may drift upward as tests
+Expected baseline: **3041 passed, 20 skipped** (may drift upward as tests
 are added). Also run:
 
 - `python -m compileall -q app tests`
@@ -101,8 +101,7 @@ If the release includes live-provider changes, run the live smoke manually:
 python tests/run_live_smoke.py
 ```
 
-(requires valid `OPENAI_API_KEY` and `NVIDIA_API_KEY`; see
-`docs/blockers-before-public-release.md` for the known quota caveat).
+(requires valid `OPENAI_API_KEY` and `NVIDIA_API_KEY`).
 
 ## Step 3 — Pre-release checklist
 
@@ -155,7 +154,6 @@ If a released version is broken:
 - **CI branch trigger.** `.github/workflows/ci.yml` triggers `push` CI on the
   `main` branch only, but this repository's branch is `master`. CI still runs
   on pull requests. When you push the release tag, confirm CI runs on the tag
-  or run the equivalent checks locally from `docs/release-candidate-checklist.md`.
+  or run the equivalent checks locally.
 - **OpenAI quota.** The live OpenAI smoke requires an account with active
-  billing; otherwise the gateway is NVIDIA-only in practice
-  (`docs/blockers-before-public-release.md`).
+  billing; otherwise the gateway is NVIDIA-only in practice.

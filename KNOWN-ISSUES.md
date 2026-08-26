@@ -3,8 +3,7 @@
 Accepted, intentional, or confirmed-at-RC behavior that operators and users
 should know before running Relay in production. This is the consolidated
 public-facing list. The detailed engineering records live in
-[docs/known-limitations.md](docs/known-limitations.md) and
-[docs/release-decisions.md](docs/release-decisions.md).
+[docs/known-limitations.md](docs/known-limitations.md).
 
 Each item states what happens, why, and any mitigation.
 

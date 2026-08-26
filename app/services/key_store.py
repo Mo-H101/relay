@@ -413,8 +413,11 @@ class KeyStore:
             ).fetchall()
 
         for row in rows:
-            _, (n, r, p) = _parse_kdf(row[3])
-            digest = _scrypt(token, row[2], n, r, p)
+            try:
+                _, (n, r, p) = _parse_kdf(row[3])
+                digest = _scrypt(token, row[2], n, r, p)
+            except (KeyStoreError, ValueError, IndexError):
+                continue
 
             if not _constant_time_eq(digest, row[1]):
                 continue
@@ -458,8 +461,11 @@ class KeyStore:
         matched_meta = None
 
         for row in rows:
-            _, (n, r, p) = _parse_kdf(row[3])
-            digest = _scrypt(token, row[2], n, r, p)
+            try:
+                _, (n, r, p) = _parse_kdf(row[3])
+                digest = _scrypt(token, row[2], n, r, p)
+            except (KeyStoreError, ValueError, IndexError):
+                continue
 
             if not _constant_time_eq(digest, row[1]):
                 continue
@@ -510,8 +516,11 @@ class KeyStore:
             if expires_at is not None and expires_at <= now:
                 continue
 
-            _, (n, r, p) = _parse_kdf(row[3])
-            digest = _scrypt(token, row[2], n, r, p)
+            try:
+                _, (n, r, p) = _parse_kdf(row[3])
+                digest = _scrypt(token, row[2], n, r, p)
+            except (KeyStoreError, ValueError, IndexError):
+                continue
 
             if _constant_time_eq(digest, row[1]):
                 matched = row

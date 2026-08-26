@@ -47,8 +47,8 @@ python -m pytest tests/test_rc_validation.py -q
 python tests/run_live_smoke.py                 # uses live .env keys
 ```
 
-See [release-candidate-checklist.md](release-candidate-checklist.md) for
-the full validation matrix and current results.
+See `tests/test_rc_validation.py` and `tests/run_live_smoke.py` for the
+validation suite.
 
 ### Recommended production profile
 

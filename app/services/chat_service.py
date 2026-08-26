@@ -690,9 +690,11 @@ class ChatService:
         Raises an exception if the stream fails to start or fails mid-stream.
         """
         client = self.registry.get(provider.identity())
+        attempt_payload = dict(payload)
+        attempt_payload["model"] = model
         yield from client.chat_stream_messages(
             provider=provider,
-            payload=payload,
+            payload=attempt_payload,
         )
 
     def chat_across_stream_messages(
@@ -777,9 +779,6 @@ class ChatService:
                 start = time.perf_counter()
 
                 try:
-                    # The shared payload is rebound to the candidate model so
-                    # each attempt targets the correct endpoint.
-                    payload["model"] = model
                     stream_gen = self._try_stream_once_messages(
                         provider,
                         model,

@@ -812,9 +812,6 @@ class AsyncChatService:
                 start = time.perf_counter()
 
                 try:
-                    # The shared payload is rebound to the candidate model so
-                    # each attempt targets the correct endpoint.
-                    payload["model"] = model
                     stream_gen = self._atry_stream_once_messages(
                         provider,
                         model,

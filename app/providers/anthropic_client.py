@@ -528,6 +528,7 @@ class AnthropicClient:
         return [
             model["id"]
             for model in _parse_provider_json(response, provider, response.status_code).get("data", [])
+            if isinstance(model, dict) and "id" in model
         ]
 
     def key_check(self, provider):
@@ -1396,6 +1397,7 @@ class AnthropicClient:
         return [
             model["id"]
             for model in _parse_provider_json(response, provider, response.status_code).get("data", [])
+            if isinstance(model, dict) and "id" in model
         ]
 
     async def aprobe_model(self, provider, model: str) -> ModelProbe:

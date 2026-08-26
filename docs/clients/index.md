@@ -15,9 +15,7 @@ smart. It exposes an **OpenAI-compatible endpoint** (`/v1/chat/completions`,
 `/v1/models`), so any tool that speaks the OpenAI API can point at Relay's
 `/v1` instead of a cloud provider and inherit its routing and failover.
 
-See [docs/architecture.md](../architecture.md) and
-[docs/platform-architecture-report.md](../platform-architecture-report.md)
-for the full design.
+See [docs/architecture.md](../architecture.md) for the full design.
 
 ## Which guide do you need?
 
@@ -213,4 +211,3 @@ See each client guide for client-specific troubleshooting, and
 - [Troubleshooting](../troubleshooting.md) — common problems and diagnostics.
 - [Known limitations](../known-limitations.md) — validated behavior to know before production.
 - [Terminal interface guide](../tui-guide.md) — the TUI's screens and startup.
-- [UX validation guide](../ux-validation-guide.md) — manual end-to-end checks.

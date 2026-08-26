@@ -88,7 +88,7 @@ def build_runtime_provider_detailed(
             discovery_error = exc
             models = []
 
-        priority = _settings_value(defn.priority_env.lower(), [])
+        priority = _settings_value((defn.priority_env or "").lower(), [])
         provider.models = apply_model_priority(models, priority)
         provider.priority_models = [
             model for model in priority if model in provider.models
