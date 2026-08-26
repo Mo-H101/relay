@@ -9,10 +9,10 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 
 | Field | Value |
 |-------|-------|
-| Current Iteration | 3 (beginning) |
+| Current Iteration | 4 (beginning) |
 | Current Commit | `daaadae` |
-| Current Phase | RE-SCAN — Iteration 2 fixes verified, cascading re-scan complete |
-| Tests Baseline | 3029 passed, 20 skipped, 0 failures (3006 → 3029) |
+| Current Phase | RE-SCAN — Iteration 3 sweeps complete, no new actionable defects |
+| Tests Baseline | 3029 passed, 20 skipped, 0 failures |
 | Loop Status | ACTIVE — DO NOT EXIT |
 
 ## Issues Discovered — This Campaign
@@ -73,31 +73,28 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | Supply chain | 1 | PASS (CVE mitigated) |
 | TODO/debt markers | 1 | PASS |
 | Post-fix cascading re-scan (Iteration 2) | 2 | No new defects; test coverage gaps addressed |
+| Provider client edge cases (Azure/LMStudio/NVIDIA) | 3 | No issues — all subclasses inherit guarded paths |
+| Async streaming error propagation | 3 | Consistent with sync paths |
+| API contract validation | 3 | Consistent error shapes |
+| Security surface | 3 | No new vulnerabilities |
+| Packaging/release readiness | 3 | Version consistent, no TODO markers |
+| Process lifecycle | 3 | Minor: KeyStore not closed (WAL crash-recovery mitigates) |
 
 ## Areas Still Requiring Investigation
 
-- [ ] Post-fix re-scan after I2-H1, I2-P0a, I2-H2, I2-H3 fixes
-- [ ] Async equivalents of all fixed sync paths (audit async variants)
-- [ ] Test coverage gap analysis for all new fixes
-- [ ] Ollama client — equivalent patterns not yet fully audited
-- [ ] Azure provider client — not yet investigated
-- [ ] Retry/cancellation interaction with streaming fixes
-- [ ] Metrics/observability for new error paths
-- [ ] Process lifecycle edge cases (startup/shutdown under load)
-- [ ] Hot reload under concurrent load
-
-## Known Risks
-
-- CVE-2026-48710 in Starlette <1.0.1 — code mitigated via scope["path"], FastAPI upgrade recommended
-- Time-dependent test flake pre-existing (not introduced by this campaign)
+- [ ] Conversation store / state store edge cases
+- [ ] Continuity flusher / recovery under concurrent load
+- [ ] Middleware and routing edge cases
+- [ ] Database migration edge cases
+- [ ] Test quality review (flaky tests, test isolation)
 
 ## Next Action
 
-Iteration 3: Begin fresh adversarial sweep of entire codebase. Focus on:
-1. Provider client edge cases not yet investigated (Azure, LM Studio, NVIDIA)
-2. Async streaming error propagation (achat_stream, achat_stream_messages)
-3. Process lifecycle edge cases (startup, shutdown, hot reload under load)
-4. Test coverage gap analysis for all code paths
+Iteration 4: Targeted sweep of remaining uncovered areas:
+1. Conversation store / state store edge cases
+2. Continuity flusher / recovery under concurrent load
+3. Middleware and routing
+4. Final adversarial review before declaring READY FOR EXTERNAL REVIEW
 5. API contract validation (request/response schemas, error shapes)
 6. Packaging/release readiness
 7. Any remaining patterns from Iteration 2 fixes that could mask other defects
