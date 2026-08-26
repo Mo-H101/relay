@@ -1,6 +1,6 @@
 # REMEDIATION CAMPAIGN — PERSISTENT STATE
 
-STATUS: READY FOR FINAL EXTERNAL REVIEW — CI BLOCKED BY BILLING
+STATUS: CI GATE — ACTIONS RECOVERING
 
 ## Objective
 Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the entire connected defect surface is exhausted and an independent final review confirms RELEASE-READY.
@@ -10,10 +10,22 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | Field | Value |
 |-------|-------|
 | Current Iteration | 6 (complete) |
-| Current Commit | `1c7a900` (HEAD) |
-| Current Phase | CI BLOCKED — billing issue prevents all GitHub Actions runners. All 12 code issues fixed; 0 code defects in CI failures. |
-| Tests Baseline | 3041 passed, 20 skipped, 0 failures |
-| Loop Status | CONVERGED — Ready for external review |
+| HEAD | `cd241f6` |
+| origin/master | `cd241f6` |
+| Current Phase | CI GATE — GitHub Actions major outage (Vitess DB failure) resolved 2026-08-26T18:01:30Z. All 12 code issues fixed; 0 code defects in CI failures. Pending fresh CI run to verify. |
+| Tests Baseline | 3041 passed, 20 skipped, 0 failures (local) |
+| Loop Status | CONVERGED — Awaiting green CI |
+
+## CI Investigation Findings (2026-08-26)
+
+- Last successful run: 32971340444 (SHA `3b47e70`, 2026-08-26T12:56:47Z)
+- 7 consecutive failed runs (48-54) after last success
+- ALL failed runs: `runner_id=0`, `steps=0` — no runner was ever allocated, no code executed
+- Annotation: "recent account payments have failed or your spending limit needs to be increased"
+- Root cause: GitHub Actions major outage — Vitess database primary failure (incident y1t7p9fzrlj2)
+- Incident timeline: started ~13:38Z, declared 15:11Z, resolved 18:01Z
+- Run 32992154322 (cd241f6) was created during outage and is persistently failing on rerun
+- A new push is required to generate a fresh run post-resolution
 
 ## Issues Discovered — This Campaign
 
@@ -118,4 +130,4 @@ None — campaign has converged.
 
 ## Next Action
 
-Campaign converged. Ready for independent external review (Codex or equivalent).
+Push this update to generate fresh CI run post-Actions-recovery. Verify all 6 matrix jobs green. Then proceed to independent external review (Codex).
