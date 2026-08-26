@@ -6,9 +6,7 @@ public-facing list. The detailed engineering records live in
 [docs/known-limitations.md](docs/known-limitations.md) and
 [docs/release-decisions.md](docs/release-decisions.md).
 
-Each item states what happens, why, and any mitigation. Items marked
-**release caveat** were accepted at the v1.0.0 release gate and do not
-block the release.
+Each item states what happens, why, and any mitigation.
 
 ---
 
@@ -23,8 +21,8 @@ plan/billing**. Until then the gateway is effectively NVIDIA-only.
 - Why: the RC key was out of quota (external, environment issue).
 - Mitigation: restore billing and re-run
   `python tests/run_live_smoke.py`. The quota error path itself is proven
-  correct (see [docs/blockers-before-public-release.md](docs/blockers-before-public-release.md)).
-- References: known-limitations.md §6 and §9 (D11).
+  correct.
+- References: known-limitations.md §6.
 
 ## 2. Unconfigured instances have no authentication
 
@@ -97,7 +95,7 @@ generates misleading telemetry when priorities are empty.
 (NVIDIA, OpenAI, Anthropic, Google Gemini, LM Studio, Ollama). Wiring
 OpenRouter/Groq is deferred post-v1.
 
-- References: [docs/release-decisions.md](docs/release-decisions.md) D1.
+- References: CHANGELOG.md v1.0.0.
 
 ## 8. Dormant compaction paths are reserved, not wired
 
@@ -137,7 +135,7 @@ CLI is `setup`, `tui`, `serve`, `keys`, `provider`, `migrate`, `events`,
 status/models/providers/routing surfaces, and `relay events` tails the
 security event log.
 
-- References: [docs/release-decisions.md](docs/release-decisions.md) D2.
+- References: CHANGELOG.md v1.0.0.
 
 ---
 

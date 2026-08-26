@@ -27,7 +27,7 @@ api routers  ->  Relay facade  ->  services  ->  providers (clients)
 - `app/api/*` routers are thin HTTP adapters. They parse requests, call
   the facade, and map results to responses. Error bodies carry a
   correlation id but never prompts, responses, or provider internals.
-- `app/services/*` (29 services) hold all business logic: routing,
+- `app/services/*` (54 modules) hold all business logic: routing,
   scoring, health, telemetry, quality, decisions, persistence, reload,
   ops, metrics, failure classification. The P9 project-continuity services
   live here too and sit under the facade: `ConversationStore`,

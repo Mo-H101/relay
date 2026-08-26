@@ -46,3 +46,41 @@ release/
 # Release evidence artifacts (test logs, soak data, reproduction scripts).
 # Retained locally for audit trail but never packaged or committed.
 evidence/
+
+# Internal development artifacts (session state, campaign records, audits).
+# Retained locally for developer context but not part of the public repository.
+PROGRESS.md
+FINAL_VERDICT.md
+HANDOFF_REPORT.md
+REMEDIATION_CAMPAIGN.md
+F_C3_REPORT.md
+PROJECT_LOG.md
+CAMPAIGN_RECORD.md
+OVERNIGHT_REPORT.md
+PHASE_15_PROPOSAL.md
+REMEDIATION_LOOP.md
+STEP_1_REPORT.md
+task_plan.md
+
+# Internal docs (platform plans, audits, historical decisions).
+docs/platform-*.md
+docs/roadmap-*.md
+docs/release-decisions.md
+docs/v1.0.0-readiness-report.md
+docs/v1.0.0-final-audit.md
+docs/post-p9-readiness-audit.md
+docs/v1-release-hardening-plan.md
+docs/v1-release-readiness-plan.md
+docs/blockers-before-public-release.md
+docs/platform-architecture-report.md
+docs/platform-missing-components-report.md
+docs/release-candidate-checklist.md
+docs/audit-report.md
+docs/implementation-audit.md
+docs/capability-matrix.md
+docs/nvidia-model-benchmark-plan.md
+docs/v1-live-continuity-validation.md
+docs/conversation_states.jsonc
+docs/ux-validation-guide.md
+docs/platform-implementation-roadmap.md
+docs/platform-recommended-order.md

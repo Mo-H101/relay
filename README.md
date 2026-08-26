@@ -74,17 +74,11 @@ LM Studio and Ollama setup walkthrough.
 - [Routing & decisions](docs/routing-decisions.md) — how a provider/model is chosen.
 - [Deployment](docs/deployment.md) — production hardening, persistence, auth, proxies.
 - [Troubleshooting](docs/troubleshooting.md) — common problems and diagnostics.
-- [Hardening audit report](docs/audit-report.md) — findings, fixes, remaining risks.
-- [v1.0.0 readiness report](docs/v1.0.0-readiness-report.md) — release checklist, verification evidence, remaining risks, required actions.
-- [UX validation guide](docs/ux-validation-guide.md) — Phase 8 manual test checklist for first-time users.
 - [Terminal interface guide](docs/tui-guide.md) — startup behavior, the seven screens, Windows requirements.
 - [Client setup guides](docs/clients/index.md) — connect Cline, OpenCode, Continue, or any OpenAI-compatible client to Relay.
 - [Project continuity](docs/clients/continuity.md) — opt-in conversation resume across provider switches and Relay restarts.
 - [Local models](docs/local-models.md) — LM Studio and Ollama setup walkthrough.
-- [Platform analysis](docs/platform-architecture-report.md) — Phase 9 current-architecture report.
-- [Platform missing components](docs/platform-missing-components-report.md) — Phase 9 gap analysis vs. the target platform.
-- [Platform implementation roadmap](docs/platform-implementation-roadmap.md) — Phase 9 phased plan (P0–P8).
-- [Platform recommended order](docs/platform-recommended-order.md) — Phase 9 sequencing rationale.
+- [Known limitations](docs/known-limitations.md) — accepted risks, single-process constraints, operational caveats.
 
 ## Endpoints
 
@@ -132,7 +126,7 @@ are accepted when `RELAY_AUTH_STORE=true`; a store outage fails closed
 Step-by-step setup for Cline, OpenCode, Continue, and any other
 OpenAI-compatible client: [client setup guides](docs/clients/index.md).
 
-### Async Streaming (P3)
+### Async Streaming
 
 Both `/chat` and `/v1/chat/completions` are now `async def` and use a
 fully non-blocking provider layer:
