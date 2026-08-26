@@ -844,9 +844,8 @@ class OpenAICompatibleClient:
             payload["seed"] = seed
 
         done_seen = False
+        start = time.perf_counter()
         try:
-            start = time.perf_counter()
-
             with bounded_stream(
                 "POST",
                 f"{provider.base_url}/chat/completions",
@@ -956,9 +955,8 @@ class OpenAICompatibleClient:
             headers["Authorization"] = f"Bearer {provider.api_key}"
 
         done_seen = False
+        start = time.perf_counter()
         try:
-            start = time.perf_counter()
-
             with bounded_stream(
                 "POST",
                 f"{provider.base_url}/chat/completions",
@@ -1223,9 +1221,8 @@ class OpenAICompatibleClient:
         url = f"{provider.base_url}/chat/completions"
 
         done_seen = False
+        start = time.perf_counter()
         try:
-            start = time.perf_counter()
-
             async with httpx.AsyncClient(
                 **proxy_request_kwargs(provider, url)
             ) as client:
@@ -1426,9 +1423,8 @@ class OpenAICompatibleClient:
         url = f"{provider.base_url}/chat/completions"
 
         done_seen = False
+        start = time.perf_counter()
         try:
-            start = time.perf_counter()
-
             async with httpx.AsyncClient(
                 **proxy_request_kwargs(provider, url)
             ) as client:

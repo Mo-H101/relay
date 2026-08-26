@@ -18,7 +18,6 @@ is unchanged. All failures return the same 401 body; the reason is
 recorded only in metrics so callers cannot learn why a key was rejected.
 """
 
-import hashlib
 import hmac
 
 from fastapi import HTTPException, Request
@@ -95,12 +94,10 @@ def auth_scheme(
 
 def _constant_time_eq(left: str, right: str) -> bool:
     """
-    Compare two strings in constant time over their SHA-256 digests, so
-    neither content nor length differences leak through timing.
+    Compare two strings in constant time using hmac.compare_digest,
+    which handles length differences without short-circuiting.
     """
-    left_digest = hashlib.sha256(left.encode("utf-8")).digest()
-    right_digest = hashlib.sha256(right.encode("utf-8")).digest()
-    return hmac.compare_digest(left_digest, right_digest)
+    return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
 def _extract_token(request: Request):
