@@ -149,6 +149,25 @@ def test_emit_never_raises_when_store_unavailable(monkeypatch, tmp_path):
     assert relay_metrics.events_written.value() == 0
 
 
+def test_emit_logs_warning_on_failure(monkeypatch, tmp_path, caplog):
+    import logging
+
+    def _broken(path):
+        raise RuntimeError("db gone")
+
+    monkeypatch.setattr(platform_store, "open_connection", _broken)
+
+    log = EventLog(str(tmp_path / "platform.db"))
+    try:
+        with caplog.at_level(logging.WARNING, logger="relay"):
+            log.emit("auth.success")
+    finally:
+        log.close()
+
+    assert any("event log emit failed" in r.message for r in caplog.records)
+    assert relay_metrics.events_failed.value() == 1
+
+
 def test_emit_raise_on_error_surfaces_admin_failure(monkeypatch, tmp_path):
     def _broken(path):
         raise RuntimeError("db gone")

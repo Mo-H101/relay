@@ -320,7 +320,16 @@ class Settings:
         # Logging
         # =========================
 
-        self.log_level = os.getenv("LOG_LEVEL", "INFO")
+        _log_level_raw = os.getenv("LOG_LEVEL", "INFO").upper()
+        _VALID_LOG_LEVELS = frozenset(
+            {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        )
+        if _log_level_raw not in _VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid value for LOG_LEVEL: {os.getenv('LOG_LEVEL', 'INFO')!r}"
+                f" (expected one of: {', '.join(sorted(_VALID_LOG_LEVELS))})."
+            )
+        self.log_level = _log_level_raw
         self.log_file = os.getenv("LOG_FILE", "")
 
         # =========================

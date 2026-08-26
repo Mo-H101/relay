@@ -411,3 +411,16 @@ def test_every_spec_has_a_nonempty_description_and_category():
 def test_settings_singleton_attributes_all_covered():
     for attr in vars(settings):
         assert attr in SPEC_BY_ATTR, attr
+
+
+def test_log_level_rejects_invalid_value(monkeypatch):
+    monkeypatch.setenv("LOG_LEVEL", "FOOBAR")
+    with pytest.raises(ValueError, match="Invalid value for LOG_LEVEL"):
+        Settings()
+
+
+def test_log_level_accepts_valid_values(monkeypatch):
+    for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        monkeypatch.setenv("LOG_LEVEL", level)
+        s = Settings()
+        assert s.log_level == level

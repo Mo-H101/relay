@@ -29,6 +29,7 @@ KeyStore pattern.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -37,6 +38,8 @@ from typing import Optional
 from app.services import platform_store
 from app.services.metrics import relay_metrics
 from app.services.redaction import redact_dict
+
+_logger = logging.getLogger("relay")
 
 # Bounded action vocabulary (D2). Kept as a module constant for tests and
 # documentation; callers pass action strings directly.
@@ -144,6 +147,7 @@ class EventLog:
                     )
         except Exception:
             relay_metrics.events_failed.inc()
+            _logger.warning("event log emit failed: action=%s", action)
 
             if raise_on_error:
                 raise
