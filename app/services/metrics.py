@@ -607,6 +607,10 @@ class RelayMetrics:
             "relay_continuity_reconciliations_total",
             "Startup continuity reconciliation passes.",
         )
+        self.continuity_sanitized_accounting = r.counter(
+            "relay_continuity_sanitized_accounting_total",
+            "Accounting fields sanitized to None due to malformed provider values.",
+        )
 
         # Process
         self.uptime = r.gauge(

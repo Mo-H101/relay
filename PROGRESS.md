@@ -6,35 +6,27 @@ Base all work on: current code + this file + `git log --oneline -10`.
 ## Current state
 
 - **Branch:** `master`.
-- **HEAD:** `e42f14342fa629be020730c075e73b3a6cf53335`
-  (`docs: pin ConversationStore lazy-reopen-after-close contract`).
-- **origin/master:** `6ba7308010a6d122880855c39a64bf7791e7285c` —
-  master is **2 commits ahead, 0 behind** (final hardening checkpoint;
-  see next section). Push + CI verification happen as part of that
-  checkpoint.
+- **HEAD:** `d2699e8` (synced with origin/master).
+- **origin/master:** `d2699e8` — master is up to date. N-10 fix
+  pending push after CI verification.
 - **Working tree:** tracked files clean. The intentionally preserved,
-  untracked context documents `OVERNIGHT_REPORT.md` and
-  `PHASE_15_PROPOSAL.md` remain present.
+  untracked context documents `OVERNIGHT_REPORT.md`,
+  `PHASE_15_PROPOSAL.md`, `STEP_1_REPORT.md`, `CAMPAIGN_RECORD.md`
+  remain present.
 - **CI:** the current workflow tests Ubuntu Python 3.10/3.11/3.12/3.13,
   Windows Python 3.12, and packaging on Ubuntu Python 3.12. CI run
-  `32602878705` is green for baseline `6ba7308`. The two hardening
-  commits (`da7adc5`, `e42f143`) have not run CI yet — verify CI after
-  the controlled push.
-- **Recent history:** post-campaign final hardening (2 commits,
-  `6ba7308..e42f143`) completed; before that the Codex/OpenCode
-  adversarial security/reliability remediation gate through `6ba7308`
-  (pushed, CI green); earlier Phase 16 Stage 2A remediation through
-  `57af339`; Phase 16 Stage 1 remediation at `68921c1`; Phase 14
-  streaming turn accounting at `8e53fd7`; Phase 15 Stages A+B design
-  system at `3ab1de9`; Stage C core screens at `6ba1dc3`; Stage C
-  hotfix at `608ee0f`; Stage D chat screen & streaming redesign at
-  `d520a11`; Stage E diagnostics sub-tabs at `1d05f9a`; Stage F config
-  collapsibles + wizard at `726f09c`; Stage G polish & final cleanup at
-  `e1661ec`; post-Stage-G wizard CI-regression hotfix at `66cb775`.
-- **Release state:** version `1.0.0rc1`; pre-release validation campaign
-  complete (verdict: RELEASE AFTER SPECIFIC FIXES); its single blocker
-  F1 is now fixed at `da7adc5` (see next section). Phase 17 has not
-  started.
+  `32602878705` is green for baseline `d2699e8`. N-10 fix commit
+  pending push — verify CI after the controlled push.
+- **Recent history:** N-10 commit() accounting validation fix
+  (sanitized malformed provider accounting to None, added metric
+  `relay_continuity_sanitized_accounting_total`, 22 new tests);
+  before that N-8 standalone update data-loss fix, N-7 coalescing
+  data-loss fix, N-4 poison-row reliability fix, F1 provider recovery,
+  post-campaign hardening checkpoint, security/reliability remediation
+  gate.
+- **Release state:** version `1.0.0rc1`; all release-blocking defects
+  resolved (N-4, N-7, N-8, N-10). Full suite: 2999 passed, 20
+  skipped, 0 failures. Phase 17 has not started.
 - **Remote:** `github.com/Mo-H101/relay` (private, branch `master`).
   Workflow: pull before starting, commit + push at natural checkpoints,
   only one tool edits the repo at a time.

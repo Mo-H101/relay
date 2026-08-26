@@ -25,8 +25,16 @@ Repo integrity: working-tree status hash `3f62f322…4358` byte-identical before
 > state mutation; (2) `ContinuityFlusher.enqueue()` rejects standalone malformed
 > `turn.update` operations; (3) `ConversationStore.update_turn()` preserves existing
 > durable accounting when None is passed (F-5). 34 new regression tests. Full suite:
-> 2976 passed, 20 skipped, 1 pre-existing UI flake (unrelated, passes in isolation).
+> 2976 passed, 20 skipped, 1 pre-existing UI flake (unrelated, passes in isolated).
 > This document retains its original Step 1 / F-C3 content below for historical record.
+>
+> **N-10 Remediation (2026-08-25):** Malformed provider accounting bypasses commit()
+> validation. `HandoffCoordinator.commit()` now sanitizes malformed tokens_in, tokens_out,
+> and latency_ms to None before they enter in-memory committed_turns or the durable
+> turn.append queue. Sanitized turns preserve metadata (provider, model, outcome, seq)
+> while preventing invalid accounting from corrupting envelope building, compaction, and
+> summary accounting. Observability metric `relay_continuity_sanitized_accounting_total`
+> added. 22 new regression tests. Full suite: 2999 passed, 20 skipped, 0 failures.
 
 ---
 

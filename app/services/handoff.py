@@ -826,6 +826,37 @@ class HandoffCoordinator:
             if failed:
                 self._mark_durability_degraded(turn, state)
             else:
+                # N-10: validate accounting before committing.
+                # Malformed provider-supplied values (negative, float,
+                # bool, string) are sanitized to None so they never
+                # enter in-memory committed_turns or the durable queue
+                # as invalid data.  This preserves the turn metadata
+                # (provider, model, outcome, seq) while preventing
+                # malformed accounting from corrupting envelope
+                # building, compaction decisions, and summary
+                # accounting downstream.
+                _sanitized = False
+                if tokens_in is not None:
+                    try:
+                        _validate_non_negative_int(tokens_in, "tokens_in")
+                    except MalformedInputError:
+                        tokens_in = None
+                        _sanitized = True
+                if tokens_out is not None:
+                    try:
+                        _validate_non_negative_int(tokens_out, "tokens_out")
+                    except MalformedInputError:
+                        tokens_out = None
+                        _sanitized = True
+                if latency_ms is not None:
+                    try:
+                        _validate_non_negative_int(latency_ms, "latency_ms")
+                    except MalformedInputError:
+                        latency_ms = None
+                        _sanitized = True
+                if _sanitized:
+                    relay_metrics.continuity_sanitized_accounting.inc()
+
                 seq = state.next_seq
                 record = {
                     "conversation_id": state.conversation_id,
