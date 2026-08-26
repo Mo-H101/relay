@@ -1,8 +1,8 @@
 # FINAL_VERDICT.md — Relay Pre-Release Soak & Campaign Analysis
 
 Date: 2026-08-25  
-Repo: `/sdcard/Projects/Relay` @ `2e74c6e`  
-Campaign dir: `/data/data/com.termux/files/usr/tmp/opencode/relay-campaign` (evidence consolidated to `evidence/` in repo)  
+Repo: `<repository-root>` @ `2e74c6e`  
+Campaign dir: `<campaign-root>` (evidence consolidated to `evidence/` in repo)  
 Repo integrity: working-tree status hash `3f62f322…4358` byte-identical before/after all stages.
 
 > **Post-Codex Remediation (2026-08-25):** Two findings from the independent Codex review
