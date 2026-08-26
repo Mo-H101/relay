@@ -384,3 +384,174 @@ class TestGeminiSimpleStreamErrorDetection:
             chunk = json.loads(line[6:])
             if "error" in chunk:
                 pytest.fail("Should not detect error in normal stream")
+
+
+# ===================================================================
+# Integration tests — drive actual client methods through mocked SSE
+# ===================================================================
+
+class _FakeStreamResponse:
+    """Minimal context-manager response for bounded_stream mocking."""
+
+    def __init__(self, lines, status_code=200, text=""):
+        self.lines = lines
+        self.status_code = status_code
+        self.text = text
+        self.headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def iter_lines(self):
+        yield from self.lines
+
+
+def _patch_anthropic_stream(monkeypatch, response):
+    monkeypatch.setattr(
+        "app.providers.anthropic_client.bounded_stream",
+        lambda *a, **kw: response,
+    )
+
+
+def _patch_gemini_stream(monkeypatch, response):
+    monkeypatch.setattr(
+        "app.providers.gemini_client.bounded_stream",
+        lambda *a, **kw: response,
+    )
+
+
+# --- I2-H2 Integration: Anthropic chat_stream with in-stream error ---
+
+class TestAnthropicChatStreamIntegration:
+    """Drive AnthropicClient.chat_stream() with mocked SSE to verify
+    that in-stream error events raise ProviderHTTPError."""
+
+    def test_in_stream_error_raises(self, monkeypatch):
+        from app.providers.anthropic_client import AnthropicClient
+
+        error_event = json.dumps({
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "try later"},
+        })
+        resp = _FakeStreamResponse([f"data: {error_event}"])
+        _patch_anthropic_stream(monkeypatch, resp)
+
+        with pytest.raises(ProviderHTTPError) as exc_info:
+            list(AnthropicClient().chat_stream(
+                _provider(name="Anthropic"), "claude-3", "hi"
+            ))
+        assert exc_info.value.status_code == 0
+
+    def test_normal_stream_yields_text(self, monkeypatch):
+        from app.providers.anthropic_client import AnthropicClient
+
+        start = json.dumps({
+            "type": "message_start",
+            "message": {"usage": {"input_tokens": 10}},
+        })
+        delta = json.dumps({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "hello"},
+        })
+        stop = json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 5},
+        })
+        resp = _FakeStreamResponse([
+            f"data: {start}", f"data: {delta}", f"data: {stop}",
+        ])
+        _patch_anthropic_stream(monkeypatch, resp)
+
+        chunks = list(AnthropicClient().chat_stream(
+            _provider(name="Anthropic"), "claude-3", "hi"
+        ))
+        assert chunks == ["hello"]
+
+    def test_error_after_text_still_raises(self, monkeypatch):
+        from app.providers.anthropic_client import AnthropicClient
+
+        start = json.dumps({
+            "type": "message_start",
+            "message": {"usage": {"input_tokens": 10}},
+        })
+        delta = json.dumps({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "partial"},
+        })
+        error = json.dumps({
+            "type": "error",
+            "error": {"type": "api_error", "message": "disconnected"},
+        })
+        resp = _FakeStreamResponse([
+            f"data: {start}", f"data: {delta}", f"data: {error}",
+        ])
+        _patch_anthropic_stream(monkeypatch, resp)
+
+        with pytest.raises(ProviderHTTPError):
+            list(AnthropicClient().chat_stream(
+                _provider(name="Anthropic"), "claude-3", "hi"
+            ))
+
+
+# --- I2-H3 Integration: Gemini chat_stream with in-stream error ---
+
+class TestGeminiChatStreamIntegration:
+    """Drive GeminiClient.chat_stream() with mocked SSE to verify
+    that in-stream error events raise ProviderHTTPError."""
+
+    def test_in_stream_error_raises(self, monkeypatch):
+        from app.providers.gemini_client import GeminiClient
+
+        error_event = json.dumps({
+            "error": {"code": 429, "message": "quota exceeded"},
+        })
+        resp = _FakeStreamResponse([f"data: {error_event}"])
+        _patch_gemini_stream(monkeypatch, resp)
+
+        with pytest.raises(ProviderHTTPError) as exc_info:
+            list(GeminiClient().chat_stream(
+                _provider(name="Gemini"), "gemini-pro", "hi"
+            ))
+        assert exc_info.value.status_code == 0
+
+    def test_normal_stream_yields_text(self, monkeypatch):
+        from app.providers.gemini_client import GeminiClient
+
+        normal = json.dumps({
+            "candidates": [{
+                "content": {"parts": [{"text": "hello"}]},
+                "finishReason": "STOP",
+            }],
+        })
+        resp = _FakeStreamResponse([f"data: {normal}"])
+        _patch_gemini_stream(monkeypatch, resp)
+
+        chunks = list(GeminiClient().chat_stream(
+            _provider(name="Gemini"), "gemini-pro", "hi"
+        ))
+        assert chunks == ["hello"]
+
+    def test_error_after_text_still_raises(self, monkeypatch):
+        from app.providers.gemini_client import GeminiClient
+
+        normal = json.dumps({
+            "candidates": [{
+                "content": {"parts": [{"text": "partial"}]},
+            }],
+        })
+        error = json.dumps({
+            "error": {"code": 500, "message": "internal error"},
+        })
+        resp = _FakeStreamResponse([f"data: {normal}", f"data: {error}"])
+        _patch_gemini_stream(monkeypatch, resp)
+
+        with pytest.raises(ProviderHTTPError):
+            list(GeminiClient().chat_stream(
+                _provider(name="Gemini"), "gemini-pro", "hi"
+            ))
