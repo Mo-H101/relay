@@ -61,9 +61,10 @@ class MalformedInputError(ValueError):
 
     Distinguished from plain ``ValueError`` so that the continuity
     flusher can drop malformed operations (which can never succeed on
-    retry) without conflating them with other validation errors (e.g.
-    "conversation not found") that represent transient state and should
-    be retained and retried.
+    retry) without blocking the write-behind queue.  Includes both
+    data-shape validation failures (invalid outcome, seq, etc.) and
+    permanent state conditions (conversation not found, archived)
+    that cannot succeed on retry.
     """
 
 
@@ -562,12 +563,13 @@ class ConversationStore:
     ) -> dict:
         """
         Append one metadata-only turn to an active conversation owned by
-        ``key_id``. Raises ``ValueError`` when the conversation is
-        missing, not owned by the key, or archived. Updates the
-        conversation's ``updated_at`` / ``last_turn_ts``.
+        ``key_id``. Raises ``MalformedInputError`` (a ``ValueError``
+        subclass) when the conversation is missing, not owned by the
+        key, or archived. Updates the conversation's ``updated_at`` /
+        ``last_turn_ts``.
         """
         if outcome not in _VALID_OUTCOMES:
-            raise ValueError(f"invalid turn outcome: {outcome!r}")
+            raise MalformedInputError(f"invalid turn outcome: {outcome!r}")
         if (
             resume_token_hash is not None
             and not isinstance(resume_token_hash, str)
@@ -576,9 +578,9 @@ class ConversationStore:
                 and len(resume_token_hash) > _MAX_RESUME_TOKEN_HASH_LENGTH
             )
         ):
-            raise ValueError("resume_token_hash must be a short string")
+            raise MalformedInputError("resume_token_hash must be a short string")
         if not isinstance(seq, int) or seq < 1:
-            raise ValueError(f"invalid turn seq: {seq!r}")
+            raise MalformedInputError(f"invalid turn seq: {seq!r}")
         _validate_non_negative_int(tokens_in, "tokens_in")
         _validate_non_negative_int(tokens_out, "tokens_out")
         _validate_non_negative_int(latency_ms, "latency_ms")
@@ -595,9 +597,9 @@ class ConversationStore:
                 ).fetchone()
 
                 if existing is None:
-                    raise ValueError("conversation not found")
+                    raise MalformedInputError("conversation not found")
                 if existing[0] != ConversationStatus.ACTIVE.value:
-                    raise ValueError("conversation is archived")
+                    raise MalformedInputError("conversation is archived")
 
                 conn.execute(
                     "INSERT INTO conversation_turns ("
@@ -660,9 +662,9 @@ class ConversationStore:
         update from erasing valid accounting with NULL.
         """
         if outcome not in _VALID_OUTCOMES:
-            raise ValueError(f"invalid turn outcome: {outcome!r}")
+            raise MalformedInputError(f"invalid turn outcome: {outcome!r}")
         if not isinstance(seq, int) or seq < 1:
-            raise ValueError(f"invalid turn seq: {seq!r}")
+            raise MalformedInputError(f"invalid turn seq: {seq!r}")
         _validate_non_negative_int(tokens_in, "tokens_in")
         _validate_non_negative_int(tokens_out, "tokens_out")
         _validate_non_negative_int(latency_ms, "latency_ms")
@@ -888,7 +890,7 @@ class ConversationStore:
         safe_content = redact_text(str(content or ""))[: max_chars]
 
         if is_instruction_shaped(safe_content):
-            raise ValueError("instruction-shaped summary content")
+            raise MalformedInputError("instruction-shaped summary content")
 
         conn = self._require_open()
 
@@ -901,7 +903,7 @@ class ConversationStore:
                 ).fetchone()
 
                 if existing is None:
-                    raise ValueError("conversation not found")
+                    raise MalformedInputError("conversation not found")
 
                 conn.execute(
                     "INSERT INTO summaries ("
@@ -996,7 +998,7 @@ class ConversationStore:
                 ).fetchone()
 
                 if existing is None:
-                    raise ValueError("conversation not found")
+                    raise MalformedInputError("conversation not found")
 
                 conn.execute(
                     "INSERT INTO compaction_records ("
@@ -1274,9 +1276,9 @@ class ConversationStore:
         project_key = (project_key or "").strip()
 
         if not key_id or len(key_id) > _MAX_ID_LENGTH:
-            raise ValueError("invalid key id")
+            raise MalformedInputError("invalid key id")
         if not project_key or len(project_key) > _MAX_ID_LENGTH:
-            raise ValueError("invalid project key")
+            raise MalformedInputError("invalid project key")
 
         client_bucket = (client_bucket or "other").strip().lower()
         if client_bucket not in _VALID_BUCKETS:
@@ -1290,7 +1292,7 @@ class ConversationStore:
         if not conversation_id:
             return None
         if len(conversation_id) > _MAX_ID_LENGTH:
-            raise ValueError("invalid conversation id")
+            raise MalformedInputError("invalid conversation id")
 
         return conversation_id
 

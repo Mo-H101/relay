@@ -936,7 +936,9 @@ class TestFlusherAdversarial:
         )
         store.close()
         flusher.flush()  # must not raise
-        assert flusher.flush_stats()["flush_errors"]
+        # "conversation not found" is MalformedInputError — the flusher
+        # drops it (no flush error recorded); the queue must not stall.
+        assert flusher.queue_size == 0
 
 
 # ------------------------- 3.5: privacy surfaces -------------------------

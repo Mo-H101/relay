@@ -9,10 +9,10 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 
 | Field | Value |
 |-------|-------|
-| Current Iteration | 4 (beginning) |
-| Current Commit | `daaadae` |
-| Current Phase | RE-SCAN — Iteration 3 sweeps complete, no new actionable defects |
-| Tests Baseline | 3029 passed, 20 skipped, 0 failures |
+| Current Iteration | 5 (beginning) |
+| Current Commit | (uncommitted — F-1 fix + test adjustments) |
+| Current Phase | RE-SCAN — Iteration 4 sweeps complete, F-1 fixed, cascading re-scan clean |
+| Tests Baseline | 3032 passed, 20 skipped, 0 failures |
 | Loop Status | ACTIVE — DO NOT EXIT |
 
 ## Issues Discovered — This Campaign
@@ -28,6 +28,7 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | I2-P0a | Streaming error chunks use non-standard shape — crashes SDK parsers | High | FIXED | `046ecbe` |
 | I2-H2 | Anthropic simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
 | I2-H3 | Gemini simple streams ignore in-stream error events | High | FIXED | `046ecbe` |
+| F-1 | ValueError from store methods stalls continuity flusher queue indefinitely | Medium | FIXED | (uncommitted) |
 
 ## Issues Investigated and Closed (Not Defects)
 
@@ -42,6 +43,11 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | I2-SC-L3 | 529 (overloaded) classified as UNKNOWN | failure_classifier.py:82 | Functionally correct — UNKNOWN is retryable. Availability layer correctly treats 529 as degraded. Label is suboptimal but not a defect. |
 | I2-API-P2a | _resolve_continuity_scope return type is a lie | app/api/openai.py:136-138 | Caller uses isinstance check. Works correctly. Type annotation is misleading but not a defect — no runtime impact. |
 | I2-API-P2c | /v1/models advertises task categories as model IDs | app/api/openai.py:759-760 | Intentional design — task routing via model name. Well-documented in relay routing logic. Not a defect. |
+| I4-C1 | Conversation store edge cases | Subagent sweep | No new defects — all validation paths now raise MalformedInputError |
+| I4-C2 | Continuity flusher/recovery edge cases | F-1 found and fixed | F-1 was the defect; now fixed |
+| I4-C3 | Middleware/routing edge cases | Subagent sweep | No release-blocking findings |
+| I4-C4 | DB migration edge cases | Subagent sweep | All migrations correct; non-idempotent ALTER TABLE is low risk (SQLite DDL is implicit commit) |
+| I4-C5 | Test quality review | Subagent sweep | 50+ timing-dependent tests pre-existing; not release-blocking |
 
 ## Issues Deferred (External Limitation)
 
@@ -57,6 +63,7 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | tests/test_event_log.py | 1 test (emit warning) | Iteration 1 |
 | tests/test_config_spec.py | 2 tests (LOG_LEVEL validation) | Iteration 1 |
 | tests/test_provider_json_and_stream_errors.py | 23 tests (I2-H1, I2-P0a, I2-H2, I2-H3) | Iteration 2 |
+| tests/test_n4_flusher_poison_row.py | 3 tests (F-1 regression) | Iteration 4 |
 
 ## Areas Re-scanned
 
@@ -79,22 +86,22 @@ Find → Understand → Fix → Test → Verify → Re-scan → Repeat until the
 | Security surface | 3 | No new vulnerabilities |
 | Packaging/release readiness | 3 | Version consistent, no TODO markers |
 | Process lifecycle | 3 | Minor: KeyStore not closed (WAL crash-recovery mitigates) |
+| Conversation store / state store edge cases | 4 | No new defects |
+| Continuity flusher / recovery | 4 | Found F-1 — FIXED |
+| Middleware / routing | 4 | No release-blocking findings |
+| DB migrations | 4 | Correct; non-idempotent ALTER TABLE low risk |
+| Test quality | 4 | Pre-existing timing issues; not release-blocking |
+| MalformedInputError change impact (F-1 cascading) | 4 | No callers break — all 14 raises are permanent failures |
 
 ## Areas Still Requiring Investigation
 
-- [ ] Conversation store / state store edge cases
-- [ ] Continuity flusher / recovery under concurrent load
-- [ ] Middleware and routing edge cases
-- [ ] Database migration edge cases
-- [ ] Test quality review (flaky tests, test isolation)
+- [ ] Iteration 5 adversarial sweep of remaining areas
+- [ ] Any equivalent/parallel implementations not yet searched
 
 ## Next Action
 
-Iteration 4: Targeted sweep of remaining uncovered areas:
-1. Conversation store / state store edge cases
-2. Continuity flusher / recovery under concurrent load
-3. Middleware and routing
-4. Final adversarial review before declaring READY FOR EXTERNAL REVIEW
-5. API contract validation (request/response schemas, error shapes)
-6. Packaging/release readiness
-7. Any remaining patterns from Iteration 2 fixes that could mask other defects
+Iteration 5: Another adversarial sweep — focus on:
+1. End-to-end integration paths (API → handoff → flusher → store)
+2. Shutdown/drain behavior under load
+3. Any remaining patterns that could mask defects
+4. If no new actionable defects found → set STATUS to "READY FOR FINAL EXTERNAL REVIEW"

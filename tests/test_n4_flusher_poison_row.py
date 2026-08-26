@@ -763,3 +763,103 @@ class TestCodexFailureScenarioVerification:
         assert len(store.turns(cid, "k")) == 1
 
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# F-1 regression: ValueError from store methods must not stall flusher queue
+# ---------------------------------------------------------------------------
+
+
+class TestPermanentValueErrorDoesNotStallQueue:
+    """A turn.append for a conversation that was archived between enqueue
+    and drain raises ValueError ('conversation is archived').  Before the
+    fix, this fell through to the generic except Exception handler and
+    was retained at the head of the queue, causing an infinite retry loop
+    that starved all subsequent operations.
+
+    After the fix, conversation_store raises MalformedInputError (a
+    ValueError subclass) for permanent failures, and the flusher drops
+    the row like any other malformed input.
+    """
+
+    def test_archived_conversation_does_not_block_queue(self, tmp_path):
+        store = _store(tmp_path)
+        cid = "c" * 32
+        _create_conversation(store, cid)
+
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+
+        # Enqueue a turn for the conversation.
+        flusher.enqueue(
+            "turn.append",
+            conversation_id=cid,
+            key_id="k",
+            seq=1,
+            outcome="ok",
+            tokens_in=10,
+            tokens_out=20,
+        )
+        assert flusher.queue_size == 1
+
+        # First flush succeeds (conversation is active).
+        flusher.flush()
+        assert flusher.queue_size == 0
+
+        # Archive the conversation.
+        store.archive(cid, "k")
+
+        # Enqueue another turn for the now-archived conversation.
+        flusher.enqueue(
+            "turn.append",
+            conversation_id=cid,
+            key_id="k",
+            seq=2,
+            outcome="ok",
+            tokens_in=30,
+            tokens_out=40,
+        )
+        assert flusher.queue_size == 1
+
+        # The flusher must drop the row (not retain it).
+        flusher.flush()
+        assert flusher.queue_size == 0
+
+        # A subsequent flush must succeed (queue is not stalled).
+        flusher.flush()
+        assert flusher.queue_size == 0
+
+        store.close()
+
+    def test_nonexistent_conversation_does_not_block_queue(self, tmp_path):
+        store = _store(tmp_path)
+
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+
+        # Enqueue a turn for a conversation that doesn't exist.
+        flusher.enqueue(
+            "turn.append",
+            conversation_id="x" * 32,
+            key_id="k",
+            seq=1,
+            outcome="ok",
+            tokens_in=10,
+            tokens_out=20,
+        )
+        assert flusher.queue_size == 1
+
+        # The flusher must drop the row.
+        flusher.flush()
+        assert flusher.queue_size == 0
+
+        store.close()
+
+    def test_malformed_input_error_is_value_error_subclass(self):
+        """Verify MalformedInputError is caught by except ValueError."""
+        from app.services.conversation_store import MalformedInputError
+
+        with pytest.raises(ValueError):
+            raise MalformedInputError("test")

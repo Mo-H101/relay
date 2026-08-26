@@ -911,8 +911,10 @@ class TestFlusherQueue:
 
         flusher.flush()
 
-        stats = flusher.flush_stats()
-        assert stats["flush_errors"], "failure should be counted, not raised"
+        # "conversation not found" is MalformedInputError — the flusher
+        # drops it rather than recording a flush error.  The queue must
+        # not stall.
+        assert flusher.queue_size == 0
         store.close()
 
     def test_duplicate_seq_append_does_not_stall_queue(self, tmp_path):
@@ -951,11 +953,12 @@ class TestFlusherQueue:
 
     def test_consecutive_failure_warning_fires_after_five(self, tmp_path, caplog):
         import logging
+        from unittest.mock import patch
 
         # R3 fix: the consecutive-failure streak must not be reset by the
         # prune path while the drain keeps failing, otherwise the >=5
-        # warning never fires. A poison row at the head of the queue now
-        # increments the streak every pass.
+        # warning never fires. A genuine transient error (e.g. OSError)
+        # at the head of the queue now increments the streak every pass.
         store, flusher = self._flusher(tmp_path)
         flusher.enqueue(
             "turn.append", conversation_id="z" * 32, key_id="k",
@@ -963,10 +966,13 @@ class TestFlusherQueue:
         )
 
         caplog.set_level(logging.WARNING, logger="relay")
-        for _ in range(4):
+        with patch.object(
+            store, "append_turn", side_effect=OSError("disk full")
+        ):
+            for _ in range(4):
+                flusher.flush()
+            assert not caplog.text
             flusher.flush()
-        assert not caplog.text
-        flusher.flush()
 
         stats = flusher.flush_stats()
         assert len(stats["flush_errors"]) == 5
@@ -984,5 +990,7 @@ class TestFlusherQueue:
 
         flusher.flush()  # must not raise
 
-        assert flusher.flush_stats()["flush_errors"]
+        # Store reopens lazily; "conversation not found" is now
+        # MalformedInputError — dropped cleanly, no flush error.
+        assert flusher.queue_size == 0
 
