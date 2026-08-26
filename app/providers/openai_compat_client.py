@@ -46,6 +46,33 @@ def _safe_provider_body(provider: Provider, status_code: int, body: str) -> str:
     return redact_provider_error(api_key, status_code, body)
 
 
+def _parse_provider_json(
+    response: "httpx.Response",
+    provider: Provider,
+    status_code: int,
+) -> dict:
+    """
+    Safely parse a provider's HTTP response body as JSON.
+
+    Wraps ``response.json()`` to convert ``json.JSONDecodeError`` and
+    ``ValueError`` into a ``ProviderHTTPError`` that flows through the
+    normal error-classification and retry pipeline.  Without this guard,
+    an empty or non-JSON body from a 200 OK response produces an
+    unclassified exception that bypasses retry and failover logic.
+    """
+    try:
+        return response.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ProviderHTTPError(
+            status_code,
+            _safe_provider_body(
+                provider,
+                status_code,
+                f"Invalid JSON from provider: {exc}",
+            ),
+        ) from exc
+
+
 def _text_content(content) -> str:
     """
     Extract plain text from an OpenAI message content (string or parts).
@@ -446,7 +473,7 @@ class OpenAICompatibleClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        data = response.json()
+        data = _parse_provider_json(response, provider, response.status_code)
 
         return data["choices"][0]["message"]["content"]
 
@@ -539,7 +566,7 @@ class OpenAICompatibleClient:
             provider.name, "chat_messages", response.status_code, latency_ms
         )
 
-        return response.json()
+        return _parse_provider_json(response, provider, response.status_code)
 
     def list_models(self, provider: Provider) -> List[str]:
         """
@@ -608,7 +635,7 @@ class OpenAICompatibleClient:
             latency_ms,
         )
 
-        data = response.json()
+        data = _parse_provider_json(response, provider, response.status_code)
 
         return [
             model["id"]
@@ -1119,7 +1146,7 @@ class OpenAICompatibleClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        data = response.json()
+        data = _parse_provider_json(response, provider, response.status_code)
 
         return data["choices"][0]["message"]["content"]
 
@@ -1356,7 +1383,7 @@ class OpenAICompatibleClient:
             provider.name, "chat_messages", response.status_code, latency_ms
         )
 
-        return response.json()
+        return _parse_provider_json(response, provider, response.status_code)
 
     async def achat_stream_messages(
         self,
@@ -1542,7 +1569,7 @@ class OpenAICompatibleClient:
             latency_ms,
         )
 
-        data = response.json()
+        data = _parse_provider_json(response, provider, response.status_code)
 
         return [
             model["id"]

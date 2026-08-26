@@ -29,6 +29,7 @@ from app.providers.openai_compat_client import (
     _retry_after_seconds,
     _stream_error_text,
     _stream_error_text_async,
+    _parse_provider_json,
     _text_content,
     bounded_aiter_lines,
     bounded_get,
@@ -657,7 +658,7 @@ class GeminiClient:
                 ),
             )
 
-        return _gemini_model_ids(response.json())
+        return _gemini_model_ids(_parse_provider_json(response, provider, response.status_code))
 
     def key_check(self, provider):
         """
@@ -815,7 +816,7 @@ class GeminiClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        return _join_candidates(response.json())
+        return _join_candidates(_parse_provider_json(response, provider, response.status_code))
 
     def chat_messages(self, provider, payload: dict) -> dict:
         """
@@ -896,7 +897,7 @@ class GeminiClient:
             latency_ms,
         )
 
-        return _openai_response(response.json())
+        return _openai_response(_parse_provider_json(response, provider, response.status_code))
 
     def chat_stream(
         self,
@@ -961,6 +962,13 @@ class GeminiClient:
                         chunk = json.loads(line[6:])
                     except json.JSONDecodeError:
                         continue
+                    if "error" in chunk:
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, str(chunk["error"])
+                            ),
+                        )
                     text = _join_candidates(chunk)
                     if text:
                         yield text
@@ -1182,7 +1190,7 @@ class GeminiClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        return _join_candidates(response.json())
+        return _join_candidates(_parse_provider_json(response, provider, response.status_code))
 
     async def achat_stream(
         self,
@@ -1249,6 +1257,13 @@ class GeminiClient:
                             chunk = json.loads(line[6:])
                         except json.JSONDecodeError:
                             continue
+                        if "error" in chunk:
+                            raise ProviderHTTPError(
+                                0,
+                                safe_error_body(
+                                    provider, 0, str(chunk["error"])
+                                ),
+                            )
                         text = _join_candidates(chunk)
                         if text:
                             yield text
@@ -1370,7 +1385,7 @@ class GeminiClient:
             latency_ms,
         )
 
-        return _openai_response(response.json())
+        return _openai_response(_parse_provider_json(response, provider, response.status_code))
 
     async def achat_stream_messages(
         self,
@@ -1492,7 +1507,7 @@ class GeminiClient:
                 ),
             )
 
-        return _gemini_model_ids(response.json())
+        return _gemini_model_ids(_parse_provider_json(response, provider, response.status_code))
 
     async def aprobe_model(self, provider, model: str) -> ModelProbe:
         """

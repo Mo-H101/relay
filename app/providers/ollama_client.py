@@ -28,6 +28,7 @@ from app.providers.openai_compat_client import (
     bounded_get,
     bounded_iter_lines,
     bounded_post,
+    _parse_provider_json,
     bounded_stream,
     proxy_request_kwargs,
 )
@@ -260,7 +261,7 @@ class OllamaClient:
 
         return [
             entry.get("name", "")
-            for entry in response.json().get("models", [])
+            for entry in _parse_provider_json(response, provider, response.status_code).get("models", [])
             if entry.get("name")
         ]
 
@@ -443,7 +444,7 @@ class OllamaClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        return (response.json().get("message") or {}).get("content", "")
+        return (_parse_provider_json(response, provider, response.status_code).get("message") or {}).get("content", "")
 
     def chat_messages(self, provider, payload: dict) -> dict:
         """
@@ -523,7 +524,7 @@ class OllamaClient:
             latency_ms,
         )
 
-        return _openai_response(response.json())
+        return _openai_response(_parse_provider_json(response, provider, response.status_code))
 
     def _chat_payload(self, model: str, message: str, stream: bool, **gen_kwargs) -> dict:
         payload = {
@@ -847,7 +848,7 @@ class OllamaClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        data = response.json()
+        data = _parse_provider_json(response, provider, response.status_code)
 
         return (data.get("message") or {}).get("content", "")
 
@@ -1044,7 +1045,7 @@ class OllamaClient:
             latency_ms,
         )
 
-        return _openai_response(response.json())
+        return _openai_response(_parse_provider_json(response, provider, response.status_code))
 
     async def achat_stream_messages(
         self,
@@ -1160,7 +1161,7 @@ class OllamaClient:
 
         return [
             entry.get("name", "")
-            for entry in response.json().get("models", [])
+            for entry in _parse_provider_json(response, provider, response.status_code).get("models", [])
             if entry.get("name")
         ]
 

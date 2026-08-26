@@ -28,6 +28,7 @@ from app.providers.openai_compat_client import (
     _stream_error_text,
     _stream_error_text_async,
     _text_content,
+    _parse_provider_json,
     bounded_aiter_lines,
     bounded_get,
     bounded_iter_lines,
@@ -526,7 +527,7 @@ class AnthropicClient:
 
         return [
             model["id"]
-            for model in response.json().get("data", [])
+            for model in _parse_provider_json(response, provider, response.status_code).get("data", [])
         ]
 
     def key_check(self, provider):
@@ -702,7 +703,7 @@ class AnthropicClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        return self._assistant_text(response.json())
+        return self._assistant_text(_parse_provider_json(response, provider, response.status_code))
 
     def chat_messages(self, provider, payload: dict) -> dict:
         """
@@ -780,7 +781,7 @@ class AnthropicClient:
             latency_ms,
         )
 
-        return _openai_response(response.json())
+        return _openai_response(_parse_provider_json(response, provider, response.status_code))
 
     def chat_stream(
         self,
@@ -847,6 +848,13 @@ class AnthropicClient:
                         event = json.loads(line[6:])
                     except json.JSONDecodeError:
                         continue
+                    if event.get("type") == "error":
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, str(event.get("error"))
+                            ),
+                        )
                     if event.get("type") != "content_block_delta":
                         continue
                     delta = event.get("delta") or {}
@@ -1069,7 +1077,7 @@ class AnthropicClient:
             provider.name, "chat", response.status_code, latency_ms
         )
 
-        return self._assistant_text(response.json())
+        return self._assistant_text(_parse_provider_json(response, provider, response.status_code))
 
     async def achat_stream(
         self,
@@ -1139,6 +1147,13 @@ class AnthropicClient:
                             event = json.loads(line[6:])
                         except json.JSONDecodeError:
                             continue
+                        if event.get("type") == "error":
+                            raise ProviderHTTPError(
+                                0,
+                                safe_error_body(
+                                    provider, 0, str(event.get("error"))
+                                ),
+                            )
                         if event.get("type") != "content_block_delta":
                             continue
                         delta = event.get("delta") or {}
@@ -1260,7 +1275,7 @@ class AnthropicClient:
             latency_ms,
         )
 
-        return _openai_response(response.json())
+        return _openai_response(_parse_provider_json(response, provider, response.status_code))
 
     async def achat_stream_messages(
         self,
@@ -1380,7 +1395,7 @@ class AnthropicClient:
 
         return [
             model["id"]
-            for model in response.json().get("data", [])
+            for model in _parse_provider_json(response, provider, response.status_code).get("data", [])
         ]
 
     async def aprobe_model(self, provider, model: str) -> ModelProbe:

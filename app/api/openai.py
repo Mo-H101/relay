@@ -598,6 +598,15 @@ async def openai_chat_completion(
                 kind = classify(exc)
                 failure_type = kind.value
                 error_chunk = {
+                    "id": stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": stream_model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop",
+                    }],
                     "error": {
                         "message": safe_provider_error(exc, kind),
                         "type": "stream_error",
