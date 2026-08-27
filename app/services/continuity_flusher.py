@@ -86,6 +86,15 @@ class ContinuityFlusher:
         # store's in-flight registry stays accurate and background prunes
         # skip conversations that still have rows in this buffer.
         self._pending_per_conversation: dict = {}
+        # N-11: the highest ``seq`` of any ``turn.append``/``turn.update``
+        # still queued (not yet flushed) for a ``(conversation_id, key_id)``.
+        # This is the authoritative watermark of *accepted-but-not-yet-durable*
+        # turns, independent of the coordinator's bounded in-memory LRU. A
+        # conversation state that is evicted from the LRU while these rows are
+        # pending must never have its sequence number reused: the recreated
+        # state seeds its next seq from this watermark so the flusher never
+        # misclassifies a genuinely new turn as an "already-durable" duplicate.
+        self._pending_seq: dict = {}
 
     def enqueue(self, operation: str, **kwargs) -> bool:
         """
@@ -123,6 +132,7 @@ class ContinuityFlusher:
             if self._coalesce_locked(operation, kwargs):
                 self._queued_count += 1
                 relay_metrics.continuity_rows_queued.set(len(self._queue))
+                self._track_pending_seq_locked(operation, kwargs)
                 return True
 
             # N-8: reject standalone malformed turn.update.  When
@@ -148,6 +158,7 @@ class ContinuityFlusher:
             self._queue.append((operation, dict(kwargs)))
             self._queued_count += 1
             relay_metrics.continuity_rows_queued.set(len(self._queue))
+            self._track_pending_seq_locked(operation, kwargs)
 
         if conversation_id and self._store is not None:
             self._store.mark_in_flight(conversation_id)
@@ -159,6 +170,44 @@ class ContinuityFlusher:
         return True
 
     _ACCOUNTING_FIELDS = ("tokens_in", "tokens_out", "latency_ms")
+
+    def _track_pending_seq_locked(self, operation: str, kwargs: dict) -> None:
+        """Record the highest unflushed turn seq for a conversation.
+
+        N-11: only ``turn.append``/``turn.update`` rows carry sequence
+        numbers that constrain later sequencing. The watermark is
+        monotonic (never lowered) so a conversation whose state was evicted
+        from the coordinator LRU while these rows were still queued can
+        never reuse a sequence number that is accepted-but-not-yet-durable.
+        The caller holds ``self._lock``.
+        """
+        if operation not in ("turn.append", "turn.update"):
+            return
+        cid = kwargs.get("conversation_id")
+        seq = kwargs.get("seq")
+        if not cid or seq is None:
+            return
+        ident = (str(cid), str(kwargs.get("key_id") or ""))
+        try:
+            seq_i = int(seq)
+        except (TypeError, ValueError):
+            return
+        self._pending_seq[ident] = max(self._pending_seq.get(ident, 0), seq_i)
+
+    def pending_max_seq(self, conversation_id: str, key_id=None) -> Optional[int]:
+        """The highest turn seq still queued (unflushed) for a conversation.
+
+        Returns None when the flusher has no pending turn rows for the
+        conversation. Used by ``HandoffCoordinator.start`` to seed a fresh
+        in-memory state above both durable SQLite seq *and* accepted-but-
+        unflushed seq, so LRU eviction can never cause a sequence collision
+        that silently drops an accepted turn (N-11).
+        """
+        if not conversation_id:
+            return None
+        ident = (str(conversation_id), str(key_id or ""))
+        with self._lock:
+            return self._pending_seq.get(ident)
 
     def _coalesce_locked(self, operation: str, kwargs: dict) -> bool:
         """Fold a superseded non-turn operation into the queue.
@@ -388,6 +437,14 @@ class ContinuityFlusher:
             pending = self._pending_per_conversation.get(conversation_id, 0) - 1
             if pending <= 0:
                 self._pending_per_conversation.pop(conversation_id, None)
+                # N-11: all rows for the conversation have drained, so
+                # durable SQLite now reflects every accepted turn and the
+                # in-memory pending-seq watermark is no longer needed.
+                self._pending_seq = {
+                    k: v
+                    for k, v in self._pending_seq.items()
+                    if k[0] != conversation_id
+                }
                 clear = True
             else:
                 self._pending_per_conversation[conversation_id] = pending

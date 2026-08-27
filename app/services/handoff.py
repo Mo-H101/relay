@@ -143,6 +143,13 @@ class TurnContext:
     _provisional: bool = field(default=False, repr=False)
     _aborted: bool = field(default=False, repr=False)
     _durability_degraded: bool = field(default=False, repr=False)
+    # N-11 (eviction during an in-flight turn): the exact conversation
+    # state this turn began on is pinned on the turn itself so a bounded-LRU
+    # eviction that fires *between* ``start()`` and ``commit()`` cannot
+    # silently drop this accepted turn. ``commit()``/``update()``/…
+    # resolve the state through this handle (re-inserting it into the LRU)
+    # instead of returning ``{}`` and losing the turn's continuity data.
+    _state: "_ConversationState" = field(default=None, repr=False)
     # P9B: the last committed logical (provider, model) of the
     # conversation (the continuation anchor) at the time this turn began.
     anchor_provider: Optional[str] = None
@@ -543,12 +550,39 @@ class HandoffCoordinator:
                     durable_seq = self._recovery.durable_last_seq(
                         cid, str(key_id or "")
                     )
+                # N-11: seed above durability that is *pending* (queued in
+                # the write-behind flusher but not yet flushed) as well as
+                # durability already committed to SQLite. A conversation
+                # state that was evicted from the bounded LRU while its
+                # turn rows were still queued must not reuse a sequence
+                # number: the flusher would otherwise treat the resulting
+                # (conversation_id, seq) integrity conflict as
+                # "already-durable" and silently drop the newer accepted
+                # turn. The pending watermark is authoritative for accepted-
+                # but-not-yet-durable turns.
+                pending_seq = None
+                if self._flusher is not None:
+                    try:
+                        pending_seq = self._flusher.pending_max_seq(
+                            cid, str(key_id or "")
+                        )
+                    except Exception:  # noqa: BLE001 - continuity never breaks chat
+                        pending_seq = None
+                seq_source = durable_seq
+                if pending_seq is not None and (
+                    seq_source is None or pending_seq > seq_source
+                ):
+                    seq_source = pending_seq
                 if resume_last_seq:
                     next_seq = max(1, int(resume_last_seq) + 1)
-                elif durable_seq:
-                    next_seq = max(1, int(durable_seq) + 1)
+                elif seq_source is not None:
+                    next_seq = max(1, int(seq_source) + 1)
                 else:
                     next_seq = 1
+                # Even on the resume path, a fresh state must never seed at
+                # or below a still-pending (accepted but unflushed) seq.
+                if pending_seq is not None:
+                    next_seq = max(next_seq, int(pending_seq) + 1)
                 state = _ConversationState(
                     conversation_id=cid,
                     key_id=str(key_id or ""),
@@ -606,6 +640,10 @@ class HandoffCoordinator:
         turn.context_manager = self._manager
         turn.resumed = resumed
         turn.exclude_up_to_seq = state.resume_up_to_seq
+        # N-11 (eviction during an in-flight turn): pin the exact
+        # conversation state on this turn so a later bounded-LRU eviction
+        # cannot silently drop an accepted-but-uncommitted turn.
+        turn._state = state
 
         turn.events.append(
             {
@@ -711,9 +749,7 @@ class HandoffCoordinator:
         now = time.time()
 
         with self._lock:
-            state = self._states.get(
-                _state_key(turn.key_id, turn.conversation_id)
-            )
+            state = self._resolve_state(turn)
 
             if state is None:
                 return {"allowed": False, "denied": True, "reason": "unknown"}
@@ -789,9 +825,7 @@ class HandoffCoordinator:
         """
         failed = False
         with self._lock:
-            state = self._states.get(
-                _state_key(turn.key_id, turn.conversation_id)
-            )
+            state = self._resolve_state(turn)
             if state is None:
                 return {}
 
@@ -980,9 +1014,7 @@ class HandoffCoordinator:
                     return {}
 
         with self._lock:
-            state = self._states.get(
-                _state_key(turn.key_id, turn.conversation_id)
-            )
+            state = self._resolve_state(turn)
             if state is None:
                 return {}
 
@@ -1141,9 +1173,7 @@ class HandoffCoordinator:
         ``_ensure_envelope`` call rebuilds it (used by overflow retry).
         """
         with self._lock:
-            state = self._states.get(
-                _state_key(turn.key_id, turn.conversation_id)
-            )
+            state = self._resolve_state(turn)
             if state is not None:
                 state.envelope = None
                 state.envelope_seq = 0
@@ -1161,9 +1191,7 @@ class HandoffCoordinator:
         level.
         """
         with self._lock:
-            state = self._states.get(
-                _state_key(turn.key_id, turn.conversation_id)
-            )
+            state = self._resolve_state(turn)
             if state is None:
                 turn.envelope = None
                 turn._injected_payload = None
@@ -1439,6 +1467,27 @@ class HandoffCoordinator:
         self._states.move_to_end(
             _state_key(state.key_id, state.conversation_id)
         )
+
+    def _resolve_state(self, turn: TurnContext) -> Optional[_ConversationState]:
+        """Return the live conversation state for a turn.
+
+        N-11 (eviction during an in-flight turn): the bounded LRU may evict
+        a conversation's state *after* ``start()`` returned its handle but
+        *before* ``commit()``/``update()``/``on_switch()`` runs (e.g. while
+        a provider stream is in flight for a busy gateway). Looking the
+        state up by key alone would then return ``None`` and silently drop
+        the accepted turn. Each turn pins the exact ``_ConversationState``
+        it began on; when it is no longer resident we restore it to the LRU
+        so the turn's commit continues the correct sequence and preserves
+        its continuity context. The caller holds ``self._lock``.
+        """
+        key = _state_key(turn.key_id, turn.conversation_id)
+        state = self._states.get(key)
+        if state is None:
+            state = turn._state
+            if state is not None:
+                self._remember_state(state)
+        return state
 
     def _mark_durability_degraded(
         self, turn: TurnContext, state: _ConversationState

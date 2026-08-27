@@ -940,6 +940,341 @@ class TestFlusherAdversarial:
         # drops it (no flush error recorded); the queue must not stall.
         assert flusher.queue_size == 0
 
+    def test_n11_lru_eviction_never_reuses_pending_seq(self, tmp_path):
+        """N-11 regression: LRU eviction with pending write-behind.
+
+        A conversation state is evicted from the coordinator's bounded LRU
+        while its ``turn.append`` is still queued (unflushed) in the
+        flusher. Reopening the conversation must NOT reuse a sequence
+        number by seeding only from durable SQLite, otherwise the flusher
+        treats the newer successful turn's ``(conversation_id, seq)``
+        integrity conflict as "already-durable" and silently drops it.
+        Two successful logical commits must yield two durable rows.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        # Bounded LRU of 2 so one eviction removes A.
+        coord = HandoffCoordinator(
+            flusher=flusher,
+            recovery=recovery,
+            max_in_memory_states=2,
+        )
+
+        cid_a = "a" * 32
+        key_id = "k"
+
+        # Commit turn 1 for A (seq 1) but DO NOT flush: the durable row
+        # stays pending in the write-behind buffer.
+        turn = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        first = coord.commit(turn, provider="p", model="m1", outcome="ok")
+        assert first["seq"] == 1
+
+        # Add two more conversations so A's state is evicted from the LRU.
+        for cid in ("b" * 32, "c" * 32):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            coord.commit(t, provider="p", model="m2", outcome="ok")
+
+        # A's state must no longer be resident in the coordinator.
+        assert (str(key_id), cid_a) not in coord._states
+
+        # Nothing has flushed yet, so durable_last_seq() (SQLite) is stale
+        # (None) even though turn 1 is logically accepted.
+        assert recovery.durable_last_seq(cid_a, key_id) is None
+
+        # Reopen A and commit a second turn. It must continue the sequence,
+        # never reuse seq 1 (which is still pending durability).
+        turn2 = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        second = coord.commit(turn2, provider="p", model="m2", outcome="ok")
+        assert second["seq"] == 2
+
+        # Drain the write-behind buffer: both turns must be durable.
+        flusher.flush()
+        durable = store.turns(cid_a, key_id)
+        assert [row["seq"] for row in durable] == [1, 2], (
+            "one logical turn was lost to an already-durable skip",
+            [row["seq"] for row in durable],
+        )
+        store.close()
+
+    def test_n11_eviction_with_multiple_pending_turns(self, tmp_path):
+        """N-11 neighboring case: several pending turns survive eviction.
+
+        When a conversation has committed multiple turns (all still queued
+        unflushed) and is then evicted from the LRU, the recreated state
+        must continue above the highest *pending* seq — not just the stale
+        durable SQLite seq. Otherwise the colliding turns are silently
+        dropped upon flush.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(
+            flusher=flusher, recovery=recovery, max_in_memory_states=2
+        )
+        cid_a = "a" * 32
+        key_id = "k"
+
+        for seq, model in ((1, "m1"), (2, "m2")):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid_a,
+            )
+            rec = coord.commit(t, provider="p", model=model, outcome="ok")
+            assert rec["seq"] == seq
+
+        # Evict A by opening two more conversations.
+        for cid in ("b" * 32, "c" * 32):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            coord.commit(t, provider="p", model="m3", outcome="ok")
+        assert (str(key_id), cid_a) not in coord._states
+
+        # Nothing has flushed; durable_last_seq() is stale (None).
+        assert recovery.durable_last_seq(cid_a, key_id) is None
+
+        t3 = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        third = coord.commit(t3, provider="p", model="m4", outcome="ok")
+        assert third["seq"] == 3
+
+        flusher.flush()
+        durable = store.turns(cid_a, key_id)
+        assert [row["seq"] for row in durable] == [1, 2, 3], (
+            [row["seq"] for row in durable]
+        )
+        store.close()
+
+    def test_n11_resume_last_seq_clears_pending_watermark(self, tmp_path):
+        """N-11 neighboring case: resume seeding never collides with a
+        still-pending (unflushed) turn.
+
+        A resume that seeds from a stale durable last seq must still start
+        above any queued-but-unflushed turn. This guards the
+        ``_hydrate_resume`` path against the same silent data loss.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(
+            flusher=flusher, recovery=recovery, max_in_memory_states=2
+        )
+        cid_a = "a" * 32
+        key_id = "k"
+
+        # Commit turn 1 (seq 1) and leave it pending (not flushed).
+        t = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        assert coord.commit(t, provider="p", model="m1", outcome="ok")["seq"] == 1
+
+        # Evict A, then reopen via a resume whose durable state is stale.
+        for cid in ("b" * 32, "c" * 32):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            coord.commit(t, provider="p", model="m2", outcome="ok")
+        assert (str(key_id), cid_a) not in coord._states
+
+        # resume_last_seq is stale (0 from durable), but pending turn 1 must
+        # still force the next seq above it.
+        turn = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a, resume_last_seq=0,
+        )
+        rec = coord.commit(turn, provider="p", model="m3", outcome="ok")
+        assert rec["seq"] == 2, rec
+
+        flusher.flush()
+        durable = store.turns(cid_a, key_id)
+        assert [row["seq"] for row in durable] == [1, 2], (
+            [row["seq"] for row in durable]
+        )
+        store.close()
+
+    def test_n11_pending_watermark_cleared_after_full_drain(self, tmp_path):
+        """N-11 neighboring case: the pending watermark is released once a
+        conversation's rows are fully durable, so a later reopen seeds from
+        SQLite without skipping sequence numbers.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(
+            flusher=flusher, recovery=recovery, max_in_memory_states=2
+        )
+        cid_a = "a" * 32
+        key_id = "k"
+
+        rec = coord.commit(
+            coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid_a,
+            ),
+            provider="p", model="m1", outcome="ok",
+        )
+        assert rec["seq"] == 1
+
+        # Drain fully: durable now reflects turn 1 and the watermark clears.
+        flusher.flush()
+        assert flusher.pending_max_seq(cid_a, key_id) is None
+        assert recovery.durable_last_seq(cid_a, key_id) == 1
+
+        # Evict, reopen, commit: sequence continues from durable = 2.
+        for cid in ("b" * 32, "c" * 32):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            coord.commit(t, provider="p", model="m2", outcome="ok")
+        assert (str(key_id), cid_a) not in coord._states
+
+        rec = coord.commit(
+            coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid_a,
+            ),
+            provider="p", model="m3", outcome="ok",
+        )
+        assert rec["seq"] == 2
+        store.close()
+
+    def test_n11_eviction_between_start_and_commit_no_data_loss(self, tmp_path):
+        """N-11 variant: LRU eviction fired *between* start() and commit().
+
+        A turn is started (its conversation state is created and returned to
+        the request path) but the state is evicted from the bounded LRU
+        before the provider stream finishes and commit() runs (a busy
+        gateway with many concurrent in-flight turns). commit() must not
+        return ``{}`` and silently drop the accepted turn from continuity —
+        it must resolve the turn's pinned state and persist it, so the
+        conversation's durable history never loses the turn.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(
+            flusher=flusher, recovery=recovery, max_in_memory_states=2
+        )
+        cid_a = "a" * 32
+        key_id = "k"
+
+        # Start A's turn but do NOT finish it yet (simulating a stream that
+        # is still in flight when other conversations evict A).
+        turn_a = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+
+        # Two more conversations evict A's state from the LRU (size 2).
+        for cid in ("b" * 32, "c" * 32):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            coord.commit(t, provider="p", model="m2", outcome="ok")
+        assert (str(key_id), cid_a) not in coord._states
+
+        # A's stream finally finishes: the turn must be committed, not lost.
+        result = coord.commit(
+            turn_a, provider="p", model="mA", outcome="ok", tokens_in=5
+        )
+        assert result["seq"] == 1, "turn dropped by eviction"
+        # The pinned state is restored to the LRU for subsequent turns.
+        assert (str(key_id), cid_a) in coord._states
+
+        flusher.flush()
+        durable = store.turns(cid_a, key_id)
+        assert [row["seq"] for row in durable] == [1], (
+            "accepted turn silently lost to start->commit eviction",
+            [row["seq"] for row in durable],
+        )
+        # Sequence continues correctly for the next turn.
+        t3 = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        assert coord.commit(t3, provider="p", model="m3", outcome="ok")["seq"] == 2
+        store.close()
+
+    def test_n11_provisional_update_after_eviction_no_data_loss(self, tmp_path):
+        """N-11 variant: provisional turn finalized after its state was
+        evicted from the LRU must still apply (not silently return {}).
+
+        A provisional (denied) commit is queued; the state is evicted; the
+        finalizing update() must resolve the pinned state, update the
+        in-memory record, and persist the durable update so the turn is
+        never erased.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(
+            flusher=flusher, recovery=recovery, max_in_memory_states=2
+        )
+        cid_a = "a" * 32
+        key_id = "k"
+
+        turn = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        rec = coord.commit(
+            turn, provider="p", model="m1", outcome="denied",
+            tokens_in=1, tokens_out=1,
+        )
+        assert rec["seq"] == 1
+
+        for cid in ("b" * 32, "c" * 32):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            coord.commit(t, provider="p", model="m2", outcome="ok")
+        assert (str(key_id), cid_a) not in coord._states
+
+        result = coord.update(
+            turn, outcome="failed", tokens_in=2, tokens_out=3, latency_ms=4
+        )
+        assert result["seq"] == 1, "update dropped by eviction"
+        assert (str(key_id), cid_a) in coord._states
+
+        flusher.flush()
+        durable = store.turns(cid_a, key_id)
+        assert len(durable) == 1
+        row = durable[0]
+        assert row["outcome"] == "failed"
+        assert row["tokens_in"] == 2
+        assert row["tokens_out"] == 3
+        store.close()
+
 
 # ------------------------- 3.5: privacy surfaces -------------------------
 
