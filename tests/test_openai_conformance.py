@@ -589,6 +589,26 @@ class TestErrorShape:
         assert "detail" not in payload
         assert "sk-test-key" not in response.text
 
+    def test_validation_error_uses_openai_shape(
+        self, relay_with_mock, mock_provider_server, client
+    ):
+        """A pydantic 422 under /v1 reformats to OpenAI error shape."""
+        mock = mock_provider_server
+        relay_with_mock(mock)
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": DEFAULT_MODEL},  # missing required "messages"
+        )
+
+        assert response.status_code == 422
+        payload = response.json()
+        assert "error" in payload
+        assert "message" in payload["error"]
+        assert "messages" in payload["error"]["message"]
+        assert payload["error"]["type"] == "invalid_request_error"
+        assert "detail" not in payload
+
 
 class TestResponseConformance:
     def test_usage_passthrough_non_stream(

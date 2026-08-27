@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.relay import relay
@@ -124,6 +126,42 @@ app.include_router(metrics_router)
 app.include_router(admin_router)
 app.include_router(keys_router)
 app.include_router(feedback_router)
+
+
+def _format_request_validation_error(exc: RequestValidationError) -> str:
+    """Collapse a pydantic validation error into a single human-readable line."""
+    first = exc.errors()[0] if exc.errors() else {}
+    loc = first.get("loc", ())
+    field = ".".join(str(part) for part in loc if part not in ("body", "query", "path"))
+    msg = first.get("msg", "Invalid request.")
+    if field:
+        return f"{field}: {msg}"
+    return msg
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(request: Request, exc: RequestValidationError):
+    """
+    Reformats request-validation errors raised under /v1 to the OpenAI
+    {"error": {...}} shape so OpenAI SDK clients can parse them in the same
+    way they parse business errors (which already use that shape). Non-/v1
+    routes keep FastAPI's default {"detail": ...} response.
+    """
+    if not request.url.path.startswith("/v1"):
+        return JSONResponse(
+            status_code=422,
+            content={"detail": exc.errors()},
+        )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "message": _format_request_validation_error(exc),
+                "type": "invalid_request_error",
+                "code": "validation_error",
+            }
+        },
+    )
 
 
 @app.get("/docs", include_in_schema=False)
