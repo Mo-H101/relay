@@ -1275,6 +1275,84 @@ class TestFlusherAdversarial:
         assert row["tokens_out"] == 3
         store.close()
 
+    def test_n16_update_after_eviction_and_recreate_finalizes_own_turn(
+        self, tmp_path
+    ):
+        """N-16 regression: a provisional turn finalized with update() must
+        finalize ITS OWN durable row even when the conversation state was
+        evicted AND recreated (fresh state) before the update runs.
+
+        Bug: after eviction + reopen, update() preferred the resident-but-
+        recreated state and matched the *most recent committed turn* instead
+        of the turn's own record, so it (a) mutated a different turn's
+        in-memory accounting and (b) enqueued a durable turn.update for the
+        WRONG seq -- leaving the original provisional turn's durable row
+        permanently at its provisional outcome and losing its real tokens.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(
+            flusher=flusher, recovery=recovery, max_in_memory_states=2
+        )
+        cid_a = "a" * 32
+        key_id = "k"
+
+        # Provisional turn 1 committed to conversation A.
+        turn1 = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        rec1 = coord.commit(
+            turn1, provider="p", model="m1", outcome="denied"
+        )
+        assert rec1["seq"] == 1
+
+        # Evict A by opening two more conversations.
+        for cid in ("b" * 32, "c" * 32):
+            t = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+            coord.commit(t, provider="p", model="m2", outcome="ok")
+        assert (str(key_id), cid_a) not in coord._states
+
+        # Reopen A -> the coordinator builds a FRESH state for it. This is
+        # the scenario the pre-existing eviction tests do NOT cover: the
+        # resident state returned by _resolve_state is now the recreated
+        # one, not the state turn1 committed to.
+        turn2 = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid_a,
+        )
+        rec2 = coord.commit(turn2, provider="p", model="m3", outcome="ok")
+        assert rec2["seq"] == 2
+
+        # Now turn1's provisional finalization must update TURN 1 (seq 1),
+        # not the newest turn (seq 2).
+        res = coord.update(
+            turn1, outcome="ok", tokens_in=10, tokens_out=20
+        )
+        assert res["seq"] == 1, (
+            "update() targeted the wrong turn after re-create",
+            res,
+        )
+
+        flusher.flush()
+        durable = {row["seq"]: row for row in store.turns(cid_a, key_id)}
+        assert set(durable) == {1, 2}
+        # seq 1 must be finalized with the REAL outcome/tokens.
+        assert durable[1]["outcome"] == "ok", durable[1]
+        assert durable[1]["tokens_in"] == 10, durable[1]
+        assert durable[1]["tokens_out"] == 20, durable[1]
+        # seq 2 must retain its own accounting (untouched by turn1's update).
+        assert durable[2]["tokens_in"] is None, durable[2]
+        assert durable[2]["tokens_out"] is None, durable[2]
+        store.close()
+
+
 
 # ------------------------- 3.5: privacy surfaces -------------------------
 

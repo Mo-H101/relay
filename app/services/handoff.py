@@ -143,6 +143,12 @@ class TurnContext:
     _provisional: bool = field(default=False, repr=False)
     _aborted: bool = field(default=False, repr=False)
     _durability_degraded: bool = field(default=False, repr=False)
+    # N-16: the durable seq this turn committed. ``start()`` seeds the
+    # state but the seq is only assigned at ``commit()``; recording it lets
+    # ``update()`` finalize THIS turn's durable row precisely even after the
+    # conversation's state was evicted from the LRU and recreated (when the
+    # recreated state's "most recent committed turn" is a different turn).
+    _seq: Optional[int] = field(default=None, repr=False)
     # N-11 (eviction during an in-flight turn): the exact conversation
     # state this turn began on is pinned on the turn itself so a bounded-LRU
     # eviction that fires *between* ``start()`` and ``commit()`` cannot
@@ -977,6 +983,7 @@ class HandoffCoordinator:
         relay_metrics.continuity_turns_committed.inc()
         turn._committed = True
         turn._provisional = outcome == "denied"
+        turn._seq = seq
         return dict(record)
 
     def update(
@@ -1014,35 +1021,75 @@ class HandoffCoordinator:
                     return {}
 
         with self._lock:
-            state = self._resolve_state(turn)
-            if state is None:
+            conversation_id = turn.conversation_id
+            key_id = turn.key_id
+            resident = self._states.get(_state_key(key_id, conversation_id))
+            target_seq = turn._seq
+
+            # N-16: finalize THIS turn's own durable row. A conversation
+            # state evicted from the bounded LRU and later recreated builds
+            # a *fresh* resident state whose "most recent committed turn" is
+            # a different turn (or none). Resolving by key alone would then
+            # update the wrong record and enqueue a durable update for the
+            # WRONG seq, permanently losing this turn's real outcome/tokens.
+            # Prefer the exact committed seq (turn._seq); fall back to the
+            # most recent committed turn only for legacy turns without a
+            # pinned seq.
+            record = None
+            if resident is not None:
+                if target_seq is not None:
+                    for r in reversed(resident.committed_turns):
+                        if r.get("seq") == target_seq:
+                            record = r
+                            break
+                else:
+                    for r in reversed(resident.committed_turns):
+                        if r.get("conversation_id") == conversation_id:
+                            record = r
+                            break
+
+            # The live resident (possibly recreated) state does not carry
+            # this turn. Recover the durable seq from the pinned original
+            # state so the upsert below finalizes the correct row on disk.
+            # If the state was merely evicted (no recreated state has taken
+            # its key), restore it so subsequent turns continue it (N-11);
+            # but never swap in a stale state over a *recreated* one (N-16),
+            # which would discard newer in-memory turns and could reuse a seq.
+            seq = None
+            if record is None:
+                if target_seq is not None and turn._state is not None:
+                    for r in turn._state.committed_turns:
+                        if r.get("seq") == target_seq:
+                            record = r
+                            seq = r.get("seq")
+                            break
+                    if record is not None and resident is None:
+                        self._remember_state(turn._state)
+                        resident = turn._state
+            else:
+                seq = record["seq"]
+
+            if seq is None:
                 return {}
 
-            # Find the most recent committed turn matching this
-            # conversation and update it in-place.
-            updated = False
-            for record in reversed(state.committed_turns):
-                if record.get("conversation_id") == state.conversation_id:
-                    record["outcome"] = outcome
-                    if tokens_in is not None:
-                        record["tokens_in"] = tokens_in
-                    if tokens_out is not None:
-                        record["tokens_out"] = tokens_out
-                    if latency_ms is not None:
-                        record["latency_ms"] = latency_ms
-                    updated = True
-                    break
-
-            if not updated:
-                return {}
-
-            seq = record["seq"]
-            self._touch(state)
+            # Finalize the in-memory record when it lives on the live
+            # resident state (so envelopes stay consistent); a recreated
+            # resident state that does not carry this turn is left alone --
+            # its durable row is still finalized by the upsert below.
+            if record is not None:
+                record["outcome"] = outcome
+                if tokens_in is not None:
+                    record["tokens_in"] = tokens_in
+                if tokens_out is not None:
+                    record["tokens_out"] = tokens_out
+                if latency_ms is not None:
+                    record["latency_ms"] = latency_ms
+                self._touch(resident)
 
         self._enqueue(
             "turn.update",
-            conversation_id=state.conversation_id,
-            key_id=state.key_id,
+            conversation_id=conversation_id,
+            key_id=key_id,
             seq=seq,
             outcome=outcome,
             tokens_in=tokens_in,
@@ -1050,14 +1097,22 @@ class HandoffCoordinator:
             latency_ms=latency_ms,
         )
 
+        finalized = {
+            "conversation_id": conversation_id,
+            "key_id": key_id,
+            "seq": seq,
+            "outcome": outcome,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "latency_ms": latency_ms,
+        }
+
         if self._recovery is not None:
-            self._recovery.on_turn_committed(
-                state.conversation_id, state.key_id
-            )
+            self._recovery.on_turn_committed(conversation_id, key_id)
 
         turn._committed = True
         turn._provisional = False
-        return dict(record)
+        return finalized
 
     def abort(self, turn: TurnContext) -> None:
         """Release recovery state for a turn that did not complete.
