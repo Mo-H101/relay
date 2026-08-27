@@ -44,6 +44,21 @@ def _version():
 
 # ------------------------------------------------------------------ metadata
 
+def app_ui_css_path():
+    """Return the TUI stylesheet as a wheel/sdist-relative POSIX path.
+
+    Reads ``CSS_PATH`` from ``app.ui.app`` (the Textual ``App`` subclass that
+    owns the stylesheet) and resolves it against the ``app/ui`` package
+    directory, so a change to the stylesheet location is picked up by the
+    packaging-content assertions instead of going stale.
+    """
+    from app import ui  # noqa: F401
+    from app.ui import app as ui_app
+
+    css = getattr(ui_app, "CSS_PATH", "styles/base.tcss")
+    return f"app/ui/{css}"
+
+
 def test_version_is_pep440():
     assert re.fullmatch(
         r"\d+\.\d+\.\d+(?:[.-]?(?:a|b|rc|dev|post)\d+)?",
@@ -513,6 +528,14 @@ def test_package_build_and_console_script(installed_env):
         assert entry_points, "entry_points.txt missing"
         ep_text = zf.read(entry_points[0]).decode()
         assert "relay = app.cli:main" in ep_text
+
+        # The TUI loads its Textual stylesheet from a bundled .tcss file.
+        # A wheel that omits it makes the installed `relay` TUI crash at
+        # startup (FileNotFoundError), so the artifact must carry it.
+        css_path = app_ui_css_path()
+        assert (
+            f"{css_path}" in names
+        ), f"TUI stylesheet {css_path} missing from wheel"
 
     relay_exe = installed_env["relay_exe"]
 

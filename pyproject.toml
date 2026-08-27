@@ -39,5 +39,11 @@ version = { attr = "app.__version__.__version__" }
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+app = ["ui/styles/*.tcss"]
+
+[tool.setuptools]
+include-package-data = true
+
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
