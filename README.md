@@ -222,7 +222,7 @@ then start it by typing `relay`:
 pip install relay
 
 # From GitHub (one command)
-pip install git+https://github.com/<org>/<repo>.git
+pip install git+https://github.com/Mo-H101/relay.git
 
 # One-command installers (from a checkout)
 #   Windows (recommended — bypasses the default execution policy safely):
@@ -250,7 +250,7 @@ open one as administrator and run
 
 - **From PyPI:** `python -m pip install --upgrade relay`.
 - **From GitHub:** re-run
-  `python -m pip install --upgrade git+https://github.com/<org>/<repo>.git`.
+  `python -m pip install --upgrade git+https://github.com/Mo-H101/relay.git`.
 - **From a checkout:** `git pull`, reinstall dependencies if the lockfile
   changed (`python -m pip install -r requirements.txt`), then restart.
 - **One-command installers:** re-run `install.cmd` / `install.ps1` /

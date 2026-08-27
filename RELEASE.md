@@ -152,8 +152,8 @@ If a released version is broken:
 ## Known environment caveats
 
 - **CI branch trigger.** `.github/workflows/ci.yml` triggers `push` CI on the
-  `main` branch only, but this repository's branch is `master`. CI still runs
-  on pull requests. When you push the release tag, confirm CI runs on the tag
+  `master` branch, which is this repository's release branch. CI also runs on
+  pull requests. When you push the release tag, confirm CI runs on the tag
   or run the equivalent checks locally.
 - **OpenAI quota.** The live OpenAI smoke requires an account with active
   billing; otherwise the gateway is NVIDIA-only in practice.
