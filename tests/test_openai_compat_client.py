@@ -332,6 +332,43 @@ class TestChat:
         assert exc.value.retry_after == 5.0
         assert recorded["json"]["model"] == "m"
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"choices": []},
+            {},
+            {"choices": None},
+        ],
+    )
+    def test_chat_messages_rejects_empty_choices(self, monkeypatch, body):
+        patch_post(
+            monkeypatch,
+            FakeResponse(200, json_data=body),
+            None,
+        )
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            OpenAICompatibleClient().chat_messages(
+                make_provider(),
+                {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+
+        assert exc.value.status_code == 200
+        assert "empty provider response" in exc.value.message
+
+    def test_chat_messages_returns_message_payload(self, monkeypatch):
+        patch_post(
+            monkeypatch,
+            FakeResponse(200, json_data={"choices": [{"message": {"content": "hi"}}]}),
+            None,
+        )
+
+        data = OpenAICompatibleClient().chat_messages(
+            make_provider(),
+            {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert data["choices"][0]["message"]["content"] == "hi"
+
     def test_chat_raises_provider_timeout_on_read_timeout(self, monkeypatch):
         def handler(url, **kwargs):
             raise httpx.ReadTimeout("boom")

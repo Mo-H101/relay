@@ -124,6 +124,38 @@ class TestOpenAICompatibleAsyncChat:
         ]
 
     @pytest.mark.asyncio
+    async def test_achat_messages_rejects_empty_choices(self, monkeypatch):
+        def handler(request):
+            return httpx.Response(200, json={"choices": []}, request=request)
+
+        install_async_client(monkeypatch, "openai_compat_client", handler)
+
+        with pytest.raises(ProviderHTTPError) as exc:
+            await OpenAICompatibleClient().achat_messages(
+                make_provider(),
+                {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            )
+
+        assert "empty provider response" in exc.value.message
+
+    @pytest.mark.asyncio
+    async def test_achat_messages_returns_message_payload(self, monkeypatch):
+        def handler(request):
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "hi"}}]},
+                request=request,
+            )
+
+        install_async_client(monkeypatch, "openai_compat_client", handler)
+
+        data = await OpenAICompatibleClient().achat_messages(
+            make_provider(),
+            {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert data["choices"][0]["message"]["content"] == "hi"
+
+    @pytest.mark.asyncio
     async def test_achat_passes_optional_generation_params(self, monkeypatch):
         seen = {}
 

@@ -615,12 +615,21 @@ class OpenAICompatibleClient:
         )
 
         try:
-            return _parse_provider_json(response, provider, response.status_code)
+            data = _parse_provider_json(response, provider, response.status_code)
         except ProviderResponseLimit:
             relay_metrics.record_provider(
                 provider.name, "chat_messages", 0, latency_ms
             )
             raise
+
+        if not data.get("choices"):
+            relay_metrics.record_provider(
+                provider.name, "chat_messages", 0, latency_ms
+            )
+            raise ProviderHTTPError(
+                response.status_code, "empty provider response"
+            )
+        return data
 
     def list_models(self, provider: Provider) -> List[str]:
         """
@@ -1501,12 +1510,21 @@ class OpenAICompatibleClient:
         )
 
         try:
-            return _parse_provider_json(response, provider, response.status_code)
+            data = _parse_provider_json(response, provider, response.status_code)
         except ProviderResponseLimit:
             relay_metrics.record_provider(
                 provider.name, "chat_messages", 0, latency_ms
             )
             raise
+
+        if not data.get("choices"):
+            relay_metrics.record_provider(
+                provider.name, "chat_messages", 0, latency_ms
+            )
+            raise ProviderHTTPError(
+                response.status_code, "empty provider response"
+            )
+        return data
 
     async def achat_stream_messages(
         self,
