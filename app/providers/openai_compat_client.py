@@ -145,6 +145,27 @@ async def _stream_error_text_async(response: httpx.Response) -> str:
     return response.text
 
 
+def _stream_error_message(chunk: dict) -> str:
+    """
+    Extract the message from an OpenAI-compat in-stream error chunk.
+
+    Mid-stream failures are delivered as ``data: {"error": {...}}``
+    (OpenAI convention). The message is the ``error.message`` field when
+    present; otherwise the whole error payload, so the truncated content
+    is never silently treated as a successful completion (matching the
+    native Gemini/Anthropic clients, which raise on in-stream errors).
+    """
+    err = chunk.get("error")
+    if isinstance(err, dict):
+        message = err.get("message")
+        if message:
+            return message
+        return str(err)
+    if isinstance(err, str):
+        return err
+    return str(err)
+
+
 def _retry_after_seconds(response: httpx.Response) -> float | None:
     """
     Parse the Retry-After header into seconds to wait, or None when
@@ -902,6 +923,15 @@ class OpenAICompatibleClient:
                             break
                         try:
                             chunk = json.loads(data_str)
+                            if "error" in chunk:
+                                raise ProviderHTTPError(
+                                    0,
+                                    _safe_provider_body(
+                                        provider,
+                                        0,
+                                        _stream_error_message(chunk),
+                                    ),
+                                )
                             delta = chunk["choices"][0]["delta"]
                             content = delta.get("content")
                             if content:
@@ -1026,6 +1056,15 @@ class OpenAICompatibleClient:
                         continue
                     if not isinstance(chunk, dict):
                         continue
+                    if "error" in chunk:
+                        raise ProviderHTTPError(
+                            0,
+                            _safe_provider_body(
+                                provider,
+                                0,
+                                _stream_error_message(chunk),
+                            ),
+                        )
                     if not chunk.get("choices") and "usage" not in chunk:
                         continue
                     yield chunk
@@ -1307,6 +1346,15 @@ class OpenAICompatibleClient:
                                 break
                             try:
                                 chunk = json.loads(data_str)
+                                if "error" in chunk:
+                                    raise ProviderHTTPError(
+                                        0,
+                                        _safe_provider_body(
+                                            provider,
+                                            0,
+                                            _stream_error_message(chunk),
+                                        ),
+                                    )
                                 delta = chunk["choices"][0]["delta"]
                                 content = delta.get("content")
                                 if content:
@@ -1529,6 +1577,15 @@ class OpenAICompatibleClient:
                             continue
                         if not isinstance(chunk, dict):
                             continue
+                        if "error" in chunk:
+                            raise ProviderHTTPError(
+                                0,
+                                _safe_provider_body(
+                                    provider,
+                                    0,
+                                    _stream_error_message(chunk),
+                                ),
+                            )
                         if not chunk.get("choices") and "usage" not in chunk:
                             continue
                         yield chunk

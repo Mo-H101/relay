@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -732,3 +733,113 @@ class TestSSEParserNonDictChunks:
         )
         assert len(chunks) == 1
         assert chunks[0]["choices"][0]["delta"]["content"] == "ok"
+
+
+class TestInStreamErrors:
+    """In-stream ``data: {"error": ...}`` chunks must surface, not be
+    silently swallowed (matching native Gemini/Anthropic/Ollama clients)."""
+
+    def test_chat_stream_raises_on_in_stream_error(self, monkeypatch):
+        error = json.dumps({"error": {"message": "provider exploded", "type": "server_error"}})
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "partial"}}]}),
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        client = OpenAICompatibleClient()
+        gen = client.chat_stream(make_provider(), "m", "hi")
+        assert next(gen) == "partial"
+        with pytest.raises(ProviderHTTPError) as ei:
+            next(gen)
+        assert "provider exploded" in ei.value.message
+
+    def test_chat_stream_messages_raises_on_in_stream_error(self, monkeypatch):
+        error = json.dumps({"error": {"message": "quota exceeded", "type": "server_error"}})
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "ok"}}]}),
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        gen = OpenAICompatibleClient().chat_stream_messages(
+            make_provider(),
+            payload={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert next(gen)["choices"][0]["delta"]["content"] == "ok"
+        with pytest.raises(ProviderHTTPError) as ei:
+            next(gen)
+        assert "quota exceeded" in ei.value.message
+
+    def test_achat_stream_messages_raises_on_in_stream_error(self, monkeypatch):
+        error = json.dumps({"error": {"message": "rate limited", "type": "server_error"}})
+        lines = [
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+
+        async def aiter_lines(response):
+            for line in lines:
+                yield line
+
+        class _FakeResp:
+            status_code = 200
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResp()
+
+            async def __aexit__(self, *a):
+                return False
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, method, url, **kwargs):
+                return _FakeStream()
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.bounded_aiter_lines",
+            aiter_lines,
+        )
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.AsyncClient",
+            _FakeClient,
+        )
+
+        async def _collect():
+            return [
+                chunk
+                async for chunk in OpenAICompatibleClient().achat_stream_messages(
+                    make_provider(),
+                    payload={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+                )
+            ]
+
+        with pytest.raises(ProviderHTTPError) as ei:
+            asyncio.run(_collect())
+        assert "rate limited" in ei.value.message
+
+    def test_chat_stream_normal_content_unaffected(self, monkeypatch):
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "hello"}}]}),
+            "data: " + json.dumps({"choices": [{"delta": {"content": " "}}, {"usage": {"prompt_tokens": 1, "completion_tokens": 1}}]}),
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        chunks = list(
+            OpenAICompatibleClient().chat_stream(
+                make_provider(), "m", "hi"
+            )
+        )
+        assert chunks == ["hello", " "]
