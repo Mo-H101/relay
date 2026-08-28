@@ -233,3 +233,96 @@ async def test_achat_stream_messages_truncated_no_done_is_failure(monkeypatch):
         )
         == 0
     )
+
+
+# ---------------------------------------------------------------------------
+# E2: in-stream {"error": {...}} preserves provider status / retry_after
+# ---------------------------------------------------------------------------
+
+
+def _error_chunk(status=429, retry_after=7.5, message="quota exceeded"):
+    return "data: " + json.dumps({
+        "error": {
+            "message": message,
+            "type": "insufficient_quota",
+            "status": status,
+            "retry_after": retry_after,
+        }
+    })
+
+
+def test_chat_stream_preserves_error_status_and_retry_after(monkeypatch):
+    _patch_sync(monkeypatch, [_error_chunk(status=429, retry_after=7.5)])
+
+    with pytest.raises(ProviderHTTPError) as ei:
+        list(
+            OpenAICompatibleClient().chat_stream(
+                _make_provider(), model="m1", message="hi"
+            )
+        )
+    assert ei.value.status_code == 429
+    assert ei.value.retry_after == 7.5
+    assert "quota exceeded" in ei.value.message
+
+
+def test_chat_stream_messages_preserves_error_status_and_retry_after(monkeypatch):
+    _patch_sync(monkeypatch, [_error_chunk(status=503, retry_after=12)])
+
+    with pytest.raises(ProviderHTTPError) as ei:
+        list(
+            OpenAICompatibleClient().chat_stream_messages(
+                _make_provider(),
+                payload={"model": "m1", "messages": [{"role": "user", "content": "hi"}]},
+            )
+        )
+    assert ei.value.status_code == 503
+    assert ei.value.retry_after == 12.0
+
+
+@pytest.mark.asyncio
+async def test_achat_stream_preserves_error_status_and_retry_after(monkeypatch):
+    _patch_async(monkeypatch, [_error_chunk(status=429, retry_after=3.0)])
+
+    with pytest.raises(ProviderHTTPError) as ei:
+        async for _ in OpenAICompatibleClient().achat_stream(
+            _make_provider(), "m1", "hi"
+        ):
+            pass
+    assert ei.value.status_code == 429
+    assert ei.value.retry_after == 3.0
+
+
+@pytest.mark.asyncio
+async def test_achat_stream_messages_preserves_error_status_and_retry_after(monkeypatch):
+    _patch_async(
+        monkeypatch,
+        [_error_chunk(status=500, retry_after=None)],
+    )
+
+    with pytest.raises(ProviderHTTPError) as ei:
+        async for _ in OpenAICompatibleClient().achat_stream_messages(
+            _make_provider(),
+            payload={"model": "m1", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            pass
+    assert ei.value.status_code == 500
+    assert ei.value.retry_after is None
+
+
+def test_error_without_status_falls_back_to_zero(monkeypatch):
+    _patch_sync(
+        monkeypatch,
+        [
+            "data: " + json.dumps({
+                "error": {"message": "boom", "type": "api_error"},
+            })
+        ],
+    )
+
+    with pytest.raises(ProviderHTTPError) as ei:
+        list(
+            OpenAICompatibleClient().chat_stream(
+                _make_provider(), model="m1", message="hi"
+            )
+        )
+    assert ei.value.status_code == 0

@@ -206,6 +206,49 @@ def _stream_error_message(chunk: dict) -> str:
     return str(err)
 
 
+def _stream_error_status(chunk: dict) -> int:
+    """Best-effort HTTP status from an in-stream error chunk.
+
+    OpenAI-compat in-stream failures are delivered as
+    ``data: {"error": {...}}`` (OpenAI convention). The HTTP status is not
+    carried in the SSE framing, but many providers echo it on the error
+    object (``error.status``) or at the chunk root (``status``). Preserving
+    it lets a mid-stream 429/5xx be classified correctly instead of always
+    being reported as status 0 (UNKNOWN). Returns 0 when absent.
+    """
+    err = chunk.get("error")
+    if isinstance(err, dict):
+        status = err.get("status")
+        if isinstance(status, int) and not isinstance(status, bool) and status >= 0:
+            return status
+    status = chunk.get("status")
+    if isinstance(status, int) and not isinstance(status, bool) and status >= 0:
+        return status
+    return 0
+
+
+def _stream_error_retry_after(chunk: dict) -> float | None:
+    """Best-effort Retry-After seconds from an in-stream error chunk.
+
+    May appear as ``error.retry_after`` or ``error.headers.retry_after``
+    (numeric seconds; bool is rejected). Returns None when absent so the
+    caller falls back to no retry hint.
+    """
+    err = chunk.get("error")
+    if isinstance(err, dict):
+        for key in ("retry_after", "retry-after"):
+            value = err.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+        headers = err.get("headers")
+        if isinstance(headers, dict):
+            for key in ("retry_after", "retry-after"):
+                value = headers.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return float(value)
+    return None
+
+
 def _retry_after_seconds(response: httpx.Response) -> float | None:
     """
     Parse the Retry-After header into seconds to wait, or None when
@@ -979,13 +1022,15 @@ class OpenAICompatibleClient:
                                     0,
                                     (time.perf_counter() - start) * 1000,
                                 )
+                                _stream_error_status_code = _stream_error_status(chunk)
                                 raise ProviderHTTPError(
-                                    0,
+                                    _stream_error_status_code,
                                     _safe_provider_body(
                                         provider,
-                                        0,
+                                        _stream_error_status_code,
                                         _stream_error_message(chunk),
                                     ),
+                                    retry_after=_stream_error_retry_after(chunk),
                                 )
                             delta = chunk["choices"][0]["delta"]
                             content = delta.get("content")
@@ -1133,13 +1178,15 @@ class OpenAICompatibleClient:
                             0,
                             (time.perf_counter() - start) * 1000,
                         )
+                        _stream_error_status_code = _stream_error_status(chunk)
                         raise ProviderHTTPError(
-                            0,
+                            _stream_error_status_code,
                             _safe_provider_body(
                                 provider,
-                                0,
+                                _stream_error_status_code,
                                 _stream_error_message(chunk),
                             ),
+                            retry_after=_stream_error_retry_after(chunk),
                         )
                     if not chunk.get("choices") and "usage" not in chunk:
                         continue
@@ -1444,13 +1491,15 @@ class OpenAICompatibleClient:
                                         0,
                                         (time.perf_counter() - start) * 1000,
                                     )
+                                    _stream_error_status_code = _stream_error_status(chunk)
                                     raise ProviderHTTPError(
-                                        0,
+                                        _stream_error_status_code,
                                         _safe_provider_body(
                                             provider,
-                                            0,
+                                            _stream_error_status_code,
                                             _stream_error_message(chunk),
                                         ),
+                                        retry_after=_stream_error_retry_after(chunk),
                                     )
                                 delta = chunk["choices"][0]["delta"]
                                 content = delta.get("content")
@@ -1705,13 +1754,15 @@ class OpenAICompatibleClient:
                                 0,
                                 (time.perf_counter() - start) * 1000,
                             )
+                            _stream_error_status_code = _stream_error_status(chunk)
                             raise ProviderHTTPError(
-                                0,
+                                _stream_error_status_code,
                                 _safe_provider_body(
                                     provider,
-                                    0,
+                                    _stream_error_status_code,
                                     _stream_error_message(chunk),
                                 ),
+                                retry_after=_stream_error_retry_after(chunk),
                             )
                         if not chunk.get("choices") and "usage" not in chunk:
                             continue
