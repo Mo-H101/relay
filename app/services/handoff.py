@@ -1116,7 +1116,14 @@ class HandoffCoordinator:
                     record["latency_ms"] = latency_ms
                 self._touch(resident)
 
-        self._enqueue(
+        # F2: surface a rejected durable finalize instead of silently
+        # dropping it. A full write-behind queue means the turn.update will
+        # never reach disk; pretending it committed would mis-signal recovery
+        # (on_turn_committed clears the pending resume/replay slot) and hide
+        # the real outcome/accounting. Mirror commit()/finish(): mark the
+        # state durability-degraded, release the pending token via abort so a
+        # retry/replay is not falsely cleared, and return {} (never raises).
+        if not self._enqueue(
             "turn.update",
             conversation_id=conversation_id,
             key_id=key_id,
@@ -1125,7 +1132,13 @@ class HandoffCoordinator:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             latency_ms=latency_ms,
-        )
+        ):
+            self._mark_durability_degraded(turn, resident)
+            if self._recovery is not None:
+                self._recovery.on_turn_aborted(
+                    conversation_id, key_id, turn.pending_resume_hash
+                )
+            return {}
 
         finalized = {
             "conversation_id": conversation_id,

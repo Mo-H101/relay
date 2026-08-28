@@ -1699,3 +1699,86 @@ def test_flusher_enqueue_drain_atomicity_preserves_seq_watermark(
     assert flusher.pending_max_seq(cid, "k") == 2
     assert flusher._pending_per_conversation[cid] == 1
     store.close()
+
+
+def test_update_rejected_enqueue_degrades_durability_not_committed(
+    tmp_path, monkeypatch
+):
+    """F2 regression: a rejected ``turn.update`` enqueue must not silently
+    pretend the turn was durably committed.
+
+    Prior to the fix, ``HandoffCoordinator.update()`` ignored the boolean
+    returned by ``_enqueue("turn.update", ...)``. On a full write-behind
+    queue the durable finalize is dropped forever, yet the code still
+    signalled ``on_turn_committed`` (which clears the pending resume/replay
+    slot as if the turn were safely finalized), set ``turn._committed``,
+    and returned the finalized dict (a success). The accepted turn's real
+    outcome/accounting was lost without any durability-degraded signal.
+
+    After the fix the rejection must be surfaced exactly like commit()/
+    finish(): mark the state durability-degraded, release the pending
+    token via ``on_turn_aborted`` (so a retry/replay is not falsely
+    cleared), leave the turn uncommitted, and return {}.
+    """
+    import app.services.handoff as handoff_module
+
+    store = _store(tmp_path)
+    recovery = _recovery(store)
+    flusher = ContinuityFlusher(
+        store, interval_seconds=60, retention_days=0
+    )
+    coord = HandoffCoordinator(
+        flusher=flusher, recovery=recovery, max_in_memory_states=2
+    )
+    cid = "f2" + "c" * 29
+    key_id = "k"
+
+    turn = coord.start(
+        key_id=key_id, client_bucket="cli", project_key="pk",
+        conversation_id=cid,
+    )
+    rec = coord.commit(
+        turn, provider="p", model="m1", outcome="ok", tokens_in=1, tokens_out=1
+    )
+    assert rec["seq"] == 1
+
+    signalled = {"committed": [], "aborted": []}
+
+    class _ProbeRecovery(recovery.__class__):
+        def on_turn_committed(self, *a, **kw):
+            signalled["committed"].append(a)
+            return super().on_turn_committed(*a, **kw)
+
+        def on_turn_aborted(self, *a, **kw):
+            signalled["aborted"].append(a)
+            return super().on_turn_aborted(*a, **kw)
+
+    coord._recovery = _ProbeRecovery(
+        store, max_resume_replays=recovery._max_resume_replays
+    )
+
+    real_enqueue = flusher.enqueue
+
+    def _reject_updates(operation, **kwargs):
+        if operation == "turn.update":
+            return False
+        return real_enqueue(operation, **kwargs)
+
+    monkeypatch.setattr(flusher, "enqueue", _reject_updates)
+
+    result = coord.update(
+        turn, outcome="ok", tokens_in=1, tokens_out=1, latency_ms=5
+    )
+    assert result == {}, "rejected update must signal failure, not success"
+
+    state = coord._states.get(("k", cid))
+    assert state is not None
+    assert state.durability_degraded is True
+
+    assert not signalled["committed"], (
+        "a dropped durable finalize must never signal on_turn_committed"
+    )
+    assert signalled["aborted"], (
+        "a dropped durable finalize must release recovery via on_turn_aborted"
+    )
+    store.close()
