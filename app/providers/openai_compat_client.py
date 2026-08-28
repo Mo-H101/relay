@@ -145,6 +145,32 @@ async def _stream_error_text_async(response: httpx.Response) -> str:
     return response.text
 
 
+def _read_error_body(response: "httpx.Response") -> str:
+    """
+    Read a streamed non-2xx error body for surfacing.
+
+    Degrades gracefully when the body exceeds the configured byte budget so
+    the real HTTP status (and any Retry-After) is never masked: an oversized
+    429/5xx body would otherwise make ``_stream_error_text`` raise
+    ``ProviderResponseLimit`` and the whole HTTP error path would report
+    status 0 instead of the provider's actual status code.
+    """
+    try:
+        return _stream_error_text(response)
+    except ProviderResponseLimit:
+        return f"status {response.status_code}"
+
+
+async def _read_error_body_async(response: "httpx.Response") -> str:
+    """
+    Async counterpart of _read_error_body.
+    """
+    try:
+        return await _stream_error_text_async(response)
+    except ProviderResponseLimit:
+        return f"status {response.status_code}"
+
+
 def _stream_error_message(chunk: dict) -> str:
     """
     Extract the message from an OpenAI-compat in-stream error chunk.
@@ -924,7 +950,7 @@ class OpenAICompatibleClient:
                         _safe_provider_body(
                             provider,
                             response.status_code,
-                            _stream_error_text(response),
+                            _read_error_body(response),
                         ),
                         retry_after=_retry_after_seconds(response),
                     )
@@ -1059,7 +1085,7 @@ class OpenAICompatibleClient:
                         _safe_provider_body(
                             provider,
                             response.status_code,
-                            _stream_error_text(response),
+                            _read_error_body(response),
                         ),
                         retry_after=_retry_after_seconds(response),
                     )
@@ -1360,7 +1386,7 @@ class OpenAICompatibleClient:
                             _safe_provider_body(
                                 provider,
                                 response.status_code,
-                                await _stream_error_text_async(response),
+                                await _read_error_body_async(response),
                             ),
                             retry_after=_retry_after_seconds(response),
                         )
@@ -1601,7 +1627,7 @@ class OpenAICompatibleClient:
                             _safe_provider_body(
                                 provider,
                                 response.status_code,
-                                await _stream_error_text_async(response),
+                                await _read_error_body_async(response),
                             ),
                             retry_after=_retry_after_seconds(response),
                         )

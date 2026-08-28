@@ -9,7 +9,7 @@ import pytest
 
 from app.core.config import settings
 from app.providers.base import Provider
-from app.providers.exceptions import ProviderResponseLimit
+from app.providers.exceptions import ProviderHTTPError, ProviderResponseLimit
 from app.providers.openai_compat_client import (
     OpenAICompatibleClient,
     bounded_aiter_lines,
@@ -169,3 +169,54 @@ def test_sync_wire_path_enforces_byte_budget(
 
     with pytest.raises(ProviderResponseLimit):
         OpenAICompatibleClient().list_models(provider)
+
+
+def test_chat_stream_oversized_error_body_preserves_real_status(
+    monkeypatch,
+):
+    """
+    Regression (provider #4): a non-2xx stream whose error BODY exceeds the
+    byte budget must still surface the provider's real HTTP status and
+    Retry-After, not degrade to status 0 / unclassified.
+
+    Before the fix, ``_stream_error_text`` re-raised ``ProviderResponseLimit``
+    while reading an oversized error body, which the method-level
+    ``except ProviderResponseLimit`` converted to a status-0 error -- masking
+    the 429 and losing the retry-after classification.
+    """
+
+    class _FakeResp:
+        status_code = 429
+        headers = {"Retry-After": "1"}
+
+        @property
+        def text(self):
+            return ""
+
+        def read(self):
+            raise ProviderResponseLimit()
+
+    class _FakeCtx:
+        def __enter__(self):
+            return _FakeResp()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        "app.providers.openai_compat_client.bounded_stream",
+        lambda *a, **kw: _FakeCtx(),
+    )
+
+    provider = Provider(
+        name="fake-openai",
+        base_url="http://fake.invalid/v1",
+        requires_api_key=False,
+    )
+
+    gen = OpenAICompatibleClient().chat_stream(provider, "m", "hi")
+    with pytest.raises(ProviderHTTPError) as ei:
+        list(gen)
+
+    assert ei.value.status_code == 429
+    assert ei.value.retry_after is not None
