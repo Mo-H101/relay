@@ -166,6 +166,37 @@ def test_openai_endpoint_is_protected(client, monkeypatch):
     assert response.status_code == 401
 
 
+def test_v1_auth_failure_uses_openai_error_shape(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "secret-token")
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "meta/llama-3-70b",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert response.status_code == 401
+    body = response.json()
+    assert "detail" not in body
+    assert body["error"]["type"] == "authentication_error"
+    assert body["error"]["code"] == "invalid_api_key"
+    assert isinstance(body["error"]["message"], str)
+    assert body["error"]["param"] is None
+
+
+def test_non_v1_auth_failure_keeps_detail_shape(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "relay_api_key", "secret-token")
+
+    response = client.get("/providers")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Unauthorized"
+
+
 def test_health_stays_minimal_when_auth_enabled(client, monkeypatch):
     from app.core.config import settings
 

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse
@@ -170,6 +170,47 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
                 "code": "validation_error",
             }
         },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Reformat authentication failures raised under /v1 to the OpenAI
+    {"error": {...}} shape so OpenAI SDK clients parse them the same way
+    they parse every other /v1 error.
+
+    The only HTTPException raised in the /v1 path is the auth dependency
+    (require_api_key -> 401 Unauthorized / 403 Forbidden); business errors
+    in the OpenAI router already use the OpenAI shape via
+    _openai_error_response, so reformatting here never double-wraps them.
+    Non-/v1 routes keep FastAPI's default {"detail": ...} response.
+    """
+    if not request.url.path.startswith("/v1"):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "message": exc.detail,
+                "type": (
+                    "authentication_error"
+                    if exc.status_code == 401
+                    else "permission_error"
+                ),
+                "param": None,
+                "code": (
+                    "invalid_api_key"
+                    if exc.status_code == 401
+                    else "insufficient_scopes"
+                ),
+            }
+        },
+        headers=exc.headers,
     )
 
 
