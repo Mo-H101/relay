@@ -159,7 +159,15 @@ def _stream_error_message(chunk: dict) -> str:
     if isinstance(err, dict):
         message = err.get("message")
         if message:
-            return message
+            if isinstance(message, str):
+                return message
+            # Coerce non-string messages (JSON objects/arrays/numbers) to a
+            # string. Without this, a here-string message makes the shared
+            # redaction layer (body.replace(api_key, ...)) raise AttributeError,
+            # which the single-arg stream loops catch as a "malformed chunk"
+            # and SILENTLY DROP the in-stream provider error (turning a failed
+            # completion into a reported success).
+            return json.dumps(message, ensure_ascii=False)
         return str(err)
     if isinstance(err, str):
         return err
@@ -933,6 +941,12 @@ class OpenAICompatibleClient:
                         try:
                             chunk = json.loads(data_str)
                             if "error" in chunk:
+                                relay_metrics.record_provider(
+                                    provider.name,
+                                    "chat_stream",
+                                    0,
+                                    (time.perf_counter() - start) * 1000,
+                                )
                                 raise ProviderHTTPError(
                                     0,
                                     _safe_provider_body(
@@ -1066,6 +1080,12 @@ class OpenAICompatibleClient:
                     if not isinstance(chunk, dict):
                         continue
                     if "error" in chunk:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream_messages",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
                         raise ProviderHTTPError(
                             0,
                             _safe_provider_body(
@@ -1331,7 +1351,7 @@ class OpenAICompatibleClient:
                     if response.status_code >= 400:
                         relay_metrics.record_provider(
                             provider.name,
-                            "chat_stream",
+                            "achat_stream",
                             response.status_code,
                             (time.perf_counter() - start) * 1000,
                         )
@@ -1356,6 +1376,12 @@ class OpenAICompatibleClient:
                             try:
                                 chunk = json.loads(data_str)
                                 if "error" in chunk:
+                                    relay_metrics.record_provider(
+                                        provider.name,
+                                        "achat_stream",
+                                        0,
+                                        (time.perf_counter() - start) * 1000,
+                                    )
                                     raise ProviderHTTPError(
                                         0,
                                         _safe_provider_body(
@@ -1373,7 +1399,7 @@ class OpenAICompatibleClient:
 
                     relay_metrics.record_provider(
                         provider.name,
-                        "chat_stream",
+                        "achat_stream",
                         200,
                         (time.perf_counter() - start) * 1000,
                     )
@@ -1381,7 +1407,7 @@ class OpenAICompatibleClient:
         except ProviderResponseLimit:
             relay_metrics.record_provider(
                 provider.name,
-                "chat_stream",
+                "achat_stream",
                 0,
                 (time.perf_counter() - start) * 1000,
             )
@@ -1390,7 +1416,7 @@ class OpenAICompatibleClient:
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
-                "chat_stream",
+                "achat_stream",
                 (time.perf_counter() - start) * 1000,
             )
             raise ProviderTimeout(
@@ -1400,7 +1426,7 @@ class OpenAICompatibleClient:
         except httpx.TimeoutException as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
-                "chat_stream",
+                "achat_stream",
                 (time.perf_counter() - start) * 1000,
             )
             raise ProviderTimeout(
@@ -1412,7 +1438,7 @@ class OpenAICompatibleClient:
                 return
             relay_metrics.record_provider(
                 provider.name,
-                "chat_stream",
+                "achat_stream",
                 0,
                 (time.perf_counter() - start) * 1000,
             )
@@ -1566,7 +1592,7 @@ class OpenAICompatibleClient:
                     if response.status_code >= 400:
                         relay_metrics.record_provider(
                             provider.name,
-                            "chat_stream_messages",
+                            "achat_stream_messages",
                             response.status_code,
                             (time.perf_counter() - start) * 1000,
                         )
@@ -1596,6 +1622,12 @@ class OpenAICompatibleClient:
                         if not isinstance(chunk, dict):
                             continue
                         if "error" in chunk:
+                            relay_metrics.record_provider(
+                                provider.name,
+                                "achat_stream_messages",
+                                0,
+                                (time.perf_counter() - start) * 1000,
+                            )
                             raise ProviderHTTPError(
                                 0,
                                 _safe_provider_body(
@@ -1610,7 +1642,7 @@ class OpenAICompatibleClient:
 
                     relay_metrics.record_provider(
                         provider.name,
-                        "chat_stream_messages",
+                        "achat_stream_messages",
                         200,
                         (time.perf_counter() - start) * 1000,
                     )
@@ -1618,7 +1650,7 @@ class OpenAICompatibleClient:
         except ProviderResponseLimit:
             relay_metrics.record_provider(
                 provider.name,
-                "chat_stream_messages",
+                "achat_stream_messages",
                 0,
                 (time.perf_counter() - start) * 1000,
             )
@@ -1627,7 +1659,7 @@ class OpenAICompatibleClient:
         except httpx.ReadTimeout as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
-                "chat_stream_messages",
+                "achat_stream_messages",
                 (time.perf_counter() - start) * 1000,
             )
             raise ProviderTimeout(
@@ -1637,7 +1669,7 @@ class OpenAICompatibleClient:
         except httpx.TimeoutException as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
-                "chat_stream_messages",
+                "achat_stream_messages",
                 (time.perf_counter() - start) * 1000,
             )
             raise ProviderTimeout(
@@ -1649,7 +1681,7 @@ class OpenAICompatibleClient:
                 return
             relay_metrics.record_provider(
                 provider.name,
-                "chat_stream_messages",
+                "achat_stream_messages",
                 0,
                 (time.perf_counter() - start) * 1000,
             )

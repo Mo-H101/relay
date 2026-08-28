@@ -16,6 +16,7 @@ from app.providers.openai_compat_client import (
     OpenAICompatibleClient,
     proxy_request_kwargs,
 )
+from app.services.metrics import relay_metrics
 
 
 class FakeResponse:
@@ -792,6 +793,30 @@ class TestInStreamErrors:
             next(gen)
         assert "provider exploded" in ei.value.message
 
+    def test_chat_stream_surfaces_non_string_error_message(self, monkeypatch):
+        """A provider that emits a NON-string error.message (a JSON object,
+        as seen from some vLLM/LiteLLM-style endpoints) must still surface as
+        a ProviderHTTPError. Regression: the untyped non-str message made the
+        shared redaction layer raise AttributeError, which the single-arg
+        stream loop caught as a 'malformed chunk' and SILENTLY DROPPED the
+        in-stream provider error (reporting a failed completion as success)."""
+        error = json.dumps(
+            {"error": {"message": {"detail": ["bad field"]}, "type": "server_error"}}
+        )
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "partial"}}]}),
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+
+        gen = OpenAICompatibleClient().chat_stream(make_provider(), "m", "hi")
+        assert next(gen) == "partial"
+        with pytest.raises(ProviderHTTPError) as ei:
+            next(gen)
+        assert '"detail"' in ei.value.message
+        assert "bad field" in ei.value.message
+
     def test_chat_stream_messages_raises_on_in_stream_error(self, monkeypatch):
         error = json.dumps({"error": {"message": "quota exceeded", "type": "server_error"}})
         lines = [
@@ -924,6 +949,186 @@ class TestInStreamErrors:
             asyncio.run(_run())
         assert collected == ["partial"]
         assert "async single exploded" in ei.value.message
+
+    def test_in_stream_error_records_provider_metric(self, monkeypatch):
+        """An in-stream error chunk must be recorded in provider telemetry
+        (as a failure/status-0 'network' band), not invisible to metrics.
+        Regression for: a provider failing every stream via mid-stream
+        errors previously looked healthy because no record_provider was
+        emitted on that path."""
+        error = json.dumps({"error": {"message": "boom", "type": "server_error"}})
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "p"}}]}),
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+        _patch_stream(monkeypatch, _FakeStreamResponse(lines))
+        relay_metrics.reset()
+
+        gen = OpenAICompatibleClient().chat_stream(make_provider(), "m", "hi")
+        assert next(gen) == "p"
+        with pytest.raises(ProviderHTTPError):
+            next(gen)
+
+        assert (
+            relay_metrics.provider_requests.value(
+                provider="Test", operation="chat_stream"
+            )
+            == 1
+        )
+        assert (
+            relay_metrics.provider_outcomes.value(
+                provider="Test", operation="chat_stream", status="network"
+            )
+            == 1
+        )
+
+    def test_achat_stream_in_stream_error_records_async_operation(self, monkeypatch):
+        """acha_stream in-stream errors must be recorded under the ASYNC
+        operation name, not misattributed to the sync 'chat_stream'
+        (telemetry-mislabelling regression)."""
+        error = json.dumps({"error": {"message": "async boom", "type": "server_error"}})
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "p"}}]}),
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+
+        class _FakeResp:
+            status_code = 200
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResp()
+
+            async def __aexit__(self, *a):
+                return False
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, method, url, **kwargs):
+                return _FakeStream()
+
+        async def aiter_lines(response):
+            for line in lines:
+                yield line
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.bounded_aiter_lines",
+            aiter_lines,
+        )
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.AsyncClient",
+            _FakeClient,
+        )
+        relay_metrics.reset()
+
+        async def _run():
+            agen = OpenAICompatibleClient().achat_stream(
+                make_provider(), "m", "hi"
+            )
+            collected = []
+            with pytest.raises(ProviderHTTPError):
+                async for c in agen:
+                    collected.append(c)
+            return collected
+
+        collected = asyncio.run(_run())
+        assert collected == ["p"]
+
+        assert (
+            relay_metrics.provider_requests.value(
+                provider="Test", operation="achat_stream"
+            )
+            == 1
+        )
+        assert (
+            relay_metrics.provider_requests.value(
+                provider="Test", operation="chat_stream"
+            )
+            == 0
+        )
+
+    def test_achat_stream_messages_in_stream_error_records_async_operation(
+        self, monkeypatch
+    ):
+        """achat_stream_messages in-stream errors must be recorded under the
+        ASYNC operation name, not the sync 'chat_stream_messages'
+        (telemetry-mislabelling regression)."""
+        error = json.dumps({"error": {"message": "async boom", "type": "server_error"}})
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "p"}}]}),
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+
+        class _FakeResp:
+            status_code = 200
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResp()
+
+            async def __aexit__(self, *a):
+                return False
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, method, url, **kwargs):
+                return _FakeStream()
+
+        async def aiter_lines(response):
+            for line in lines:
+                yield line
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.bounded_aiter_lines",
+            aiter_lines,
+        )
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.AsyncClient",
+            _FakeClient,
+        )
+        relay_metrics.reset()
+
+        async def _run():
+            with pytest.raises(ProviderHTTPError):
+                async for _ in OpenAICompatibleClient().achat_stream_messages(
+                    make_provider(),
+                    payload={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+                ):
+                    pass
+
+        asyncio.run(_run())
+
+        assert (
+            relay_metrics.provider_requests.value(
+                provider="Test", operation="achat_stream_messages"
+            )
+            == 1
+        )
+        assert (
+            relay_metrics.provider_requests.value(
+                provider="Test", operation="chat_stream_messages"
+            )
+            == 0
+        )
 
     def test_chat_stream_normal_content_unaffected(self, monkeypatch):
         lines = [

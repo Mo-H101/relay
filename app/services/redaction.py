@@ -228,7 +228,12 @@ def redact_provider_error(
     if not body:
         return f"status {status_code}"
 
-    text = body
+    # Guard against non-string bodies (e.g. a provider error whose
+    # message field is a JSON object/array). Coerce so the redaction
+    # replace/iteration below cannot raise AttributeError; this would
+    # otherwise silently drop an in-stream provider error on the
+    # single-argument chat stream path.
+    text = body if isinstance(body, str) else str(body)
 
     if api_key:
         text = text.replace(api_key, "[REDACTED]")
