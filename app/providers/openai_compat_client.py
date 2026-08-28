@@ -736,6 +736,15 @@ class OpenAICompatibleClient:
                 ),
             )
 
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "list_models",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
+
         except httpx.TimeoutException as exc:
             relay_metrics.record_provider_timeout(
                 provider.name,
@@ -1856,6 +1865,15 @@ class OpenAICompatibleClient:
                     headers=headers,
                     timeout=30,
                 )
+
+        except ProviderResponseLimit:
+            relay_metrics.record_provider(
+                provider.name,
+                "list_models",
+                0,
+                (time.perf_counter() - start) * 1000,
+            )
+            raise
 
         except httpx.TimeoutException as exc:
             relay_metrics.record_provider_timeout(

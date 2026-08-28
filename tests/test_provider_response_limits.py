@@ -16,6 +16,14 @@ from app.providers.openai_compat_client import (
     bounded_iter_lines,
 )
 from app.providers.transport_limits import BoundedResponseHook
+from app.services.metrics import relay_metrics
+
+
+@pytest.fixture(autouse=True)
+def reset_metrics():
+    relay_metrics.reset()
+    yield
+    relay_metrics.reset()
 
 
 def test_sync_provider_body_is_bounded_before_client_returns():
@@ -220,3 +228,61 @@ def test_chat_stream_oversized_error_body_preserves_real_status(
 
     assert ei.value.status_code == 429
     assert ei.value.retry_after is not None
+
+
+def test_sync_model_discovery_records_response_limit_metric(
+    scripted_models_server, monkeypatch
+):
+    """
+    E3: a ProviderResponseLimit during sync model discovery must be
+    caught and recorded in the provider metrics (status 0) exactly like
+    the chat paths, then re-raised -- not dropped from telemetry.
+    """
+    monkeypatch.setattr(
+        settings, "provider_max_response_bytes", 64, raising=False
+    )
+    scripted_models_server.scripted_body = json.dumps(
+        {"data": [{"id": "x" * 256}]}
+    ).encode("utf-8")
+    provider = _wire_provider(
+        f"http://127.0.0.1:{scripted_models_server.server_address[1]}/v1"
+    )
+
+    with pytest.raises(ProviderResponseLimit):
+        OpenAICompatibleClient().list_models(provider)
+
+    assert (
+        relay_metrics.provider_requests.value(
+            provider="fake-openai", operation="list_models"
+        )
+        == 1.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_model_discovery_records_response_limit_metric(
+    scripted_models_server, monkeypatch
+):
+    """
+    E3 async counterpart: alist_models must also catch and record a
+    ProviderResponseLimit instead of propagating it without telemetry.
+    """
+    monkeypatch.setattr(
+        settings, "provider_max_response_bytes", 64, raising=False
+    )
+    scripted_models_server.scripted_body = json.dumps(
+        {"data": [{"id": "x" * 256}]}
+    ).encode("utf-8")
+    provider = _wire_provider(
+        f"http://127.0.0.1:{scripted_models_server.server_address[1]}/v1"
+    )
+
+    with pytest.raises(ProviderResponseLimit):
+        await OpenAICompatibleClient().alist_models(provider)
+
+    assert (
+        relay_metrics.provider_requests.value(
+            provider="fake-openai", operation="list_models"
+        )
+        == 1.0
+    )
