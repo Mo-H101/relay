@@ -373,6 +373,20 @@ to every provider endpoint, which is not appropriate for all deployments.
 | `HTTPS_PROXY` | *(env)* | yes | HTTPS proxy URL. |
 | `NO_PROXY` | *(env)* | yes | Comma-separated hosts/domains to bypass the proxy (`*` = all). |
 
-Proxy URLs and credentials are configuration only; they are never logged
-or included in metrics or errors. Per-provider override is also possible
-via the `Provider.proxy` field in code.
+`PROXY_ENABLED` defaults to **true**, so outbound provider requests inherit the
+process environment automatically: when set, `HTTPS_PROXY` routes `https://`
+provider URLs and `HTTP_PROXY` routes `http://` URLs (a settings value takes
+precedence over the process environment). `NO_PROXY` bypasses the proxy for
+matching hosts — an exact hostname, a `.`-prefixed domain suffix such as
+`.example.com`, or a bare `*` wildcard. Because proxy support is on by default,
+a host whose shell or container already exports proxy variables will silently
+tunnel all of Relay's provider traffic through that proxy; set
+`PROXY_ENABLED=false` to disable proxy support entirely. If neither proxy is
+configured, httpx's default `trust_env` behavior applies.
+
+Per-provider overrides are possible via the `Provider.proxy` field in code: a
+URL forces that proxy, `""` explicitly bypasses the proxy, and `None` defers to
+the global behavior above.
+
+Proxy URLs and credentials are configuration only; they are never logged or
+included in metrics or errors.
