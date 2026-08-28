@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Nothing yet; post-v1.0.0 notes land here.
 
-## [1.0.0] - 2026-08-07
+## [1.0.0rc1] - 2026-08-07
+
+> Release candidate. The package version is `1.0.0rc1`; the entry below
+> documents the full v1.0.0 feature set as it ships in this candidate.
+> Final `1.0.0` punctuation lands here after the release gate passes.
 
 ### Project continuity (new in v1.0.0)
 
