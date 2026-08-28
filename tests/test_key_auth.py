@@ -224,6 +224,60 @@ def test_scope_failure_does_not_leak_scopes(store_auth, client):
     assert response.json() == {"detail": "Forbidden"}
 
 
+# ---- S1: sensitive operational endpoints are admin-gated so a restricted
+# ---- (chat,v1) key cannot read provider registry / diagnostics / decision
+# ---- metadata. /health /health/deep /metrics stay open to any key (monitoring).
+
+
+def test_chat_scope_rejected_on_providers(store_auth, client):
+    _, raw_key = _create_key(store_auth, scopes=["chat", "v1"])
+    response = client.get(
+        "/providers", headers={"Authorization": f"Bearer {raw_key}"}
+    )
+    assert response.status_code == 403
+
+
+def test_chat_scope_rejected_on_diagnostics(store_auth, client):
+    _, raw_key = _create_key(store_auth, scopes=["chat", "v1"])
+    response = client.get(
+        "/diagnostics", headers={"Authorization": f"Bearer {raw_key}"}
+    )
+    assert response.status_code == 403
+
+
+def test_chat_scope_rejected_on_decision_endpoints(store_auth, client):
+    _, raw_key = _create_key(store_auth, scopes=["chat", "v1"])
+    for path in ["/decision/explain", "/decision/explain/actual", "/provider"]:
+        response = client.get(
+            path, headers={"Authorization": f"Bearer {raw_key}"}
+        )
+        assert response.status_code == 403, path
+
+
+def test_operational_still_open_to_full_and_admin(store_auth, client):
+    for scopes, expected in [(None, 200), (["admin"], 200), ([], 200)]:
+        _, raw_key = _create_key(store_auth, scopes=scopes)
+        for path in [
+            "/providers",
+            "/diagnostics",
+            "/decision/explain",
+            "/provider",
+        ]:
+            response = client.get(
+                path, headers={"Authorization": f"Bearer {raw_key}"}
+            )
+            assert response.status_code == expected, (scopes, path)
+
+
+def test_monitoring_endpoints_stay_open_to_chat_scope(store_auth, client):
+    _, raw_key = _create_key(store_auth, scopes=["chat", "v1"])
+    for path in ["/health/deep", "/metrics"]:
+        response = client.get(
+            path, headers={"Authorization": f"Bearer {raw_key}"}
+        )
+        assert response.status_code == 200, path
+
+
 # -------------------------------------------------- expiry / revocation
 
 

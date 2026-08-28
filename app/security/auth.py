@@ -41,10 +41,21 @@ _SCOPES_BY_PATH: dict = {
     "/admin": frozenset({"admin"}),
     "/chat": frozenset({"chat", "v1"}),
     "/feedback": frozenset({"chat", "v1"}),
+    # Sensitive operational/observability endpoints are admin-gated so a
+    # restricted (chat,v1) key cannot read provider registry, diagnostics
+    # (incl. routing decisions), or decision-explain metadata. /health,
+    # /health/deep, and /metrics stay open to any authenticated key for
+    # monitoring; /docs, /redoc, /openapi.json stay open (schema only).
+    "/providers": frozenset({"admin"}),
+    "/diagnostics": frozenset({"admin"}),
+    "/provider": frozenset({"admin"}),
+    "/decision/explain": frozenset({"admin"}),
+    "/decision/explain/actual": frozenset({"admin"}),
 }
 _SCOPES_BY_PREFIX: list = [
     ("/admin/", frozenset({"admin"})),
     ("/v1/", frozenset({"chat", "v1"})),
+    ("/decision/", frozenset({"admin"})),
 ]
 
 _HEADER_API_KEY = "x-relay-api-key"
