@@ -393,8 +393,8 @@ class TestChatSync:
     def test_chat_stream_yields_sse_deltas(self, monkeypatch):
         recorded = {}
         body = (
-            'data: {"candidates": [{"content": {"parts": [{"text": "Hel"}]}}]}\n\n'
-            'data: {"candidates": [{"content": {"parts": [{"text": "lo"}]}}]}\n\n'
+            'data: {"candidates": [{"content": {"parts": [{"text": "Hel"}]}, "finishReason": "STOP"}]}\n\n'
+            'data: {"candidates": [{"content": {"parts": [{"text": "lo"}]}, "finishReason": "STOP"}]}\n\n'
         )
         patch_stream(
             monkeypatch, FakeStreamResponse(body.splitlines()), recorded
@@ -714,6 +714,7 @@ class TestStreamMessagesSync:
             "data: not-json\n"
             'data: {"candidates": [{"content": {"parts": [{"text": "A"}]}}]}\n\n'
             'data: {"candidates": [{"content": {"parts": [{"text": "B"}]}}]}\n\n'
+            'data: {"candidates": [{"finishReason": "STOP"}]}\n\n'
         )
         patch_stream(
             monkeypatch, FakeStreamResponse(body.splitlines())
@@ -725,9 +726,10 @@ class TestStreamMessagesSync:
             )
         )
 
-        assert len(chunks) == 2
+        assert len(chunks) == 3
         assert chunks[0]["choices"][0]["delta"]["content"] == "A"
         assert chunks[1]["choices"][0]["delta"]["content"] == "B"
+        assert chunks[2]["choices"][0]["finish_reason"] == "stop"
 
     def test_chat_stream_messages_emits_usage_once(self, monkeypatch):
         body = (

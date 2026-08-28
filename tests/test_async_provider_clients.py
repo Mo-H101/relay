@@ -695,6 +695,7 @@ class TestAnthropicAsync:
             'data: {"type": "content_block_start"}\n\n'
             'data: {"type": "content_block_delta", "delta": {"type": "input_json_delta"}}\n\n'
             'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Y"}}\n\n'
+            'data: {"type": "message_stop"}\n\n'
         )
 
         def handler(request):
@@ -891,8 +892,8 @@ class TestGeminiAsync:
             return httpx.Response(
                 200,
                 text=(
-                    'data: {"candidates": [{"content": {"parts": [{"text": "Hel"}]}}]}\n\n'
-                    'data: {"candidates": [{"content": {"parts": [{"text": "lo"}]}}]}\n\n'
+                    'data: {"candidates": [{"content": {"parts": [{"text": "Hel"}]}, "finishReason": "STOP"}]}\n\n'
+                    'data: {"candidates": [{"content": {"parts": [{"text": "lo"}]}, "finishReason": "STOP"}]}\n\n'
                 ),
                 request=request,
             )
@@ -915,7 +916,7 @@ class TestGeminiAsync:
                 text=(
                     'data: {"candidates": [{"content": {"parts": []}}]}\n\n'
                     'data: {"candidates": [{"content": {"parts": [{"text": "A"}]}}]}\n\n'
-                    'data: {"candidates": [{"content": {"parts": [{"text": "B"}]}}]}\n\n'
+                    'data: {"candidates": [{"content": {"parts": [{"text": "B"}]}}, {"finishReason": "STOP"}]}\n\n'
                 ),
                 request=request,
             )
@@ -1100,6 +1101,7 @@ class TestOllamaAsync:
         body = (
             "not-json\n"
             '{"message": {"role": "assistant", "content": "A"}}\n'
+            '{"done": true}\n'
         )
 
         def handler(request):

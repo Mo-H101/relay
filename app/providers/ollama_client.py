@@ -34,6 +34,25 @@ from app.providers.openai_compat_client import (
 )
 from app.services.metrics import relay_metrics
 
+_TRUNCATED_STREAM_MSG_OLLAMA = (
+    "truncated provider stream: connection ended before done:true was "
+    "received; local Ollama response was incomplete"
+)
+
+
+def _line_is_ollama_done(line: str) -> bool:
+    """
+    Return True when an Ollama NDJSON line carries the native ``done: true``
+    terminal marker.
+    """
+    if not line:
+        return False
+    try:
+        chunk = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    return bool(chunk.get("done"))
+
 
 def _ollama_payload(payload: dict) -> dict:
     """
@@ -617,6 +636,7 @@ class OllamaClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
+                done_seen = False
                 for line in bounded_iter_lines(response):
                     if not line:
                         continue
@@ -631,10 +651,26 @@ class OllamaClient:
                                 provider, 0, str(chunk["error"])
                             ),
                         )
+                    if chunk.get("done"):
+                        done_seen = True
                     message_chunk = chunk.get("message") or {}
                     content = message_chunk.get("content")
                     if content:
                         yield content
+
+                if not done_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        safe_error_body(
+                            provider, 0, _TRUNCATED_STREAM_MSG_OLLAMA
+                        ),
+                    )
 
                 relay_metrics.record_provider(
                     provider.name,
@@ -717,9 +753,26 @@ class OllamaClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
+                done_seen = False
                 for line in bounded_iter_lines(response):
+                    if _line_is_ollama_done(line):
+                        done_seen = True
                     for out in _translate_ollama_line(line, provider):
                         yield out
+
+                if not done_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream_messages",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        safe_error_body(
+                            provider, 0, _TRUNCATED_STREAM_MSG_OLLAMA
+                        ),
+                    )
 
                 relay_metrics.record_provider(
                     provider.name,
@@ -911,6 +964,7 @@ class OllamaClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
+                    done_seen = False
                     async for line in bounded_aiter_lines(response):
                         if not line:
                             continue
@@ -925,10 +979,26 @@ class OllamaClient:
                                     provider, 0, str(chunk["error"])
                                 ),
                             )
+                        if chunk.get("done"):
+                            done_seen = True
                         message = chunk.get("message") or {}
                         content = message.get("content")
                         if content:
                             yield content
+
+                    if not done_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, _TRUNCATED_STREAM_MSG_OLLAMA
+                            ),
+                        )
 
                     relay_metrics.record_provider(
                         provider.name,
@@ -1093,9 +1163,26 @@ class OllamaClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
+                    done_seen = False
                     async for line in bounded_aiter_lines(response):
+                        if _line_is_ollama_done(line):
+                            done_seen = True
                         for out in _translate_ollama_line(line, provider):
                             yield out
+
+                    if not done_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream_messages",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, _TRUNCATED_STREAM_MSG_OLLAMA
+                            ),
+                        )
 
                     relay_metrics.record_provider(
                         provider.name,

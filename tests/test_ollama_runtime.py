@@ -605,6 +605,7 @@ class TestStreamMessagesSync:
         body = (
             "not-json\n"
             '{"message": {"role": "assistant", "content": "A"}}\n'
+            '{"done": true}\n'
         )
         patch_stream(monkeypatch, FakeStreamResponse(body.splitlines()))
 
@@ -614,8 +615,9 @@ class TestStreamMessagesSync:
             )
         )
 
-        assert len(chunks) == 1
+        assert len(chunks) == 2
         assert chunks[0]["choices"][0]["delta"]["content"] == "A"
+        assert chunks[1]["choices"][0]["finish_reason"] == "stop"
 
 
 class TestAsyncSurface:

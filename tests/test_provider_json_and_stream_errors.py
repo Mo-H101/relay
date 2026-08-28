@@ -465,8 +465,10 @@ class TestAnthropicChatStreamIntegration:
             "delta": {"stop_reason": "end_turn"},
             "usage": {"output_tokens": 5},
         })
+        terminal = json.dumps({"type": "message_stop"})
         resp = _FakeStreamResponse([
             f"data: {start}", f"data: {delta}", f"data: {stop}",
+            f"data: {terminal}",
         ])
         _patch_anthropic_stream(monkeypatch, resp)
 

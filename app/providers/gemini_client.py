@@ -41,6 +41,28 @@ from app.providers.openai_compat_client import (
 from app.services.metrics import relay_metrics
 from app.services.redaction import safe_provider_key_detail
 
+_TRUNCATED_STREAM_MSG_GEMINI = (
+    "truncated provider stream: connection ended before the required "
+    "terminal finishReason; Google Gemini response was incomplete"
+)
+
+
+def _line_has_gemini_finish_reason(line: str) -> bool:
+    """
+    Return True when a raw Gemini SSE data line carries a candidate with the
+    native terminal ``finishReason``.
+    """
+    if not line.startswith("data: "):
+        return False
+    try:
+        chunk = json.loads(line[6:])
+    except json.JSONDecodeError:
+        return False
+    for candidate in chunk.get("candidates") or []:
+        if candidate.get("finishReason"):
+            return True
+    return False
+
 
 def _image_part(url: str) -> dict | None:
     """
@@ -955,6 +977,7 @@ class GeminiClient:
                         retry_after=_retry_after_seconds(response),
                     )
 
+                finish_reason_seen = False
                 for line in bounded_iter_lines(response):
                     if not line.startswith("data: "):
                         continue
@@ -969,9 +992,27 @@ class GeminiClient:
                                 provider, 0, str(chunk["error"])
                             ),
                         )
+                    for candidate in chunk.get("candidates") or []:
+                        if candidate.get("finishReason"):
+                            finish_reason_seen = True
+                            break
                     text = _join_candidates(chunk)
                     if text:
                         yield text
+
+                if not finish_reason_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        safe_error_body(
+                            provider, 0, _TRUNCATED_STREAM_MSG_GEMINI
+                        ),
+                    )
 
                 relay_metrics.record_provider(
                     provider.name,
@@ -1056,9 +1097,26 @@ class GeminiClient:
                     )
 
                 state = _GeminiStreamState()
+                finish_reason_seen = False
                 for line in bounded_iter_lines(response):
+                    if _line_has_gemini_finish_reason(line):
+                        finish_reason_seen = True
                     for out in _translate_gemini_line(line, provider, state):
                         yield out
+
+                if not finish_reason_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream_messages",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        safe_error_body(
+                            provider, 0, _TRUNCATED_STREAM_MSG_GEMINI
+                        ),
+                    )
 
                 relay_metrics.record_provider(
                     provider.name,
@@ -1250,6 +1308,7 @@ class GeminiClient:
                             retry_after=_retry_after_seconds(response),
                         )
 
+                    finish_reason_seen = False
                     async for line in bounded_aiter_lines(response):
                         if not line.startswith("data: "):
                             continue
@@ -1264,9 +1323,27 @@ class GeminiClient:
                                     provider, 0, str(chunk["error"])
                                 ),
                             )
+                        for candidate in chunk.get("candidates") or []:
+                            if candidate.get("finishReason"):
+                                finish_reason_seen = True
+                                break
                         text = _join_candidates(chunk)
                         if text:
                             yield text
+
+                    if not finish_reason_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, _TRUNCATED_STREAM_MSG_GEMINI
+                            ),
+                        )
 
                     relay_metrics.record_provider(
                         provider.name,
@@ -1433,9 +1510,26 @@ class GeminiClient:
                         )
 
                     state = _GeminiStreamState()
+                    finish_reason_seen = False
                     async for line in bounded_aiter_lines(response):
+                        if _line_has_gemini_finish_reason(line):
+                            finish_reason_seen = True
                         for out in _translate_gemini_line(line, provider, state):
                             yield out
+
+                    if not finish_reason_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream_messages",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, _TRUNCATED_STREAM_MSG_GEMINI
+                            ),
+                        )
 
                     relay_metrics.record_provider(
                         provider.name,

@@ -39,6 +39,25 @@ from app.providers.openai_compat_client import (
 from app.services.metrics import relay_metrics
 from app.services.redaction import redact_text, safe_provider_key_detail
 
+_TRUNCATED_STREAM_MSG_ANTHROPIC = (
+    "truncated provider stream: connection ended before the required "
+    "message_stop terminal event; Anthropic response was incomplete"
+)
+
+
+def _line_is_message_stop(line: str) -> bool:
+    """
+    Return True when a raw Anthropic SSE data line carries the native
+    ``message_stop`` terminal event.
+    """
+    if not line.startswith("data: "):
+        return False
+    try:
+        event = json.loads(line[6:])
+    except json.JSONDecodeError:
+        return False
+    return event.get("type") == "message_stop"
+
 
 def _image_source(url: str) -> dict | None:
     """
@@ -823,6 +842,7 @@ class AnthropicClient:
             stop=stop,
         )
 
+        message_stop_seen = False
         try:
             start = time.perf_counter()
 
@@ -865,6 +885,9 @@ class AnthropicClient:
                                 provider, 0, str(event.get("error"))
                             ),
                         )
+                    if event.get("type") == "message_stop":
+                        message_stop_seen = True
+                        continue
                     if event.get("type") != "content_block_delta":
                         continue
                     delta = event.get("delta") or {}
@@ -872,6 +895,20 @@ class AnthropicClient:
                         text = delta.get("text")
                         if text:
                             yield text
+
+                if not message_stop_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        safe_error_body(
+                            provider, 0, _TRUNCATED_STREAM_MSG_ANTHROPIC
+                        ),
+                    )
 
                 relay_metrics.record_provider(
                     provider.name,
@@ -963,9 +1000,26 @@ class AnthropicClient:
                     )
 
                 state = _AnthropicStreamState()
+                message_stop_seen = False
                 for line in bounded_iter_lines(response):
+                    if _line_is_message_stop(line):
+                        message_stop_seen = True
                     for out in _translate_anthropic_line(line, provider, state):
                         yield out
+
+                if not message_stop_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream_messages",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        safe_error_body(
+                            provider, 0, _TRUNCATED_STREAM_MSG_ANTHROPIC
+                        ),
+                    )
 
                 relay_metrics.record_provider(
                     provider.name,
@@ -1138,6 +1192,7 @@ class AnthropicClient:
             stop=stop,
         )
 
+        message_stop_seen = False
         try:
             start = time.perf_counter()
 
@@ -1182,6 +1237,9 @@ class AnthropicClient:
                                     provider, 0, str(event.get("error"))
                                 ),
                             )
+                        if event.get("type") == "message_stop":
+                            message_stop_seen = True
+                            continue
                         if event.get("type") != "content_block_delta":
                             continue
                         delta = event.get("delta") or {}
@@ -1189,6 +1247,20 @@ class AnthropicClient:
                             text = delta.get("text")
                             if text:
                                 yield text
+
+                    if not message_stop_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, _TRUNCATED_STREAM_MSG_ANTHROPIC
+                            ),
+                        )
 
                     relay_metrics.record_provider(
                         provider.name,
@@ -1369,9 +1441,26 @@ class AnthropicClient:
                         )
 
                     state = _AnthropicStreamState()
+                    message_stop_seen = False
                     async for line in bounded_aiter_lines(response):
+                        if _line_is_message_stop(line):
+                            message_stop_seen = True
                         for out in _translate_anthropic_line(line, provider, state):
                             yield out
+
+                    if not message_stop_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "chat_stream_messages",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            safe_error_body(
+                                provider, 0, _TRUNCATED_STREAM_MSG_ANTHROPIC
+                            ),
+                        )
 
                     relay_metrics.record_provider(
                         provider.name,
