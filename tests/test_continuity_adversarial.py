@@ -33,6 +33,7 @@ Every test maps to an audit risk register entry:
 import hashlib
 import random
 import sqlite3
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -1350,6 +1351,182 @@ class TestFlusherAdversarial:
         # seq 2 must retain its own accounting (untouched by turn1's update).
         assert durable[2]["tokens_in"] is None, durable[2]
         assert durable[2]["tokens_out"] is None, durable[2]
+        store.close()
+
+
+# ------------------------- F1: resume-token ownership -------------------------
+
+
+class TestF1ResumeTokenOwnership:
+    """F1 audit finding: resume tokens are issued and consumed through a
+    single shared per-conversation pending slot, so two overlapping turns on
+    the same conversation can swap token hashes between their durable rows
+    (or leave a row without one), breaking the single-use resume guarantee.
+
+    The invariant under test: each turn's durable row carries ITS OWN
+    resume-token hash when one was issued for it, and an abort (or failed
+    commit) never clears a *different* turn's pending token.
+    """
+
+    def test_f1_overlapping_starts_each_row_keeps_its_own_resume_hash(
+        self, tmp_path
+    ):
+        """F1 regression: two starts on the same conversation before either
+        commits must each bind the token they issued to THEIR OWN durable
+        row.
+
+        Before the fix the token was issued outside the coordinator lock
+        against a single ``state.pending_resume_hash`` slot. The later
+        start overwrote the earlier turn's hash, so the earlier turn's
+        commit attached the LATER turn's hash and the later turn's commit
+        read a cleared slot (``None``) -- the conversation's safe tip ended
+        without a usable hash and a resume was denied until the next fresh
+        turn. This interleaving is deterministic single-threaded: both
+        starts complete before either commit consumes the shared slot.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(flusher=flusher, recovery=recovery)
+
+        cid = "f" * 32
+        key_id = "k"
+
+        # Two turns on the SAME conversation overlap: turn B starts before
+        # turn A commits.
+        turn_a = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+        turn_b = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+        raw_a = turn_a.resume_token
+        raw_b = turn_b.resume_token
+        assert raw_a and raw_b and raw_a != raw_b
+
+        rec_a = coord.commit(turn_a, provider="p", model="m1", outcome="ok")
+        rec_b = coord.commit(turn_b, provider="p", model="m2", outcome="ok")
+        assert rec_a["seq"] == 1
+        assert rec_b["seq"] == 2
+
+        flusher.flush()
+        durable = {row["seq"]: row for row in store.turns(cid, key_id)}
+        assert set(durable) == {1, 2}
+        # Each row must be bound to the token issued for ITS OWN turn.
+        assert durable[1]["resume_token_hash"] == derive_resume_token_hash(
+            raw_a
+        ), (
+            "turn A's durable row carries turn B's token hash",
+            durable[1]["resume_token_hash"],
+            derive_resume_token_hash(raw_a),
+        )
+        assert durable[2]["resume_token_hash"] == derive_resume_token_hash(
+            raw_b
+        ), (
+            "turn B's durable row lost its own resume token hash",
+            durable[2]["resume_token_hash"],
+            derive_resume_token_hash(raw_b),
+        )
+
+        # Single-use is preserved at the conversation's safe tip: the
+        # CURRENT (last committed) turn's token resumes; the consumed
+        # earlier turn's token does not.
+        decision = recovery.validate_resume(cid, key_id, raw_b)
+        assert decision["valid"] is True, decision
+        decision = recovery.validate_resume(cid, key_id, raw_a)
+        assert decision["valid"] is False, decision
+        store.close()
+
+    def test_f1_abort_of_one_turn_keeps_other_turns_token(self, tmp_path):
+        """F1 regression: aborting one in-flight turn must not clear the
+        resume token issued for a concurrently-started turn on the same
+        conversation.
+
+        Before the fix ``on_turn_aborted()`` unconditionally cleared the
+        conversation's single pending token. When the aborted turn's cleanup
+        ran while the survivor's ``start()`` was reading that shared pending
+        hash (both outside the coordinator lock), the survivor recorded
+        ``None`` and its durable row carried no hash -- a resume from the
+        conversation's safe tip was denied (``no_resume_token``) until the
+        next fresh turn. The race is serialized deterministically here with
+        a gate on the survivor's pending-hash read.
+        """
+        store = _store(tmp_path)
+        recovery = _recovery(store)
+        flusher = ContinuityFlusher(
+            store, interval_seconds=60, retention_days=0
+        )
+        coord = HandoffCoordinator(flusher=flusher, recovery=recovery)
+        cid = "f" * 32
+        key_id = "k"
+
+        turn_a = coord.start(
+            key_id=key_id, client_bucket="cli", project_key="pk",
+            conversation_id=cid,
+        )
+        raw_a = turn_a.resume_token
+
+        # Survivor start issues its token (recovery ledger = H_B) then
+        # pauses inside pending_token_hash BEFORE writing the shared slot.
+        orig_pending_hash = recovery.pending_token_hash
+        survivor_about_to_read = threading.Event()
+        release_survivor = threading.Event()
+
+        def blocked_pending_hash(conversation_id, key_id=None):
+            survivor_about_to_read.set()
+            assert release_survivor.wait(timeout=10), (
+                "survivor start never released"
+            )
+            return orig_pending_hash(conversation_id, key_id)
+
+        recovery.pending_token_hash = blocked_pending_hash
+
+        results = {}
+
+        def start_survivor():
+            results["turn_b"] = coord.start(
+                key_id=key_id, client_bucket="cli", project_key="pk",
+                conversation_id=cid,
+            )
+
+        survivor = threading.Thread(target=start_survivor)
+        survivor.start()
+        assert survivor_about_to_read.wait(timeout=10), (
+            "survivor start never attempted the pending-hash read"
+        )
+
+        # Turn A aborts mid-flight while B is still starting.
+        coord.abort(turn_a)
+
+        release_survivor.set()
+        survivor.join(timeout=10)
+        assert not survivor.is_alive(), "survivor start did not finish"
+
+        turn_b = results["turn_b"]
+        raw_b = turn_b.resume_token
+        assert raw_a and raw_b and raw_a != raw_b
+
+        rec_b = coord.commit(turn_b, provider="p", model="m2", outcome="ok")
+        assert rec_b["seq"] == 1
+
+        flusher.flush()
+        durable = {row["seq"]: row for row in store.turns(cid, key_id)}
+        assert set(durable) == {1}
+        # A's abort must not have taken B's token: B's durable row still
+        # carries B's own hash and the safe tip stays resumable.
+        assert durable[1]["resume_token_hash"] == derive_resume_token_hash(
+            raw_b
+        ), (
+            "abort of one turn cleared the other turn's resume token",
+            durable[1]["resume_token_hash"],
+            derive_resume_token_hash(raw_b),
+        )
+        decision = recovery.validate_resume(cid, key_id, raw_b)
+        assert decision["valid"] is True, decision
         store.close()
 
 

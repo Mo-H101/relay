@@ -137,6 +137,13 @@ class TurnContext:
     # client exactly once), plus whether this turn resumed a prior
     # conversation and the acknowledged scope it excludes.
     resume_token: Optional[str] = None
+    # F1: THIS turn's own one-time resume-token hash, pinned at ``start()``
+    # (under the coordinator lock). The shared
+    # ``_ConversationState.pending_resume_hash`` is the conversation's
+    # last-writer slot and may already belong to a concurrently-started
+    # turn by the time THIS turn commits; ``commit()`` therefore attaches
+    # the turn's pinned hash to its own durable row.
+    pending_resume_hash: Optional[str] = None
     resumed: bool = False
     exclude_up_to_seq: int = 0
     _committed: bool = field(default=False, repr=False)
@@ -632,6 +639,25 @@ class HandoffCoordinator:
 
             resumed = self._hydrate_resume(state, resume)
 
+            # P9d: issue a fresh one-time resume token for this turn. The
+            # raw value is handed to the client exactly once; only its hash
+            # is attached to the committed turn. F1: this runs INSIDE the
+            # coordinator lock so two overlapping turns on the same
+            # conversation cannot race the shared slot; the hash issued
+            # HERE is pinned to this turn and consumed by THIS turn's
+            # commit, never the conversation's last-writer value.
+            issued_token = None
+            issued_hash = None
+            if self._recovery is not None:
+                issued_token = self._recovery.issue_resume_token(
+                    cid, state.key_id
+                )
+                issued_hash = self._recovery.pending_token_hash(
+                    cid, state.key_id
+                )
+                state.pending_resume_hash = issued_hash
+                self._recovery.on_turn_started(cid, state.key_id)
+
         turn = TurnContext(
             conversation_id=state.conversation_id,
             key_id=state.key_id,
@@ -645,6 +671,8 @@ class HandoffCoordinator:
         turn._handoff = self
         turn.context_manager = self._manager
         turn.resumed = resumed
+        turn.resume_token = issued_token
+        turn.pending_resume_hash = issued_hash
         turn.exclude_up_to_seq = state.resume_up_to_seq
         # N-11 (eviction during an in-flight turn): pin the exact
         # conversation state on this turn so a later bounded-LRU eviction
@@ -660,24 +688,13 @@ class HandoffCoordinator:
             }
         )
 
-        # P9d: issue a fresh one-time resume token for this turn. The raw
-        # value is handed to the client exactly once; only its hash is
-        # attached to the next committed turn.
-        if self._recovery is not None:
-            turn.resume_token = self._recovery.issue_resume_token(
-                cid, state.key_id
+        if issued_token:
+            turn.events.append(
+                {
+                    "type": "relay:resume_token",
+                    "conversation_id": state.conversation_id,
+                }
             )
-            state.pending_resume_hash = self._recovery.pending_token_hash(
-                cid, state.key_id
-            )
-            if turn.resume_token:
-                turn.events.append(
-                    {
-                        "type": "relay:resume_token",
-                        "conversation_id": state.conversation_id,
-                    }
-                )
-            self._recovery.on_turn_started(cid, state.key_id)
 
         # Resume-with-context: assemble the envelope from prior committed
         # turns so the first candidate already carries the context.
@@ -913,7 +930,10 @@ class HandoffCoordinator:
                     "latency_ms": latency_ms,
                     "ts": time.time(),
                 }
-                resume_token_hash = state.pending_resume_hash
+                # F1: attach THIS turn's own pinned token hash, never the
+                # conversation's shared last-writer slot (which may already
+                # belong to a concurrently-started turn).
+                resume_token_hash = turn.pending_resume_hash
                 append_kwargs = {
                     "conversation_id": state.conversation_id,
                     "key_id": state.key_id,
@@ -935,7 +955,15 @@ class HandoffCoordinator:
                     state.committed_turns.append(record)
                     self._remember_model(state, turn, model)
                     self._touch(state)
-                    state.pending_resume_hash = None
+                    # F1: release the shared pending slot only when it still
+                    # holds THIS turn's hash, so a concurrently-started
+                    # turn's still-pending token is never consumed by
+                    # someone else's commit.
+                    if (
+                        state.pending_resume_hash
+                        == turn.pending_resume_hash
+                    ):
+                        state.pending_resume_hash = None
 
                     if not self._compact_state(state):
                         state.durability_degraded = True
@@ -972,12 +1000,14 @@ class HandoffCoordinator:
         if failed:
             if self._recovery is not None:
                 self._recovery.on_turn_aborted(
-                    turn.conversation_id, turn.key_id
+                    turn.conversation_id, turn.key_id,
+                    turn.pending_resume_hash,
                 )
             return {}
         if self._recovery is not None:
             self._recovery.on_turn_committed(
-                state.conversation_id, state.key_id
+                state.conversation_id, state.key_id,
+                turn.pending_resume_hash,
             )
 
         relay_metrics.continuity_turns_committed.inc()
@@ -1108,7 +1138,9 @@ class HandoffCoordinator:
         }
 
         if self._recovery is not None:
-            self._recovery.on_turn_committed(conversation_id, key_id)
+            self._recovery.on_turn_committed(
+                conversation_id, key_id, turn.pending_resume_hash
+            )
 
         turn._committed = True
         turn._provisional = False
@@ -1119,7 +1151,9 @@ class HandoffCoordinator:
 
         Provisional streaming turns are converted to a failed update so the
         already-enqueued durable row remains accounted for. Uncommitted
-        turns only need their pending resume token removed.
+        turns only need their pending resume token removed. F1: only THIS
+        turn's own pending token is cleared -- never another in-flight
+        turn's.
         """
         if getattr(turn, "_provisional", False):
             if self.update(turn, outcome="failed"):
@@ -1128,7 +1162,8 @@ class HandoffCoordinator:
             return
         if self._recovery is not None:
             self._recovery.on_turn_aborted(
-                turn.conversation_id, turn.key_id
+                turn.conversation_id, turn.key_id,
+                turn.pending_resume_hash,
             )
 
     # ------------------------- P9B anchor + transitions -------------------------
@@ -1551,7 +1586,11 @@ class HandoffCoordinator:
         state.durability_degraded = True
         turn._durability_degraded = True
         turn.resume_token = None
-        state.pending_resume_hash = None
+        # F1: release the shared pending slot only when it still holds THIS
+        # turn's token (a concurrently-started turn's still-pending token
+        # survives this turn's rejected admission).
+        if state.pending_resume_hash == turn.pending_resume_hash:
+            state.pending_resume_hash = None
 
     def _enqueue(self, operation: str, **kwargs) -> bool:
         if self._flusher is None:

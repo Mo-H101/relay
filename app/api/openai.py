@@ -221,6 +221,7 @@ def _openai_error_response(
             "error": {
                 "message": message,
                 "type": error_type,
+                "param": None,
                 "code": code,
             }
         },
@@ -610,6 +611,7 @@ async def openai_chat_completion(
                     "error": {
                         "message": safe_provider_error(exc, kind),
                         "type": "stream_error",
+                        "param": None,
                         "code": "stream_error"
                     }
                 }

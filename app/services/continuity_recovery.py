@@ -251,15 +251,34 @@ class ContinuityRecovery:
         return None
 
     def _clear_pending_locked(
-        self, conversation_id: str, key_id: Optional[str] = None
+        self, conversation_id: str, key_id: Optional[str] = None,
+        token_hash: Optional[str] = None,
     ) -> None:
+        """Drop pending token(s) for a conversation.
+
+        F1: when ``token_hash`` is supplied, only the pending entry whose
+        hash matches that turn's own token is removed -- a concurrently
+        started turn's still-pending token survives someone else's commit
+        or abort. Without a hash the historical whole-conversation clear is
+        preserved for callers that do not track a specific turn.
+        """
         if key_id is not None:
-            self._pending_tokens.pop(
-                (str(key_id or ""), conversation_id), None
-            )
+            identity = (str(key_id or ""), conversation_id)
+            if token_hash is None:
+                self._pending_tokens.pop(identity, None)
+            elif self._pending_tokens.get(identity) == token_hash:
+                self._pending_tokens.pop(identity, None)
+            return
+        if token_hash is None:
+            for identity in list(self._pending_tokens):
+                if identity[1] == conversation_id:
+                    self._pending_tokens.pop(identity, None)
             return
         for identity in list(self._pending_tokens):
-            if identity[1] == conversation_id:
+            if (
+                identity[1] == conversation_id
+                and self._pending_tokens.get(identity) == token_hash
+            ):
                 self._pending_tokens.pop(identity, None)
 
     def _clear_replay_best_effort(
@@ -509,34 +528,43 @@ class ContinuityRecovery:
         self.transition(conversation_id, "turn_start")
 
     def on_turn_committed(
-        self, conversation_id: str, key_id: Optional[str] = None
+        self, conversation_id: str, key_id: Optional[str] = None,
+        token_hash: Optional[str] = None,
     ) -> None:
         """
         A turn committed. The pending token (if any) is now durable on the
         latest turn, so an old token becomes invalid (single-use). Clears
-        the pending token and the durable replay history for the
+        this turn's pending token and the durable replay history for the
         conversation (best-effort).
         """
         self.transition(conversation_id, "turn_committed")
         if not conversation_id:
             return
         with self._lock:
-            self._clear_pending_locked(conversation_id, key_id)
+            self._clear_pending_locked(
+                conversation_id, key_id, token_hash
+            )
         self._clear_replay_best_effort(conversation_id, key_id)
 
     def on_turn_aborted(
-        self, conversation_id: str, key_id: Optional[str] = None
+        self, conversation_id: str, key_id: Optional[str] = None,
+        token_hash: Optional[str] = None,
     ) -> None:
         """Clear process-local recovery state for a cancelled turn.
 
         Cancellation is not a successful commit. It must nevertheless end
         the interrupted state transition and invalidate the uncommitted
-        token so abandoned requests cannot accumulate pending hashes.
+        token so abandoned requests cannot accumulate pending hashes. F1:
+        only the cancelled turn's OWN pending token is cleared -- an
+        in-flight turn started concurrently on the same conversation keeps
+        its token and its durable resume point.
         """
         if not conversation_id:
             return
         with self._lock:
-            self._clear_pending_locked(conversation_id, key_id)
+            self._clear_pending_locked(
+                conversation_id, key_id, token_hash
+            )
         self.transition(conversation_id, "turn_aborted")
 
     # ------------------------- reconcile -------------------------

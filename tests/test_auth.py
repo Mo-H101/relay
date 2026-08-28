@@ -359,3 +359,34 @@ def test_malformed_host_does_not_change_public_route_behavior(
     )
 
     assert response.status_code == 200
+
+
+def test_constant_time_eq_uses_hmac_compare_digest(monkeypatch):
+    """
+    N-13 security regression guard.
+
+    The auth comparison must route through ``hmac.compare_digest`` so content
+    and length differences do not leak through a short-circuiting ``==``.
+    This is a deterministic structural check: if the implementation ever
+    regresses to a naive ``==`` it never calls ``compare_digest`` and the
+    assertion on ``calls`` fails (timing-based checks are load-flaky, so a
+    call-routing assertion is used instead).
+    """
+    import app.security.auth as auth_module
+
+    class _FakeHmac:
+        def __init__(self):
+            self.calls = 0
+
+        def compare_digest(self, left, right):
+            self.calls += 1
+            return left == right
+
+    fake = _FakeHmac()
+    monkeypatch.setattr(auth_module, "hmac", fake)
+
+    assert auth_module._constant_time_eq("a" * 32, "a" * 32) is True
+    assert auth_module._constant_time_eq("a" * 32, "b" * 32) is False
+    assert auth_module._constant_time_eq("a" * 31, "a" * 32) is False
+    assert fake.calls >= 3
+

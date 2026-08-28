@@ -77,9 +77,17 @@ async def lifespan(fastapi_app: FastAPI):
     finally:
         # Stop provider recovery first: it mutates provider state and its
         # in-flight pass should never race shutdown of the other services.
-        relay.provider_recovery.stop()
+        # Each stop is individually guarded so a failure in one never aborts
+        # the critical final flushes below (which would drop queued rows).
+        try:
+            relay.provider_recovery.stop()
+        except Exception:
+            _logger.exception("shutdown provider recovery stop failed")
 
-        relay.health_refresher.stop()
+        try:
+            relay.health_refresher.stop()
+        except Exception:
+            _logger.exception("shutdown health refresher stop failed")
 
         if relay.state_flusher is not None:
             relay.state_flusher.stop()
@@ -158,6 +166,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
             "error": {
                 "message": _format_request_validation_error(exc),
                 "type": "invalid_request_error",
+                "param": None,
                 "code": "validation_error",
             }
         },

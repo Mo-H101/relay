@@ -866,6 +866,65 @@ class TestInStreamErrors:
             asyncio.run(_collect())
         assert "rate limited" in ei.value.message
 
+    def test_achat_stream_raises_on_in_stream_error(self, monkeypatch):
+        error = json.dumps({"error": {"message": "async single exploded", "type": "server_error"}})
+        lines = [
+            "data: " + json.dumps({"choices": [{"delta": {"content": "partial"}}]}),
+            f"data: {error}",
+            "data: [DONE]",
+        ]
+
+        class _FakeResp:
+            status_code = 200
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResp()
+
+            async def __aexit__(self, *a):
+                return False
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, method, url, **kwargs):
+                return _FakeStream()
+
+        async def aiter_lines(response):
+            for line in lines:
+                yield line
+
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.bounded_aiter_lines",
+            aiter_lines,
+        )
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.httpx.AsyncClient",
+            _FakeClient,
+        )
+
+        collected = []
+
+        async def _run():
+            agen = OpenAICompatibleClient().achat_stream(
+                make_provider(), "m", "hi"
+            )
+            collected.append(await agen.__anext__())
+            async for _ in agen:
+                pass
+
+        with pytest.raises(ProviderHTTPError) as ei:
+            asyncio.run(_run())
+        assert collected == ["partial"]
+        assert "async single exploded" in ei.value.message
+
     def test_chat_stream_normal_content_unaffected(self, monkeypatch):
         lines = [
             "data: " + json.dumps({"choices": [{"delta": {"content": "hello"}}]}),
@@ -880,3 +939,39 @@ class TestInStreamErrors:
             )
         )
         assert chunks == ["hello", " "]
+
+
+class TestStreamingStartGuard:
+    """N-13 guard: `start = time.perf_counter()` must be bound before the try
+    so a transport error raised while setting up the stream surfaces as a
+    ProviderHTTPError/ProviderTimeout, never an UnboundLocalError (which the
+    metrics handlers would hit if `start` were moved inside the try)."""
+
+    def _patch_transport_failure(self, monkeypatch, exc):
+        def handler(*args, **kwargs):
+            raise exc
+        monkeypatch.setattr(
+            "app.providers.openai_compat_client.bounded_stream",
+            handler,
+        )
+
+    def test_chat_stream_transport_error_at_setup_is_http_error(self, monkeypatch):
+        self._patch_transport_failure(monkeypatch, httpx.ConnectError("refused"))
+
+        gen = OpenAICompatibleClient().chat_stream(make_provider(), "m", "hi")
+        with pytest.raises(ProviderHTTPError) as ei:
+            next(gen)
+        assert ei.value.status_code == 0
+
+    def test_chat_stream_messages_transport_error_at_setup_is_http_error(
+        self, monkeypatch
+    ):
+        self._patch_transport_failure(monkeypatch, httpx.ConnectError("refused"))
+
+        gen = OpenAICompatibleClient().chat_stream_messages(
+            make_provider(),
+            payload={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        with pytest.raises(ProviderHTTPError) as ei:
+            next(gen)
+        assert ei.value.status_code == 0

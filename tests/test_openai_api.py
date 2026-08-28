@@ -550,6 +550,7 @@ class TestOpenAIChatCompletions:
         payload = response.json()
         assert "error" in payload
         assert "unknown-model" in payload["error"]["message"]
+        assert "param" in payload["error"]
 
     def test_provider_failure_maps_to_502(self, wired_relay, fake_registry, client):
         provider = make_provider("A", ["a-1"])
