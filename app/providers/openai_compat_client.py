@@ -27,6 +27,12 @@ from app.providers.transport_limits import (
 )
 
 
+_TRUNCATED_STREAM_MSG = (
+    "truncated provider stream: connection ended before the terminal [DONE] "
+    "marker; response was incomplete"
+)
+
+
 def _safe_provider_body(provider: Provider, status_code: int, body: str) -> str:
     """
     Build a bounded, redacted message from an untrusted provider body.
@@ -989,6 +995,21 @@ class OpenAICompatibleClient:
                             # Malformed chunk, skip
                             continue
 
+                if not done_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        _safe_provider_body(
+                            provider,
+                            0,
+                            _TRUNCATED_STREAM_MSG,
+                        ),
+                    )
                 relay_metrics.record_provider(
                     provider.name,
                     "chat_stream",
@@ -1124,6 +1145,21 @@ class OpenAICompatibleClient:
                         continue
                     yield chunk
 
+                if not done_seen:
+                    relay_metrics.record_provider(
+                        provider.name,
+                        "chat_stream_messages",
+                        0,
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    raise ProviderHTTPError(
+                        0,
+                        _safe_provider_body(
+                            provider,
+                            0,
+                            _TRUNCATED_STREAM_MSG,
+                        ),
+                    )
                 relay_metrics.record_provider(
                     provider.name,
                     "chat_stream_messages",
@@ -1423,6 +1459,21 @@ class OpenAICompatibleClient:
                             except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
                                 continue
 
+                    if not done_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "achat_stream",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            _safe_provider_body(
+                                provider,
+                                0,
+                                _TRUNCATED_STREAM_MSG,
+                            ),
+                        )
                     relay_metrics.record_provider(
                         provider.name,
                         "achat_stream",
@@ -1666,6 +1717,21 @@ class OpenAICompatibleClient:
                             continue
                         yield chunk
 
+                    if not done_seen:
+                        relay_metrics.record_provider(
+                            provider.name,
+                            "achat_stream_messages",
+                            0,
+                            (time.perf_counter() - start) * 1000,
+                        )
+                        raise ProviderHTTPError(
+                            0,
+                            _safe_provider_body(
+                                provider,
+                                0,
+                                _TRUNCATED_STREAM_MSG,
+                            ),
+                        )
                     relay_metrics.record_provider(
                         provider.name,
                         "achat_stream_messages",
