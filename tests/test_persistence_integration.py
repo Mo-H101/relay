@@ -205,15 +205,26 @@ class TestWriteBack:
         relay.telemetry.record_attempt("LM Studio", "qwen-7b", True, latency_ms=5)
 
         relay.state_flusher.start()
-        time.sleep(1.5)
-        relay.state_flusher.stop()
+        # Poll until the write-behind flush lands instead of a fixed sleep,
+        # so a saturated runner (slow 1s-interval thread wake-up) cannot
+        # produce a false failure.
+        deadline = time.time() + 8
+        flushed = False
+        try:
+            while time.time() < deadline:
+                store = StateStore(str(path))
+                loaded = store.load_telemetry()
+                if any(
+                    entry["provider"] == "LM Studio" and entry["model"] == "qwen-7b"
+                    for entry in loaded
+                ):
+                    flushed = True
+                    break
+                time.sleep(0.05)
+        finally:
+            relay.state_flusher.stop()
 
-        store = StateStore(str(path))
-        loaded = store.load_telemetry()
-        assert any(
-            entry["provider"] == "LM Studio" and entry["model"] == "qwen-7b"
-            for entry in loaded
-        )
+        assert flushed
 
     def test_explicit_flush_writes_state(self, monkeypatch, tmp_path):
         path = tmp_path / "state.db"
@@ -254,6 +265,39 @@ class TestShutdownFlush:
             entry["provider"] == "LM Studio" and entry["model"] == "qwen-7b"
             for entry in loaded
         )
+
+    def test_shutdown_flush_runs_even_if_early_stop_raises(
+        self, monkeypatch, tmp_path
+    ):
+        """A failure in the provider_recovery/health_refresher stop() must
+        NOT abort the lifespan shutdown before the critical final flush runs."""
+        path = tmp_path / "state.db"
+        enable_persistence(monkeypatch, path)
+        disable_providers(monkeypatch)
+
+        test_relay = Relay()
+        record_state(test_relay)
+
+        # Simulate a stop() that raises; the F5 guard must still flush.
+        monkeypatch.setattr(
+            test_relay.provider_recovery, "stop",
+            lambda: (_ for _ in ()).throw(RuntimeError("recovery stop blew up")),
+        )
+        monkeypatch.setattr(
+            test_relay.health_refresher, "stop",
+            lambda: (_ for _ in ()).throw(RuntimeError("refresher stop blew up")),
+        )
+
+        monkeypatch.setattr(app_main, "relay", test_relay)
+
+        async def run_lifespan():
+            async with app_main.lifespan(app_main.app):
+                pass
+
+        asyncio.run(run_lifespan())
+
+        store = StateStore(str(path))
+        assert "LM Studio" in store.load_learned_state()
 
 
 class TestDisabledAndPrivacy:

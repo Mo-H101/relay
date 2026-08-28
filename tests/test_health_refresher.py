@@ -100,7 +100,11 @@ class TestHealthRefresher:
 
         try:
             assert refresher.is_running is True
-            time.sleep(2.4)
+            # Poll until two passes have run instead of a fixed sleep, so a
+            # slow 1s-interval thread on a loaded runner is not a false fail.
+            deadline = time.time() + 8
+            while time.time() < deadline and len(checker.calls) < 2:
+                time.sleep(0.05)
         finally:
             refresher.stop()
 
