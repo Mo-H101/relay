@@ -133,6 +133,11 @@ class ContinuityFlusher:
                 self._queued_count += 1
                 relay_metrics.continuity_rows_queued.set(len(self._queue))
                 self._track_pending_seq_locked(operation, kwargs)
+                # Coalescing merges into an existing queued row already
+                # counted in ``_pending_per_conversation``; it adds no new
+                # drainable row, so it must NOT increment the per-conversation
+                # count (that would leave the count unbalanced and the
+                # conversation stuck in-flight after draining).
                 return True
 
             # N-8: reject standalone malformed turn.update.  When
@@ -159,13 +164,25 @@ class ContinuityFlusher:
             self._queued_count += 1
             relay_metrics.continuity_rows_queued.set(len(self._queue))
             self._track_pending_seq_locked(operation, kwargs)
-
-        if conversation_id and self._store is not None:
-            self._store.mark_in_flight(conversation_id)
-            with self._lock:
+            # N-11-fix: bump the pending-count increment atomically with the
+            # queue insertion (same lock) so a concurrent drain can never
+            # observe the conversation as fully drained — and drop its seq
+            # watermark — while this just-queued row is still in the buffer.
+            # Splitting the increment into a later, separate critical section
+            # left a window where a drain popped the conversation's last prior
+            # row and cleared _pending_seq (N-11 unflushed-seq protection)
+            # before the new row's count was added, silently allowing a
+            # duplicate seq to collide and an accepted turn to be dropped.
+            if conversation_id:
                 self._pending_per_conversation[conversation_id] = (
                     self._pending_per_conversation.get(conversation_id, 0) + 1
                 )
+
+        # In-flight marker is a pruning gate and updates an in-memory set in
+        # the store; it need not be atomic with the count. Held outside the
+        # flusher lock so we never hold a flusher lock across a store call.
+        if conversation_id and self._store is not None:
+            self._store.mark_in_flight(conversation_id)
 
         return True
 

@@ -1609,3 +1609,93 @@ class TestPrivacySurfaces:
         assert "summary_text" in envelope["last_summary"]
         assert not contains_never_captured({"render": text})
         store.close()
+
+
+def test_flusher_enqueue_drain_atomicity_preserves_seq_watermark(
+    tmp_path, monkeypatch
+):
+    """
+    Regression (N-11-fix): the per-conversation pending count must be
+    incremented atomically with the queue insertion. If a drain pops the
+    conversation's last previously-queued row while a NEW row is being
+    enqueued but its count has not yet been registered, the drain sees
+    count 0 and clears ``_pending_seq`` -- silently defeating the N-11
+    unflushed-seq watermark and allowing a duplicate seq to collide (an
+    accepted turn dropped).
+
+    This test forces exactly that interleaving by pausing the second
+    enqueue inside ``mark_in_flight`` while a concurrent drain of the
+    first row completes. On the buggy (split-lock) code the count is still
+    1 when the drain runs, so it drops to 0 and the watermark is cleared.
+    On the fixed code the count is already 2, so the drain leaves one
+    pending row and the seq-2 watermark survives.
+    """
+    store = _store(tmp_path)
+    flusher = ContinuityFlusher(
+        store, interval_seconds=3600, retention_days=0
+    )
+    cid = "c" * 32
+    store.create(
+        key_id="k",
+        client_bucket="cli",
+        project_key="pk",
+        conversation_id=cid,
+    )
+
+    assert (
+        flusher.enqueue(
+            "turn.append",
+            conversation_id=cid,
+            key_id="k",
+            seq=1,
+            outcome="ok",
+            provider="p",
+            model="m",
+            resume_token_hash=None,
+        )
+        is True
+    )
+
+    blocked = threading.Event()
+    release = threading.Event()
+    real_mark_in_flight = store.mark_in_flight
+    calls = {"n": 0}
+
+    def _blocking_mark(conversation_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            blocked.set()
+            assert release.wait(timeout=10)
+        return real_mark_in_flight(conversation_id)
+
+    monkeypatch.setattr(store, "mark_in_flight", _blocking_mark)
+
+    outcome = {}
+
+    def _producer():
+        outcome["ok"] = flusher.enqueue(
+            "turn.append",
+            conversation_id=cid,
+            key_id="k",
+            seq=2,
+            outcome="ok",
+            provider="p",
+            model="m",
+            resume_token_hash=None,
+        )
+
+    producer = threading.Thread(target=_producer)
+    producer.start()
+    assert blocked.wait(timeout=10)
+
+    flusher._on_op_drained(cid)
+
+    release.set()
+    producer.join(timeout=10)
+    assert not producer.is_alive()
+    assert outcome["ok"] is True
+
+    # The seq-2 watermark must survive the concurrent drain.
+    assert flusher.pending_max_seq(cid, "k") == 2
+    assert flusher._pending_per_conversation[cid] == 1
+    store.close()
