@@ -947,6 +947,11 @@ def chat_stream_lines(
             )
         )
     )
+    # OpenAI-compatible providers are required to terminate a stream with a
+    # literal [DONE] marker (see E1 truncation detection in
+    # openai_compat_client). Emitting it keeps this mock a well-behaved
+    # provider; a stream that omits it is a genuine truncation.
+    lines.append("data: [DONE]")
     return lines
 
 
