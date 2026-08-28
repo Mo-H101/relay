@@ -44,7 +44,7 @@ project id, one client can hand off to another. It is opt-in
 1. **Install Relay** and make sure the `relay` command is on your PATH
    ([README installation section](../../README.md#installation)):
    ```bash
-   pip install git+https://github.com/<org>/<repo>.git
+   pip install git+https://github.com/Mo-H101/relay.git
    # or, from a checkout: .\install.cmd   (Windows) / ./install.sh (macOS/Linux)
    ```
 2. **Configure at least one provider** with credentials (interactive wizard):
